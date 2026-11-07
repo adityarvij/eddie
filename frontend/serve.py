@@ -1,5 +1,6 @@
 """Local dashboard and offline voice bridge. No microphone audio is persisted."""
 import argparse
+import ipaddress
 import json
 import os
 import queue
@@ -25,6 +26,13 @@ voice_thread = None
 start_lock = threading.Lock()
 speaking = threading.Event()
 counts = {'requests': 0, 'blocked': 0}
+
+def is_local(address):
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return False
+    return (getattr(ip, 'ipv4_mapped', None) or ip).is_loopback
 
 def emit(event):
     with lock:
@@ -128,6 +136,10 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         global voice_thread
+        # The iPad may view the dashboard over the LAN, but controls stay on this machine
+        # until the bridge has authenticated local control.
+        if not is_local(self.client_address[0]):
+            return self.json_response(403, {'message': 'Controls only work on the Eddie computer.'})
         # Reject cross-origin browser requests to this local control service.
         origin = self.headers.get('Origin')
         if origin and origin != 'http://' + self.headers.get('Host', ''):
@@ -169,6 +181,10 @@ class Handler(SimpleHTTPRequestHandler):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--port', type=int, default=5173)
+    # 0.0.0.0 lets the iPad view the dashboard; mic and other controls stay localhost-only.
+    parser.add_argument('--host', default=os.environ.get('EDDIE_DASHBOARD_HOST', '127.0.0.1'))
     args = parser.parse_args()
     print(f'Eddie dashboard: http://localhost:{args.port}', flush=True)
-    ThreadingHTTPServer(('127.0.0.1', args.port), Handler).serve_forever()
+    if not is_local(args.host):
+        print(f'Viewable from the network on port {args.port}; controls only work on this computer.', flush=True)
+    ThreadingHTTPServer((args.host, args.port), Handler).serve_forever()

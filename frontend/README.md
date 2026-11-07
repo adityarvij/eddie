@@ -10,6 +10,16 @@ python3.11 -m venv .venv-frontend
 
 Open http://localhost:5173. Click **Wake Eddie** or press **Space** to preview the character. Escape dismisses him. Mouth animation follows the duration of macOS local speech output. No browser speech-recognition service is used.
 
+### Viewing from the iPad
+
+`serve.py` listens on localhost only. To show the dashboard on another device on the same network:
+
+```sh
+.venv-frontend/bin/python frontend/serve.py --host 0.0.0.0   # or EDDIE_DASHBOARD_HOST=0.0.0.0
+```
+
+Then open `http://<Mac IP>:5173` on the iPad. Other devices can view the page, the event stream and voice status. Every control (`/api/voice/start`, `/stop`, `/ask`, `/api/events`) answers 403 unless it comes from the computer running Eddie, so the microphone can't be switched on from the network. The traffic API must also accept network connections (`EDDIE_BIND=0.0.0.0` for the Docker API, or `--host 0.0.0.0` for uvicorn) and the macOS firewall must allow incoming connections for Python.
+
 ## Local “Hey Eddie”
 
 The voice pipeline now uses openWakeWord and faster-whisper. Follow [offline model provisioning and voice setup](../voice/README.md) before enabling the microphone. Custom models are not bundled. Piper supplies portable speech; installed macOS speech remains a development fallback.
@@ -18,7 +28,7 @@ Supported tools: factual backend summaries and explicit home-mode on/off. Domain
 
 ## Traffic contract for Claude
 
-The browser automatically reconnects to `ws://localhost:8000/ws/events`. Override with `?traffic=ws://localhost:PORT/path`. Each message may be one event, an array, or `{ "events": [...] }`.
+The browser automatically reconnects to `ws://<page host>:8000/ws/events`: `localhost` on the Mac, the Mac's IP from the iPad. Override with `?traffic=ws://HOST:PORT/path`. Each message may be one event, an array, or `{ "events": [...] }`.
 
 ```json
 {"timestamp":"2026-11-07T16:30:00Z","device":"Fire Stick","domain":"device-metrics-us.amazon.com","action":"block","reason":"Known telemetry","source":"blocklist"}
