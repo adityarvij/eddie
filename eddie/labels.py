@@ -4,6 +4,15 @@ Matching is by suffix, most specific first, so "device-metrics-us.amazon.com"
 hits its own entry before falling back to "amazon.com".
 """
 
+import ipaddress
+import json
+from pathlib import Path
+import tldextract
+
+# Disable both network fetching and filesystem cache writes.
+_EXTRACT = tldextract.TLDExtract(suffix_list_urls=(), cache_dir=None, include_psl_private_domains=True)
+OWNERS = json.loads((Path(__file__).parent / 'data' / 'tracker_owners.json').read_text())
+
 # suffix -> (company, category)
 DOMAINS = {
     # Amazon
@@ -48,10 +57,32 @@ TRACKING = {"telemetry", "ads", "analytics", "tracking"}
 HUMAN = {"streaming"}  # traffic that means a person is using the device
 
 
+def registrable_domain(domain: str) -> str:
+    domain = domain.strip().lower().rstrip('.')
+    try:
+        return str(ipaddress.ip_address(domain))
+    except ValueError:
+        pass
+    result = _EXTRACT(domain)
+    return result.top_domain_under_public_suffix or domain
+
+
 def lookup(domain: str) -> tuple[str, str]:
-    parts = domain.split(".")
-    for i in range(len(parts) - 1):
-        hit = DOMAINS.get(".".join(parts[i:]))
-        if hit:
-            return hit
-    return (".".join(parts[-2:]), "unknown")
+    domain = domain.strip().lower().rstrip('.')
+    parts = domain.split('.')
+    # Keep precise local categories even when the public ownership source
+    # only knows the parent company. Match label boundaries, never substrings.
+    category = 'unknown'
+    company = None
+    for i in range(len(parts)):
+        suffix = '.'.join(parts[i:])
+        if suffix in DOMAINS:
+            company, category = DOMAINS[suffix]
+            break
+    if company is None:
+        for i in range(len(parts)):
+            owner = OWNERS.get('.'.join(parts[i:]))
+            if owner:
+                company = owner
+                break
+    return company or registrable_domain(domain), category

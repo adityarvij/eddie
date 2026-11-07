@@ -15,4 +15,9 @@ docker compose ${profile[@]+"${profile[@]}"} up -d --build --wait
 
 echo "API: http://localhost:8000   Dashboard: http://localhost:5173"
 # Uses the Vosk wake prototype and Piper voice until the custom Hey Eddie model is trained.
-exec ./scripts/run_voice.sh
+if [[ ${#profile[@]} -gt 0 ]]; then
+  uv run python -m eddie.feed_classifier &
+  classifier_pid=$!
+  trap 'kill "$classifier_pid" 2>/dev/null || true' EXIT
+fi
+./scripts/run_voice.sh

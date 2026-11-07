@@ -1,0 +1,65 @@
+# Essentials Eddie never blocks, so filtering can't brick a device.
+# Each entry covers the domain and its subdomains, and wins over every
+# blocklist, the keyword heuristic and AI verdicts. Only user rules beat it.
+# Keep entries narrow: never a whole company domain that also serves
+# trackers (amazon.com would unblock device-metrics-us.amazon.com).
+# tests/test_lists.py checks that no entry unblocks anything on the shipped
+# blocklists. (aiv-delivery.net and pv-cdn.net are left out for that reason:
+# StevenBlack blocks one host in each and the rest of those zones isn't
+# blocked. If Prime Video breaks, check those two hosts first.)
+
+# Netflix: video CDN, images, app assets, API and sign-in
+nflxvideo.net
+nflximg.net
+nflximg.com
+nflxext.com
+nflxso.net
+api-global.netflix.com
+www.netflix.com
+secure.netflix.com
+
+# YouTube: video CDN, thumbnails, app API
+googlevideo.com
+ytimg.com
+www.youtube.com
+m.youtube.com
+youtubei.googleapis.com
+
+# Amazon: sign-in, Prime Video, images, Fire TV updates and connectivity check
+api.amazon.com
+atv-ps.amazon.com
+atv-ext.amazon.com
+aiv-cdn.net
+m.media-amazon.com
+images-na.ssl-images-amazon.com
+softwareupdates.amazon.com
+amzdigitaldownloads.edgesuite.net
+fireoscaptiveportal.com
+
+# Apple: sign-in, software updates, push, time
+idmsa.apple.com
+appleid.apple.com
+gsa.apple.com
+gs.apple.com
+mesu.apple.com
+updates.cdn-apple.com
+push.apple.com
+time.apple.com
+time-ios.apple.com
+
+# Time sync (NTP)
+pool.ntp.org
+time.google.com
+time.windows.com
+time.cloudflare.com
+time.nist.gov
+
+# Captive-portal and connectivity checks
+captive.apple.com
+connectivitycheck.gstatic.com
+clients3.google.com
+www.msftconnecttest.com
+www.msftncsi.com
+detectportal.firefox.com
+nmcheck.gnome.org
+connectivity-check.ubuntu.com

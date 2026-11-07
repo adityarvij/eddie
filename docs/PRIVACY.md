@@ -111,3 +111,24 @@ Ollama runs on the host and is local; the classifier refuses any non-private Oll
 
 - README "Guardrails" said to log only domain, device, time and action. The schema also stores qtype, source and reason, which are needed for the feed and for undo. The guardrail now names those fields too.
 - README "only Gmail" outbound claims leave out upstream DNS and the optional Tavily/Exa lookup. This page is the authoritative list.
+
+### Company summaries (#25, implemented)
+
+Ownership and public suffix data are bundled setup assets. Labeling makes no outbound requests and creates no cache files. Per-company counters are computed from the existing in-memory API events; no new browsing-history store or retention period is added. They count requested DNS lookups, not uploaded data. Unmapped domains are presented as registrable domains rather than guessed companies.
+
+
+### Voice activity calibration (#38, implemented)
+
+WebRTC VAD runs locally with no model downloads or remote calls. Calibration retains at most 125 scalar energy values in memory (ten seconds); commands retain the existing bounded audio pre-roll only. The ready tone is generated in memory. Capture is disabled during tone playback and its tail, then buffered audio is discarded. Tests use a licensed public speech fixture, not household recordings. No new audio, transcript, or calibration file is written.
+
+
+### Classifier event delivery (#27, implemented)
+
+The worker retains at most two in-flight inference inputs and 1,000 undelivered verdict events in memory. The verdict event carries only domain, label, confidence, short reason and timestamp, never device identity or traffic counts. Local API delivery ignores proxies, refuses public hosts and redirects, and retries failures without storing a new history log. Events are visible to existing live-feed subscribers under the API's existing access limitations; keep it bound to loopback until authentication is built. Worker shutdown/restart drops its in-memory notification outbox. Persistent verdict retention stays unchanged. Model reasons are untrusted display text, never HTML.
+
+
+## Real AI on the scripted demo feed
+
+`python -m eddie.feed_classifier` polls the local API for scripted demo queries and feeds the real bounded Ollama worker using an in-memory SQLite queue/cache. Real DNS still uses the durable database worker. `run_all.sh` launches the adapter only with the fake-traffic profile. Stopping it loses its cache, and no demo network history is added to disk. It polls up to 2,000 recent events once per second and retains at most 20,000 query rows for an hour; heavy traffic can outrun that window. Inference remains on the host with local-only URLs, not in the DNS or API request path.
+
+The API retains at most 1,000 verdicts in memory, returns them from `GET /ai/verdicts`, and includes `ai_verdicts` in WebSocket snapshots so a browser refresh does not hide completed results. The fake generator uses these real cached verdicts for later decisions, while still labelling the traffic itself as scripted demo traffic in its launcher/docs. The old hard-coded “sent to AI” and fabricated AI confidence text are removed. Unknowns say “awaiting classification”; an `[ai]` line is printed only after actual model output is validated. These verdicts do not prove anything about real Fire Stick traffic.

@@ -19,13 +19,14 @@ from collections import deque
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 
 from . import inferences, insights, labels, rules, store
-from .events import ModeUpdate, QueryEvent
+from .events import AIVerdictEvent, ModeUpdate, QueryEvent
 
 # In memory for now; SQLite (store.py) replaces this once the DNS side lands.
 recent: deque[dict] = deque(maxlen=20000)
 totals = {"seen": 0, "blocked": 0}
 state = {"home_mode": False}
 clients: set[WebSocket] = set()
+ai_verdicts: dict[str, dict] = {}
 ids = itertools.count(1)
 db: dict[str, sqlite3.Connection | None] = {"conn": None}
 APPLY_TIMEOUT = 2.0  # seconds to wait for DNS to load a rule change (it polls every 0.2 s)
@@ -57,6 +58,22 @@ async def ingest(body: QueryEvent | list[QueryEvent]):
     return {"ok": True, "count": len(events)}
 
 
+@app.post('/ai/verdict')
+async def ai_verdict(body: AIVerdictEvent):
+    # Metadata only: neither rewrite history nor count an AI result as a query.
+    event = {'type': 'ai_verdict', **body.model_dump()}
+    if body.domain not in ai_verdicts and len(ai_verdicts) >= 1000:
+        ai_verdicts.pop(next(iter(ai_verdicts)))
+    ai_verdicts[body.domain] = event
+    await broadcast(event)
+    return {'ok': True}
+
+
+@app.get('/ai/verdicts')
+def cached_ai_verdicts():
+    return list(ai_verdicts.values())
+
+
 @app.get("/events")
 def events(since: int = 0, device: str | None = None, limit: int = 200):
     rows = [e for e in recent if e["ts"] > since and (device is None or e["device"] == device)]
@@ -65,7 +82,8 @@ def events(since: int = 0, device: str | None = None, limit: int = 200):
 
 @app.get("/summary")
 def summary():
-    return {**totals, "home_mode": state["home_mode"], "text": insights.summary_text(list(recent))}
+    return {**totals, "home_mode": state["home_mode"], "text": insights.summary_text(list(recent)),
+            "companies": insights.company_counts(list(recent)), "company_window_seconds": 3600}
 
 
 @app.get("/what-they-know")
@@ -133,6 +151,7 @@ async def ws_events(ws: WebSocket):
     await ws.send_text(json.dumps({
         "type": "snapshot",
         "events": list(recent)[-60:],
+        "ai_verdicts": list(ai_verdicts.values()),
         "totals": totals,
         "home_mode": state["home_mode"],
     }))

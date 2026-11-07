@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-import httpx
+import httpx2 as httpx
 from dnslib import DNSRecord
 
 from eddie import api, decision, dns_server, rules, store

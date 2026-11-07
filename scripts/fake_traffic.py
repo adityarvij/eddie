@@ -44,9 +44,9 @@ def streams() -> list[Stream]:
         # Telemetry that runs whether or not anyone is watching
         S(FIRE_STICK, "device-metrics-us.amazon.com", 30, 0.03, "always", "block", "blocklist", "On the Amazon Fire TV tracker list"),
         S(FIRE_STICK, "unagi-na.amazon.com", 60, 0.04, "always", "block", "blocklist", "Amazon device analytics"),
-        S(FIRE_STICK, "dcape-na.amazon.com", 45, 0.1, "always", "block", "ai", "AI: tracker (0.86), usage reports to Amazon"),
-        S(FIRE_STICK, "arcus-uswest.amazon.com", 90, 0.3, "always", "flag", "default", "Unknown, sent to AI for a verdict"),
-        S(FIRE_STICK, "spectrum.s3.amazonaws.com", 120, 0.4, "always", "flag", "default", "Unknown, sent to AI for a verdict"),
+        S(FIRE_STICK, "dcape-na.amazon.com", 45, 0.1, "always", "block", "heuristic", "Scripted demo telemetry"),
+        S(FIRE_STICK, "arcus-uswest.amazon.com", 90, 0.3, "always", "flag", "default", "Unknown; awaiting classification"),
+        S(FIRE_STICK, "spectrum.s3.amazonaws.com", 120, 0.4, "always", "flag", "default", "Unknown; awaiting classification"),
         S(FIRE_STICK, "firetvcaptiveportal.com", 60, 0.2, "always", "allow", "allowlist", "Connectivity check", essential=True),
         S(FIRE_STICK, "softwareupdates.amazon.com", 240, 0.3, "always", "allow", "allowlist", "Fire OS updates", essential=True),
         S(FIRE_STICK, "pool.ntp.org", 300, 0.2, "always", "allow", "allowlist", "Clock sync", essential=True),
@@ -65,10 +65,15 @@ def streams() -> list[Stream]:
     ]
 
 
-def decide(s: Stream, home_mode: bool) -> tuple[str, str, str]:
+def decide(s: Stream, home_mode: bool, ai_cache=None) -> tuple[str, str, str]:
     """Same order as the real engine, with home mode layered on top."""
     if home_mode and s.device == FIRE_STICK and not s.essential and s.action != "block":
         return "block", "home_mode", "Home mode: the TV can't phone home while you're home"
+    verdict = (ai_cache or {}).get(s.domain)
+    if s.source == 'default' and verdict:
+        label, confidence = verdict['label'], verdict['confidence']
+        action = 'block' if label == 'tracker' and confidence >= .7 else 'allow' if label == 'needed' else 'flag'
+        return action, 'ai', f"AI: {label} ({confidence:.2f}), {verdict['reason']}"
     return s.action, s.source, s.reason
 
 
@@ -108,6 +113,7 @@ def main():
 
     start = time.time()
     home_mode, last_mode_check, last_scene = False, 0.0, None
+    ai_cache = {}
     print(f"Sending fake traffic to {args.url} at {args.speed}x. Ctrl-C to stop.")
 
     while True:
@@ -122,6 +128,10 @@ def main():
                 home_mode = post(args.url, "/mode")["home_mode"]
             except Exception:
                 pass
+            try:
+                ai_cache = {event['domain']: event for event in post(args.url, '/ai/verdicts')}
+            except Exception:
+                pass
             last_mode_check = time.time()
 
         batch = []
@@ -131,7 +141,7 @@ def main():
             s.due = t + s.every_s * (1 + random.uniform(-s.jitter, s.jitter))
             if s.scene not in ("always", scene):
                 continue
-            action, source, reason = decide(s, home_mode)
+            action, source, reason = decide(s, home_mode, ai_cache)
             batch.append({
                 "type": "query",
                 "ts": int(time.time() * 1000),

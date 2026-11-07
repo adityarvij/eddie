@@ -28,6 +28,18 @@ function renderEvent(event, device, action) {
 
 }
 function setConfirming(on, ms = 0) { confirming = on; clearTimeout(confirmTimer); if (on) confirmTimer = setTimeout(() => { confirming = false; setAssistantState('listening'); }, ms); }
+function consumeEvent(event) {
+  if (event.type === 'ai_verdict') {
+    const row = document.createElement('div'); row.className = 'event';
+    row.textContent = `[ai] ${event.domain} → ${event.label} / ${event.reason}`;
+    $('feed').querySelector('.empty')?.remove(); $('feed').append(row);
+    while ($('feed').children.length > 150) $('feed').firstChild.remove();
+    if (!$('assistant-logs').hidden) $('voice-logs').append(row.cloneNode(true));
+    $('feed').scrollTop = $('feed').scrollHeight;
+    return;
+  }
+  if (event.domain) addEvent(event); else voiceEvent(event);
+}
 function setAssistantState(state) {
   // A pending risky action keeps asking for yes or no until it is answered or expires.
   if (confirming && ['idle','ready','listening'].includes(state)) state = 'confirming';
@@ -77,8 +89,8 @@ dialog.addEventListener('click', e => { if (e.target === dialog) { const r=dialo
 document.addEventListener('keydown', e => { if (e.code === 'Space' && !['INPUT','TEXTAREA','BUTTON'].includes(document.activeElement.tagName)) { e.preventDefault(); wake(true); } });
 $('pause').onclick = () => { paused = !paused; $('pause').textContent = paused ? 'resume' : 'pause'; if (!paused) { queued.forEach(e=>renderEvent(e)); queued=[]; } };
 $('mic').onclick = async () => { try { const r = await fetch(voiceReady ? '/api/voice/stop' : '/api/voice/start',{method:'POST'}); const data=await r.json(); if (!r.ok) throw Error(data.message || 'Could not start microphone.'); notice(data.message); } catch(e) { notice(e.message); } };
-const stream = new EventSource('/events'); stream.onopen = () => { $('feed-status').textContent='Connected to local event bridge'; }; stream.onerror=()=>{ $('feed-status').textContent='Reconnecting to local event bridge…'; if(dialog.open) dismiss(); }; stream.onmessage=e=>{ try { const event=JSON.parse(e.data); if(event.type==='traffic_status'){ $('connection').firstChild.textContent=event.connected?'Connected':'Waiting'; $('source-label').textContent=event.connected?'LIVE TRAFFIC':'WAITING FOR TRAFFIC'; } else if(event.domain) addEvent(event); else voiceEvent(event); } catch {} };
+const stream = new EventSource('/events'); stream.onopen = () => { $('feed-status').textContent='Connected to local event bridge'; }; stream.onerror=()=>{ $('feed-status').textContent='Reconnecting to local event bridge…'; if(dialog.open) dismiss(); }; stream.onmessage=e=>{ try { const event=JSON.parse(e.data); if(event.type==='traffic_status'){ $('connection').firstChild.textContent=event.connected?'Connected':'Waiting'; $('source-label').textContent=event.connected?'LIVE TRAFFIC':'WAITING FOR TRAFFIC'; } else consumeEvent(event); } catch {} };
 // The traffic API runs on the same machine as this page (localhost on the Mac, its LAN IP from the iPad).
 const trafficUrl = new URLSearchParams(location.search).get('traffic') || `ws://${location.hostname || 'localhost'}:8000/ws/events`;
-function connectTraffic() { let ws; try { ws=new WebSocket(trafficUrl); } catch { return; } ws.onopen=()=>{ $('connection').firstChild.textContent='Connected'; $('source-label').textContent='LIVE TRAFFIC'; }; ws.onmessage=e=>{ try { const message=JSON.parse(e.data); if(message.type==='snapshot'){ total=0; blocked=0; allowedCount=0; deviceSet.clear(); $('feed').replaceChildren(); } const events=Array.isArray(message)?message:Array.isArray(message.events)?message.events:[message]; events.forEach(event=>event.domain?addEvent(event):voiceEvent(event)); const totals=message.totals || (message.type==='totals'?message:null); if(totals){ total=totals.seen; blocked=totals.blocked; $('requests').textContent=total.toLocaleString(); $('blocked').textContent=blocked.toLocaleString(); updateCounts(); } } catch {} }; ws.onclose=()=>{ $('connection').firstChild.textContent='Waiting'; $('source-label').textContent='WAITING FOR TRAFFIC'; setTimeout(connectTraffic,2500); }; ws.onerror=()=>ws.close(); }
+function connectTraffic() { let ws; try { ws=new WebSocket(trafficUrl); } catch { return; } ws.onopen=()=>{ $('connection').firstChild.textContent='Connected'; $('source-label').textContent='LIVE TRAFFIC'; }; ws.onmessage=e=>{ try { const message=JSON.parse(e.data); if(message.type==='snapshot'){ total=0; blocked=0; allowedCount=0; deviceSet.clear(); $('feed').replaceChildren(); } const events=Array.isArray(message)?message:Array.isArray(message.events)?message.events:[message]; events.forEach(consumeEvent); if(message.type==='snapshot') (message.ai_verdicts || []).forEach(consumeEvent); const totals=message.totals || (message.type==='totals'?message:null); if(totals){ total=totals.seen; blocked=totals.blocked; $('requests').textContent=total.toLocaleString(); $('blocked').textContent=blocked.toLocaleString(); updateCounts(); } } catch {} }; ws.onclose=()=>{ $('connection').firstChild.textContent='Waiting'; $('source-label').textContent='WAITING FOR TRAFFIC'; setTimeout(connectTraffic,2500); }; ws.onerror=()=>ws.close(); }
 connectTraffic();

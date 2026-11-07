@@ -8,6 +8,8 @@ The decision comes from decision.evaluate, which never waits on a model.
 Every lookup is written to the queries table in eddie.db (EDDIE_DB) through
 store.QueryLog, which queues the row and writes it off the event loop.
 EDDIE_DB=off logs nothing; EDDIE_RETENTION_DAYS (default 7) bounds history.
+The blocklists (blocklists/*.txt) and essentials allowlist (allowlist.txt)
+are loaded once at startup (lists.py; EDDIE_BLOCKLISTS, EDDIE_ALLOWLIST).
 Rules and AI verdicts written to eddie.db by other processes (rules API,
 classifier) are reloaded into the decision engine within RELOAD_EVERY, and
 the rules revision loaded is written back so the rules API can acknowledge it.
@@ -25,7 +27,7 @@ import time
 
 from dnslib import AAAA, QTYPE, RCODE, RR, A, DNSRecord
 
-from . import decision, rules
+from . import decision, lists, rules
 from . import store
 from .store import QueryLog, query_log_from_env
 
@@ -197,6 +199,14 @@ def main() -> None:
     host = os.environ.get("EDDIE_DNS_HOST", "0.0.0.0")
     port = int(os.environ.get("EDDIE_DNS_PORT", "53"))
     upstreams = upstreams_from_env()
+    started = time.monotonic()
+    try:
+        allowlist, blocklist = lists.load_from_env()
+    except OSError as exc:
+        raise SystemExit(f"Can't load the allowlist or blocklists ({exc}). Blocking without the allowlist can break devices.")
+    decision.engine.set_lists(allowlist, blocklist)
+    log.info("loaded %d blocklist and %d allowlist entries in %.2fs",
+             len(blocklist), len(allowlist), time.monotonic() - started)
     query_log = query_log_from_env()
 
     async def run():
