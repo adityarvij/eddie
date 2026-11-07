@@ -5,6 +5,7 @@ import re
 import threading
 import time
 import urllib.request
+from pathlib import Path
 
 
 def request(path, body=None, timeout=3):
@@ -69,28 +70,52 @@ TRACKING = {'telemetry', 'ads', 'analytics', 'tracking'}
 IT_WINDOW_MS = 15 * 60 * 1000  # "it" never reaches back further than this in /events
 RULE_TIMEOUT = 5  # POST /rules waits up to 2 s for the DNS engine before answering
 IT_WORDS = r'it|that|this|that one|this one|that domain|this domain|that tracker|this tracker'
-BLOCK = re.compile(
-    r'(?:(?:ok|okay|eddie|please) )*(?:(?:can|could|would|will) you (?:please )?)?(?:go ahead and )?'
-    r'block (?P<target>.+?)(?: (?:please|for me|now|too|as well))*')
+WILDCARD = re.compile(r'\*\.[a-z0-9_-]+(?:\.[a-z0-9_-]+)+')
+
+
+def _command(verb):
+    return re.compile(
+        r'(?:(?:ok|okay|eddie|please) )*(?:(?:can|could|would|will) you (?:please )?)?(?:go ahead and )?'
+        rf'{verb} (?P<target>.+?)(?: (?:please|for me|now|too|as well))*')
+
+
+BLOCK = _command('block')
+ALLOW = _command('allow')
 NOT_RESOLVED = 'Which domain should I block? Say block, then the full domain name. Nothing changed.'
 RULE_FAILED = "I couldn't add that rule. Nothing changed."
+# Spoken service name -> patterns for "allow <service>"; one file, covered by tests/test_voice_allow.py.
+SERVICES = {key: value for key, value in json.loads(
+    (Path(__file__).with_name('services.json')).read_text()).items() if not key.startswith('_')}
+SERVICE_ALIASES = {alias: key for key, service in SERVICES.items() for alias in service['aliases']}
+_names = [service['name'] for service in SERVICES.values()]
+ALLOW_UNRESOLVED = (f"Which service or domain should I allow? I know {', '.join(_names[:-1])} and {_names[-1]}, "
+                    "or say allow, then the full domain name. Nothing changed.")
 # The last domain Eddie spoke about in this conversation; memory only, cleared by forget_conversation.
 context = {'domain': None}
+
+
+def command_target(raw, command):
+    """The target of a whole-utterance command (BLOCK or ALLOW), else None.
+
+    Spoken "dot" becomes "." because transcripts spell domains out.
+    """
+    text = raw.lower().replace("'", '').replace('’', '')
+    text = re.sub(r'\s+dot\s+', '.', text)
+    text = ' '.join(re.sub(r'[^a-z0-9._*-]+', ' ', text).split()).strip('.')
+    match = command.fullmatch(text)
+    if not match or re.search(r'\b(?:and|but|then)\b', match['target']):
+        return None  # extra requests get the "nothing changed" reply
+    return re.sub(r'^(?:the )', '', match['target']).rstrip('.')
 
 
 def block_target(raw):
     """(kind, domain) for a whole-utterance block command, else None.
 
     kind is 'it' (domain None) or 'domain' (domain None when it isn't a domain name).
-    Spoken "dot" becomes "." because transcripts spell domains out.
     """
-    text = raw.lower().replace("'", '').replace('’', '')
-    text = re.sub(r'\s+dot\s+', '.', text)
-    text = ' '.join(re.sub(r'[^a-z0-9._*-]+', ' ', text).split()).strip('.')
-    match = BLOCK.fullmatch(text)
-    if not match or re.search(r'\b(?:and|but|then)\b', match['target']):
-        return None  # extra requests get the "nothing changed" reply
-    target = re.sub(r'^(?:the )', '', match['target']).rstrip('.')
+    target = command_target(raw, BLOCK)
+    if target is None:
+        return None
     if re.fullmatch(IT_WORDS, target):
         return 'it', None
     return 'domain', target if len(target) <= 253 and DOMAIN.fullmatch(target) else None
@@ -110,14 +135,18 @@ def resolve_it():
     return None
 
 
-def block_domain(domain):
-    """POST a global block rule; returns applied, raising unless the backend stored this rule."""
-    result = request('/rules', {'pattern': domain, 'action': 'block', 'created_by': 'voice'},
+def add_rule(pattern, action):
+    """POST a global rule; returns applied, raising unless the backend stored this rule."""
+    result = request('/rules', {'pattern': pattern, 'action': action, 'created_by': 'voice'},
                      timeout=RULE_TIMEOUT)
-    if (type(result.get('id')) is not int or result.get('pattern') != domain
-            or result.get('action') != 'block'):
+    if (type(result.get('id')) is not int or result.get('pattern') != pattern
+            or result.get('action') != action):
         raise ValueError('Rule was not acknowledged')
     return result.get('applied') is True
+
+
+def block_domain(domain):
+    return add_rule(domain, 'block')
 
 
 def block_command(kind, domain):
@@ -138,6 +167,74 @@ def block_command(kind, domain):
             "so it may still get through.")
 
 
+def allow_target(raw):
+    """(kind, value) for a whole-utterance allow command, else None.
+
+    kind is 'service' (a SERVICES key), 'domain' (one exact host), 'wildcard'
+    (a typed *.a.com) or 'unknown' (value None: ask, never guess a pattern).
+    """
+    target = command_target(raw, ALLOW)
+    if target is None:
+        return None
+    service = SERVICE_ALIASES.get(re.sub(r'[^a-z0-9]+', ' ', target).strip())
+    if service:
+        return 'service', service
+    if len(target) <= 253 and DOMAIN.fullmatch(target):
+        return 'domain', target
+    if len(target) <= 253 and WILDCARD.fullmatch(target):
+        return 'wildcard', target
+    return 'unknown', None
+
+
+def allow_request(kind, value):
+    """Confirmation.request args for a broad allow (a service or a wildcard)."""
+    if kind == 'service':
+        service = SERVICES[value]
+        name, patterns = service['name'], service['patterns']
+        prompt = f'Allow {name} on every device? That adds {len(patterns)} allow rules for its domains.'
+    else:
+        name, patterns = f'{value[2:]} and every subdomain', [value]
+        prompt = f'Allow {name} on every device?'
+    return 'allow', {'name': name, 'patterns': patterns}, prompt
+
+
+def allow_patterns(name, patterns):
+    """RISKY_ACTIONS['allow']: add each allow rule in order, stopping at the first failure.
+
+    The last rule's applied covers the earlier ones: the DNS engine loads whole revisions.
+    """
+    saved, applied = 0, False
+    for pattern in patterns:
+        try:
+            applied = add_rule(pattern, 'allow')
+        except Exception:
+            break
+        saved += 1
+    if saved == 0:
+        return RULE_FAILED
+    if saved < len(patterns):
+        return (f"I only saved {saved} of {len(patterns)} allow rules for {name} before the backend "
+                f"stopped answering, so {name} may still be blocked. The saved rules stay.")
+    if not applied:
+        return f"I saved the allow rules for {name}, but Eddie's DNS hasn't loaded them yet, so it may still be blocked."
+    loaded = ("The rule is saved and Eddie's DNS has loaded it." if saved == 1
+              else "The rules are saved and Eddie's DNS has loaded them.")
+    return f'Allowed {name} on every device. {loaded}'
+
+
+def allow_command(kind, value):
+    """The reply to an allow that needs no confirmation: one exact domain, or an unknown target."""
+    if kind == 'unknown':
+        return ALLOW_UNRESOLVED
+    try:
+        applied = add_rule(value, 'allow')
+    except Exception:
+        return RULE_FAILED
+    if applied:
+        return f"Allowed {value} on every device. The rule is saved and Eddie's DNS has loaded it."
+    return f"I saved a rule to allow {value}, but Eddie's DNS hasn't loaded it yet, so it may still be blocked."
+
+
 def forget_conversation():
     """Drop the remembered domain when the conversation or microphone session ends."""
     context['domain'] = None
@@ -149,8 +246,9 @@ NO = {'no', 'nope', 'no thanks', 'cancel', 'cancel it', 'stop', 'dont', 'never m
 # Risky actions run only from Confirmation.reply after an explicit yes. Each maps
 # kind -> callable(**args) returning the spoken result only after backend
 # acknowledgment. RISKY_COMMANDS parse normalized text -> (kind, args, prompt).
-# Both stay empty until lockdown and email exist.
-RISKY_ACTIONS = {}
+# Broad allows (a service or a wildcard) are parsed in route, not RISKY_COMMANDS,
+# because they need the raw text's dots.
+RISKY_ACTIONS = {'allow': allow_patterns}
 RISKY_COMMANDS = []
 
 
@@ -236,6 +334,9 @@ def route(text):
     text = re.sub(r'\s+', ' ', text)
     # A new risky command replaces any pending one; otherwise a pending action
     # consumes the reply, including missed speech.
+    allow = allow_target(raw)
+    if allow and allow[0] in ('service', 'wildcard'):
+        return confirmation.request(*allow_request(*allow))
     for parse in RISKY_COMMANDS:
         command = parse(text)
         if command:
@@ -259,8 +360,10 @@ def route(text):
     block = block_target(raw)
     if block:
         return block_command(*block)
+    if allow:
+        return allow_command(*allow)
     if re.search(r'\b(block|allow|lock|undo|email|send|mode)\b', text):
-        return "I haven't changed anything. I can block a domain or turn home mode on or off; allow, undo, lockdown and email aren't connected yet."
+        return "I haven't changed anything. I can block or allow a domain, allow a service like Netflix, or turn home mode on or off; undo, lockdown and email aren't connected yet."
     if re.search(r'\bwhat (?:do|does|can|could) (?:\w+|my \w+|the \w+) (?:know|tell|guess|figure out|learn) about (?:me|us|my house|my home|our house)\b', text):
         try:
             report = what_they_know(REPORT_HOURS)

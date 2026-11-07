@@ -1,0 +1,25 @@
+{
+  "_comment": "Services voice can allow by name (#13). Patterns use the POST /rules syntax: a.com is that host only, *.a.com is a.com and every subdomain. No pattern may cover a domain on the shipped blocklists (tests/test_voice_allow.py), so Netflix and YouTube list their hosts instead of *.netflix.com and *.youtube.com, and Prime Video leaves out aiv-delivery.net and pv-cdn.net. Best-effort from public knowledge of each app, not checked against captured traffic.",
+  "netflix": {
+    "name": "Netflix",
+    "aliases": ["netflix"],
+    "patterns": ["netflix.com", "www.netflix.com", "api-global.netflix.com", "secure.netflix.com",
+                 "*.netflix.net", "*.nflxvideo.net", "*.nflximg.net", "*.nflxext.com", "*.nflxso.net"]
+  },
+  "youtube": {
+    "name": "YouTube",
+    "aliases": ["youtube", "you tube"],
+    "patterns": ["youtube.com", "www.youtube.com", "m.youtube.com", "youtubei.googleapis.com",
+                 "*.googlevideo.com", "*.ytimg.com", "*.ggpht.com"]
+  },
+  "prime_video": {
+    "name": "Prime Video",
+    "aliases": ["prime video", "amazon prime video", "amazon prime"],
+    "patterns": ["*.primevideo.com", "*.aiv-cdn.net", "atv-ps.amazon.com"]
+  },
+  "apple_tv": {
+    "name": "Apple TV",
+    "aliases": ["apple tv", "apple tv plus"],
+    "patterns": ["*.tv.apple.com", "play.itunes.apple.com", "*.hls.itunes.apple.com"]
+  }
+}

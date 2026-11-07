@@ -37,7 +37,7 @@ Say “Hey Eddie,” then ask your question. The detector uses 16 kHz mono audio
 
 Questions go to the local Ollama agent (`voice/ollama_agent.py`, #29) when it's reachable: “What's the TV doing?”, “What got blocked recently?”, “Why was device-metrics-us.amazon.com blocked?”. It only reads traffic through four tools, every number it says must come from those tools, and if Ollama is down the keyword router below answers instead. `EDDIE_AGENT=off` disables it; `EDDIE_OLLAMA_URL` and `EDDIE_AGENT_MODEL` (default `llama3.2:3b`, provisioned with `ollama pull`) configure it. Try it typed with `EDDIE_API_URL=http://127.0.0.1:8000 python voice/ollama_agent.py "What's the TV doing?"`. See [architecture](../docs/ARCHITECTURE.md#local-tool-calling-agent-29).
 
-Keyword commands: “What's been going on?” (backend facts), “What do they know about me?” / “What do companies know about me?” (reads `GET /what-they-know?hours=168`, up to a week; the local model, when on, rewrites the backend's facts into at most five checked “Someone could guess …” lines, otherwise Eddie speaks the backend template), “turn on home mode”, “turn off home mode”, “block it” / “block device-metrics-us.amazon.com” (below). Home mode updates backend state; actual network enforcement still depends on Will's decision engine. Allow, undo, lockdown and email are pending; the confirmation step they will use is built (see below). Typed questions use the same router. Do not claim these pending tools work.
+Keyword commands: “What's been going on?” (backend facts), “What do they know about me?” / “What do companies know about me?” (reads `GET /what-they-know?hours=168`, up to a week; the local model, when on, rewrites the backend's facts into at most five checked “Someone could guess …” lines, otherwise Eddie speaks the backend template), “turn on home mode”, “turn off home mode”, “block it” / “block device-metrics-us.amazon.com” and “allow Netflix” / “allow api.example.com” (below). Home mode updates backend state; actual network enforcement still depends on Will's decision engine. Undo, lockdown and email are pending; the confirmation step lockdown and email will use is built and already guards service allows (see below). Typed questions use the same router. Do not claim these pending tools work.
 
 ## Verification before demo
 
@@ -78,9 +78,30 @@ Conversation activity is explicit (`is_eddie_active`): wake activates it, each s
 
 Devices may keep using a cached answer for its TTL after a block loads. A timeout after the API already stored the rule is still reported as nothing changed; check `GET /rules`. Per-device blocks and voice undo are not built.
 
+## Allow a service or domain (#13)
+
+“Allow Netflix”, “can you allow Prime Video?” or “allow api dot example dot com” adds global allow rules through `POST /rules` (`created_by: voice`). A global allow rule beats the allowlist, blocklists, heuristics and AI verdicts, but a device's own rule for the same domain still wins. The same whole-utterance rule as block applies: “don't allow Netflix” and “allow Netflix and block it” change nothing.
+
+Service names map to patterns in one file, `voice/services.json`: Netflix, YouTube (“you tube”), Prime Video (“amazon prime video”) and Apple TV (“apple tv plus”). The patterns are best-effort from public knowledge of each app and have not been checked against captured traffic; a test fails if any of them would cover a domain on the shipped blocklists, so Netflix and YouTube list their hosts instead of `*.netflix.com` (which would let `logs.netflix.com` through) and `*.youtube.com`, and Prime Video leaves out `aiv-delivery.net` and `pv-cdn.net`.
+
+| Request | What happens |
+|---|---|
+| A known service, or a typed wildcard (`allow *.example.com`) | Read-back first: “Allow Netflix on every device? That adds 9 allow rules for its domains. Say yes to confirm or no to cancel.” Only a yes adds the rules, one at a time. |
+| One domain, spoken or typed | Added straight away, like block. |
+| Anything else (“allow Hulu”, “allow it”, `*.com`) | “Which service or domain should I allow? I know Netflix, YouTube, Prime Video and Apple TV, or say allow, then the full domain name. Nothing changed.” No pattern is guessed. |
+
+| Backend answer | Eddie says |
+|---|---|
+| Every rule stored and DNS loaded the last one (`applied: true`) | “Allowed <service or domain> on every device. The rules are saved and Eddie's DNS has loaded them.” |
+| Stored, not loaded within 2 s | “I saved … but Eddie's DNS hasn't loaded … yet, so it may still be blocked.” |
+| The first rule fails (error, timeout, or a reply that doesn't echo it) | “I couldn't add that rule. Nothing changed.” |
+| A later rule of a service fails | “I only saved 2 of 9 allow rules for Netflix before the backend stopped answering, so Netflix may still be blocked. The saved rules stay.” Adding stops there; nothing is rolled back. |
+
+Each rule waits up to 2 s for DNS, so a service with DNS down can take about 2 s per rule before Eddie answers.
+
 ## Confirmation for risky actions
 
-Risky actions (lockdown and email, once built) never run from the command that asks for them. `voice_agent.Confirmation` holds at most **one** pending action, `{kind, args, prompt, expires_at}`, and speaks the read-back prompt followed by “Say yes to confirm or no to cancel.”
+Risky actions (service and wildcard allows; lockdown and email, once built) never run from the command that asks for them. `voice_agent.Confirmation` holds at most **one** pending action, `{kind, args, prompt, expires_at}`, and speaks the read-back prompt followed by “Say yes to confirm or no to cancel.”
 
 | Next reply | Result |
 |---|---|
@@ -93,7 +114,7 @@ Risky actions (lockdown and email, once built) never run from the command that a
 
 Replies must match the whole utterance after lowercasing and removing punctuation, so “yes, but not the TV” is unclear, not a yes. Typed asks use the same router. While an action is pending the bridge emits `voice_state: confirming` with `kind`, `prompt` and `expires_in_ms` (never the action's arguments); the dashboard shows “say yes or no” until the next reply, dismissal or expiry. No pending action, reply or transcript is persisted or logged.
 
-No risky action is registered yet: `RISKY_ACTIONS` and `RISKY_COMMANDS` are empty until lockdown (#31) and email (#37) land, so today this flow is only reachable from unit tests. Closing the dashboard overlay by hand does not notify the worker; the 15 second expiry still applies.
+The only registered risky action is `allow` (#13), parsed in `route` from the raw text because a typed wildcard needs its dots; `RISKY_COMMANDS` stays empty until lockdown (#31) and email (#37) land. Closing the dashboard overlay by hand does not notify the worker; the 15 second expiry still applies.
 
 
 ## Noisy-room voice and ready cue (#38)

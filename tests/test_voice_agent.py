@@ -23,7 +23,7 @@ class VoiceCommands(unittest.TestCase):
 
     @patch('voice_agent.request')
     def test_unsupported_action_does_not_write(self, request):
-        self.assertIn("haven't changed", voice_agent.respond('allow netflix'))
+        self.assertIn("haven't changed", voice_agent.respond('undo that'))
         self.assertIn("haven't changed", voice_agent.respond('turn on home mode and send email'))
         request.assert_not_called()
 
