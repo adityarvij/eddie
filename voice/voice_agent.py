@@ -52,17 +52,20 @@ WHAT_THEY_KNOW_TOOL = {
         'description': 'Read what companies could infer about the household from recent device traffic.',
         'parameters': {
             'type': 'object',
-            'properties': {'hours': {'type': 'integer', 'minimum': 1, 'maximum': 168}},
+            'properties': {'hours': {'type': 'integer', 'minimum': 1, 'maximum': 8760,
+                                     'description': 'Requested lookback in hours. Omit to use all retained data.'}},
             'additionalProperties': False,
         },
     },
 }
 
 
-def what_they_know(hours=24):
+def what_they_know(hours=None):
     """Backend-computed inferences only; the reply text comes from /what-they-know."""
-    if type(hours) is not int or not 1 <= hours <= 168:
-        raise ValueError('hours must be an integer from 1 to 168')
+    if hours is None:
+        return request('/what-they-know')
+    if type(hours) is not int or not 1 <= hours <= 8760:
+        raise ValueError('hours must be an integer from 1 to 8760')
     return request(f'/what-they-know?hours={hours}')
 
 
@@ -528,7 +531,29 @@ ask_model = None
 # Optional local model that writes "what they know" inferences from the backend's
 # facts: callable(facts) -> text, or None to keep the backend's template.
 phrase_inferences = None
-REPORT_HOURS = 168  # "what do they know about me" reads up to a week of traffic
+TIME_NUMBERS = {'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5, 'six': 6, 'seven': 7,
+                'eight': 8, 'nine': 9, 'ten': 10, 'eleven': 11, 'twelve': 12, 'fourteen': 14,
+                'thirty': 30}
+
+
+def report_hours(text):
+    """Requested lookback in whole hours, or None to ask the backend for all retained data."""
+    lower = text.lower()
+    match = re.search(r'\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fourteen|thirty)\s*'
+                      r'(minutes?|hours?|days?|weeks?|months?)\b', lower)
+    if match:
+        number = int(match[1]) if match[1].isdigit() else TIME_NUMBERS[match[1]]
+        unit = match[2]
+        if unit.startswith('minute'):
+            return max(1, (number + 59) // 60)
+        return number * {'hour': 1, 'day': 24, 'week': 168, 'month': 720}[unit.rstrip('s')]
+    if re.search(r'\b(?:today|yesterday|last day|past day)\b', lower):
+        return 24
+    if re.search(r'\b(?:this|last|past|previous) week\b', lower):
+        return 168
+    if re.search(r'\b(?:this|last|past|previous) month\b', lower):
+        return 720
+    return None
 
 
 def respond(text):
@@ -583,13 +608,15 @@ def route(text):
         return "I haven't changed anything. I can block or allow a domain, allow a service like Netflix, lock down a device, undo my last rule, or turn home mode on or off; email isn't connected yet."
     if re.search(r'\bwhat (?:do|does|can|could) (?:\w+|my \w+|the \w+) (?:know|tell|guess|figure out|learn) about (?:me|us|my house|my home|our house)\b', text):
         try:
-            report = what_they_know(REPORT_HOURS)
+            report = what_they_know(report_hours(raw))
         except Exception:
             return "I can't reach Eddie’s traffic backend, so I can't say what they know right now."
+        if report.get('enough_data') is False:
+            return str(report['text'])
         if phrase_inferences is not None and report.get('facts'):
             reply = phrase_inferences(report['facts'])
             if reply:
-                return reply
+                return " ".join(filter(None, (report.get('notice'), reply)))
         return str(report['text'])
     if text in ('hello', 'hi', 'hey', 'hey eddie'):
         return "Hey, I'm Eddie. Ask me what's been going on, tell me to block a domain, or to turn home mode on or off."

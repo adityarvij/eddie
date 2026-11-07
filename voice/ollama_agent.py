@@ -42,7 +42,8 @@ SYSTEM_PROMPT = (
     'Use tools for facts; never invent numbers. Confirm before sending email or locking down a device. '
     'Your tools only read traffic; you cannot block, allow or change anything, so never say you did. '
     'Use the device names the tools return. If a tool reports an error, say plainly what you could not find. '
-    'Only state facts that appear in tool results; when a result has a "said" sentence, base your answer on it.'
+    'Only state facts that appear in tool results; when a result has a "said" sentence, base your answer on it. '
+    'If a tool says enough_data is false, say there is not enough data instead of guessing.'
 )
 BACKEND_FAILURE = "I can't reach Eddie's traffic backend, so I can't answer that right now."
 UNVERIFIED = "I couldn't check that answer against Eddie's records, so I won't guess."
@@ -216,9 +217,11 @@ def explain_domain(domain):
     return result
 
 
-def what_they_know(hours=24):
-    if type(hours) is not int or not 1 <= hours <= 168:
-        raise ToolError('hours must be an integer from 1 to 168')
+def what_they_know(hours=None):
+    if hours is None:
+        return read('/what-they-know')
+    if type(hours) is not int or not 1 <= hours <= 8760:
+        raise ToolError('hours must be an integer from 1 to 8760')
     return read(f'/what-they-know?hours={hours}')
 
 

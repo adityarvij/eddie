@@ -241,11 +241,11 @@ class InferenceRouting(unittest.TestCase):
         voice_agent.phrase_inferences = None
 
     @patch('voice_agent.request', return_value=REPORT)
-    def test_privacy_question_reads_a_week_and_uses_the_model(self, request):
+    def test_privacy_question_reads_all_retained_data_and_uses_the_model(self, request):
         given = []
         voice_agent.phrase_inferences = lambda facts: given.append(facts) or 'Someone could guess Sundays.'
         self.assertEqual('Someone could guess Sundays.', voice_agent.respond('What do they know about me?'))
-        request.assert_called_once_with('/what-they-know?hours=168')
+        request.assert_called_once_with('/what-they-know')
         self.assertEqual([FACTS], given)
 
     @patch('voice_agent.request', return_value=REPORT)
@@ -257,6 +257,11 @@ class InferenceRouting(unittest.TestCase):
     def test_no_facts_never_reaches_the_model(self, request):
         voice_agent.phrase_inferences = lambda facts: self.fail('model called without facts')
         self.assertEqual('Not enough traffic.', voice_agent.respond('What do they know about me?'))
+
+    @patch('voice_agent.request', return_value={**REPORT, 'enough_data': False, 'text': 'Not enough data.'})
+    def test_explicit_not_enough_data_never_reaches_the_model(self, request):
+        voice_agent.phrase_inferences = lambda facts: self.fail('model called with insufficient data')
+        self.assertEqual('Not enough data.', voice_agent.respond('What do they know about me?'))
 
 
 if __name__ == '__main__':

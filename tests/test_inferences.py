@@ -24,7 +24,7 @@ class Facts(unittest.TestCase):
 
     def test_empty_window_has_no_facts(self):
         self.assertEqual([], inferences.compute_facts([], now_ms=self.now))
-        self.assertIn("haven't seen enough", inferences.spoken_text([], 24))
+        self.assertIn("don't have enough data", inferences.spoken_text([], 24))
 
     def test_facts_come_from_events(self):
         start = self.now - 3 * 60 * MIN
@@ -130,7 +130,8 @@ class Endpoint(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(168, demo['hours'])
         self.assertTrue(demo['text'].startswith(demo_week.LABEL))
         self.assertTrue(demo['facts'])
-        self.assertEqual({'demo': False, 'hours': 24, 'facts': []}, {k: live[k] for k in ('demo', 'hours', 'facts')})
+        self.assertEqual({'demo': False, 'hours': 168, 'facts': []}, {k: live[k] for k in ('demo', 'hours', 'facts')})
+        self.assertIs(live['enough_data'], False)
         self.assertFalse(api.recent, 'demo events must never enter the live feed')
 
 
@@ -176,7 +177,23 @@ class FromDatabase(unittest.IsolatedAsyncioTestCase):
         self.log([(self.now - MIN, 'f0:4f:7c:11:22:33', 'device-metrics-us.amazon.com', 'block')])
         report = await self.get(feed=[ev(self.now, 'doubleclick.net', 'block', device='Fake TV')])
         self.assertEqual('eddie.db', report['source'])
-        self.assertEqual('1 tracking request to Amazon in 24h, 1 blocked', report['facts'][0]['evidence'])
+        self.assertEqual('1 tracking request to Amazon in 168h, 1 blocked', report['facts'][0]['evidence'])
+        self.assertIs(report['enough_data'], False)
+
+    async def test_requested_range_is_used_and_capped_to_retention(self):
+        self.log([(self.now - 2 * MIN, 'f0:4f:7c:11:22:33', 'device-metrics-us.amazon.com', 'block'),
+                  (self.now - MIN, 'f0:4f:7c:11:22:33', 'device-metrics-us.amazon.com', 'block')])
+        from eddie import api
+        with patch.dict(os.environ, {'EDDIE_DB': self.path, 'EDDIE_RETENTION_DAYS': '7'}):
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api.app), base_url='http://eddie') as http:
+                three_days = (await http.get('/what-they-know', params={'hours': 72})).json()
+                month = (await http.get('/what-they-know', params={'hours': 720})).json()
+        self.assertEqual((72, 72, False), (three_days['requested_hours'], three_days['hours'],
+                                          three_days['limited_by_retention']))
+        self.assertEqual((720, 168, True), (month['requested_hours'], month['hours'],
+                                           month['limited_by_retention']))
+        self.assertIn('only retain the last 1 week', month['text'])
+        self.assertIs(month['enough_data'], True)
 
     async def test_empty_log_falls_back_to_the_feed(self):
         report = await self.get(feed=[ev(self.now - MIN, 'doubleclick.net', 'block', device='Fake TV')])
