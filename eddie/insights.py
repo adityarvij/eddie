@@ -39,3 +39,26 @@ def company_counts(events: list[dict], now_ms: int | None = None, limit: int = 1
         row['blocked'] += event['action'] == 'block'
         row['tracking_requests'] += category in labels.TRACKING
     return sorted(companies.values(), key=lambda row: (-row['requests'], row['company']))[:limit]
+
+
+WINDOWS_MS = {'15m': 900_000, '1h': 3_600_000, '24h': 86_400_000}
+
+
+def device_counts(events: list[dict], window_ms: int, now_ms: int | None = None) -> list[dict]:
+    """Per-device lookup counts in the window, with the companies blocked most."""
+    now_ms = int(time.time() * 1000) if now_ms is None else now_ms
+    devices = {}
+    for event in events:
+        if not 0 <= now_ms - event['ts'] < window_ms:
+            continue
+        row = devices.setdefault(event['device'], {'device': event['device'], 'requests': 0, 'blocked': 0,
+                                                   'flagged': 0, 'blocked_companies': defaultdict(int)})
+        row['requests'] += 1
+        row['blocked'] += event['action'] == 'block'
+        row['flagged'] += event['action'] == 'flag'
+        if event['action'] == 'block':
+            row['blocked_companies'][labels.lookup(event['domain'])[0]] += 1
+    for row in devices.values():
+        top = sorted(row['blocked_companies'].items(), key=lambda kv: (-kv[1], kv[0]))[:3]
+        row['blocked_companies'] = [{'company': company, 'blocked': n} for company, n in top]
+    return sorted(devices.values(), key=lambda row: (-row['requests'], row['device']))

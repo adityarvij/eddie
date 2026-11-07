@@ -76,7 +76,12 @@ Owner: [eddie/store.py](../eddie/store.py), written by [eddie/dns_server.py](../
 | A network action is reported as done only after the backend echoes the new state. Home mode state alone doesn't prove DNS enforcement. | implemented |
 | Voice commands that change settings must match the whole utterance, so negations or extra words don't trigger them. | implemented |
 | Rules, lockdown and email are not wired up; Eddie says that nothing changed. | implemented |
-| The local model gets only computed facts (`{fact, evidence, confidence}`), never raw logs. Every number in its output is checked against the facts. | planned |
+| The local model gets only computed facts (`{fact, evidence, confidence}`), never raw logs. Every number in its output is checked against the facts. | planned (for "what they know" phrasing) |
+| The voice agent (`voice/ollama_agent.py`, #29) sends the local model the question's text and read-only tool results: per-device counts by label, the companies blocked most, recent blocked domains with reasons, one domain's latest decision and AI verdict, and "what they know" facts. No MAC or IP addresses, and no raw query log. It uses the same localhost / private-IP-literal check, no-redirect and no-proxy rules as the classifier. Tested. | implemented |
+| The agent's tools only read; it has no tool that changes rules, mode or devices, and an unknown tool name is refused. Tested. | implemented |
+| Every number in an agent reply (digits or "two" to "hundred") must appear in that turn's tool results, or Eddie speaks the backend's own summary text or says it can't verify the answer. This checks that the numbers are real, not that the model attached them to the right device. Words like "no requests" aren't checked. Tested with a stubbed model. | implemented, with that gap |
+| If a tool can't reach the backend, Eddie says so and the model never gets to phrase a guess. Tested. | implemented |
+| Agent questions, tool results and replies are never logged or stored. | implemented |
 | The classifier sends the model only the domain, the device's user label (null if unlabeled; never its MAC, IP, vendor or hostname), lookups in the last 10 minutes and an idle flag. Tested. | implemented |
 | The classifier only talks to `localhost` or a loopback or private **IP literal**. Hostnames are refused, so DNS can't point it somewhere else; redirects aren't followed and `HTTP(S)_PROXY` is ignored. Tested. | implemented |
 | Domains, model output and verdicts are never written to the classifier's log; it logs only counts and error types. Malformed model output is rejected, not stored. Tested. | implemented |

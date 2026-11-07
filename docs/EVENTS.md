@@ -187,6 +187,12 @@ Confirmation: after Eddie reads back a risky action, the bridge emits `voice_sta
 
 `GET /summary` adds `companies` (top ten `{company, requests, blocked, tracking_requests}` rows) and `company_window_seconds: 3600`. Counts include only timestamps in the past hour, exclude future events, and use the same in-memory event window as the spoken summary. A request is a DNS lookup, not evidence that data was uploaded. Unknown owners fall back to a registrable domain using the bundled Public Suffix List, including private suffixes.
 
+## Per-device counts and event filters (#29)
+
+`GET /summary?window=15m|1h|24h` (default `1h`; anything else gets 422) adds `window` and `devices`: one row per device label seen in that window, `{device, requests, blocked, flagged, blocked_companies}`, busiest first, where `blocked_companies` is up to three `{company, blocked}` rows. `text` and `companies` still cover the last hour. Like the rest of `/summary`, counts come from the API's in-memory feed (at most 20,000 events), so a busy 24-hour window can be partial.
+
+`GET /events` also takes `action=allow|block|flag` (anything else gets 422) and `domain=` (exact, already-normalized match). The voice agent uses these for recent blocks and domain explanations.
+
 
 ## Classifier verdicts (#27)
 
