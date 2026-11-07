@@ -32,8 +32,12 @@ class Capture:
         return self.spoken >= self.max_frames or self.silent >= 10
 
 
-def transcribe_command(samples, transcriber, emit, answer):
-    """Recover from a missed utterance without terminating wake detection."""
+def transcribe_command(samples, transcriber, emit, answer, retry=True):
+    """Recover from a missed utterance without terminating wake detection.
+
+    Returns the text. An empty result is answered ("Didn't catch that") only
+    when retry is True, so background noise can't keep Eddie talking.
+    """
     emit({'type': 'voice_state', 'state': 'thinking'})
     try:
         segments, _ = transcriber.transcribe(samples, language='en', beam_size=1, vad_filter=True)
@@ -42,10 +46,14 @@ def transcribe_command(samples, transcriber, emit, answer):
         text = ''
     if text:
         emit({'type': 'transcript', 'text': text})
-    answer(text)
+    if text or retry:
+        answer(text)
+    return text
 
 
-def run(emit, answer, speaking, stopped):
+def run(emit, answer, speaking, stopped, dismissed=None):
+    """dismissed: set by the dashboard's close button; ends the conversation so the next request needs the wake phrase."""
+    dismissed = dismissed or __import__('threading').Event()
     os.environ['HF_HUB_DISABLE_TELEMETRY'] = '1'
     import onnxruntime as ort
     ort.disable_telemetry_events()
@@ -112,7 +120,22 @@ def run(emit, answer, speaking, stopped):
         capture = None
         hits = 0
         is_eddie_active = False
+        missed = False  # the last follow-up transcribed to nothing
+
+        def end_conversation():
+            nonlocal capture, is_eddie_active, missed
+            is_eddie_active = False
+            capture = None
+            missed = False
+            drain()
+            emit({'type': 'voice_state', 'state': 'dismissed', 'is_eddie_active': False})
+
         while not stopped.is_set():
+            if dismissed.is_set():
+                dismissed.clear()
+                if is_eddie_active:
+                    end_conversation()
+                continue
             if speaking.is_set():
                 stopped.wait(0.1)
                 drain()
@@ -144,13 +167,16 @@ def run(emit, answer, speaking, stopped):
             if not capture.push(frame):
                 continue
             if not capture.heard:
-                is_eddie_active = False
-                capture = None
-                drain()
-                emit({'type': 'voice_state', 'state': 'dismissed', 'is_eddie_active': False})
+                end_conversation()
                 continue
             samples = np.concatenate(capture.frames).astype(np.float32) / 32768
-            transcribe_command(samples, transcriber, emit, answer)
+            text = transcribe_command(samples, transcriber, emit, answer, retry=not missed)
+            # Closed while Eddie was thinking or speaking, or noise twice in a row: stop here.
+            if dismissed.is_set() or (missed and not text):
+                dismissed.clear()
+                end_conversation()
+                continue
+            missed = not text
             # Keep listening for a follow-up without requiring the wake phrase again.
             drain()
             capture = Capture(rms, speech_gate=speech_gate)

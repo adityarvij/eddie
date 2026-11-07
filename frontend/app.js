@@ -1,6 +1,6 @@
 const $ = id => document.getElementById(id);
 let paused = false, total = 0, blocked = 0, deviceSet = new Set(), queued = [], voiceReady = false, speaking = false, closeTimer;
-let is_eddie_active = false, exitTimer, confirming = false, confirmTimer;
+let is_eddie_active = false, exitTimer, confirming = false, confirmTimer, userClosed = false;
 const dialog = $('assistant');
 function updateCounts() { $('allowed').textContent = allowedCount.toLocaleString(); $('blocked-count').textContent = blocked.toLocaleString(); }
 let allowedCount = 0;
@@ -54,7 +54,7 @@ function setAssistantState(state) {
   $('character').classList.toggle('talking', state === 'speaking');
   $('assistant-state').textContent = display === 'ready' ? 'WAITING FOR YOUR NEXT QUESTION' : display === 'confirming' ? 'SAY YES TO CONFIRM OR NO TO CANCEL' : 'EDDIE IS ' + display.toUpperCase();
 }
-function wake(preview = false) { clearTimeout(exitTimer); dialog.classList.remove('closing'); is_eddie_active = true; clearTimeout(closeTimer); if (preview || !voiceReady) closeTimer = setTimeout(dismiss, 4000); if (!dialog.open) dialog.showModal(); $('assistant-title').textContent = "Hey, what's up?"; $('assistant-description').textContent = 'Ask me what your devices have been up to.'; setAssistantState('listening'); }
+function wake(preview = false) { userClosed = false; clearTimeout(exitTimer); dialog.classList.remove('closing'); is_eddie_active = true; clearTimeout(closeTimer); if (preview || !voiceReady) closeTimer = setTimeout(dismiss, 4000); if (!dialog.open) dialog.showModal(); $('assistant-title').textContent = "Hey, what's up?"; $('assistant-description').textContent = 'Ask me what your devices have been up to.'; setAssistantState('listening'); }
 // Closing Eddie returns to the live feed, scrolled to the newest activity.
 function dismiss() {
   is_eddie_active = false;
@@ -70,6 +70,10 @@ function dismiss() {
     $('feed').scrollTop = $('feed').scrollHeight;
   }, duration);
 }
+// The user closed Eddie: end the voice conversation too, so the next request needs the wake phrase,
+// and don't reopen for events the worker sent before it heard about it.
+function closeByUser() { userClosed = true; dismiss(); fetch('/api/voice/dismiss', {method:'POST'}).catch(() => {}); }
+function reopen() { if (!userClosed && (!dialog.open || dialog.classList.contains('closing'))) wake(); }
 function toggleLogs(open) {
   $('assistant-logs').hidden = !open;
   $('open-logs').setAttribute('aria-expanded', String(open));
@@ -77,21 +81,21 @@ function toggleLogs(open) {
   if (open) { $('voice-logs').replaceChildren(...Array.from($('feed').children, row => row.cloneNode(true))); $('voice-logs').scrollTop = $('voice-logs').scrollHeight; $('close-logs').focus(); }
 }
 function voiceEvent(event) {
-  if (event.type === 'voice_state') { if (typeof event.is_eddie_active === 'boolean') is_eddie_active = event.is_eddie_active; if (event.state === 'confirming') setConfirming(true, Number(event.expires_in_ms) || 15000); else if (['thinking','dismissed'].includes(event.state)) setConfirming(false); if (event.state === 'dismissed') return dismiss(); if (['thinking','speaking','listening'].includes(event.state)) clearTimeout(closeTimer); if (event.state === 'listening' && (!dialog.open || dialog.classList.contains('closing'))) wake(); setAssistantState(event.state); }
-  if (event.type === 'agent_reply') { if (!dialog.open) wake(); $('assistant-description').textContent = event.text; }
+  if (event.type === 'voice_state') { if (typeof event.is_eddie_active === 'boolean') is_eddie_active = event.is_eddie_active; if (event.state === 'confirming') setConfirming(true, Number(event.expires_in_ms) || 15000); else if (['thinking','dismissed'].includes(event.state)) setConfirming(false); if (event.state === 'dismissed') { userClosed = false; return dismiss(); } if (['thinking','speaking','listening'].includes(event.state)) clearTimeout(closeTimer); if (event.state === 'listening') reopen(); setAssistantState(event.state); }
+  if (event.type === 'agent_reply') { reopen(); $('assistant-description').textContent = event.text; }
   if (event.type === 'voice_status') { if (['off','error'].includes(event.status)) { $('character').classList.remove('talking'); if(dialog.open) dismiss(); } voiceReady = event.status === 'ready'; $('mic').textContent = voiceReady ? (event.engine === 'vosk' ? 'Stop mic · offline prototype ●' : 'Stop microphone ●') : 'Enable “Hey Eddie” ○'; if (event.message && !voiceReady) notice(event.message); else if (voiceReady) $('notice').hidden = true; }
   if (event.type === 'wake') wake();
-  if (event.type === 'transcript' && event.text) { if (!dialog.open) wake(); $('assistant-title').textContent = event.text; }
-  if (event.type === 'speaking') { if (!dialog.open) wake(); $('assistant-title').textContent = event.title || 'Here’s what I’m seeing.'; $('assistant-description').textContent = event.text || ''; setAssistantState('speaking'); speaking = true; }
+  if (event.type === 'transcript' && event.text) { reopen(); $('assistant-title').textContent = event.text; }
+  if (event.type === 'speaking') { reopen(); $('assistant-title').textContent = event.title || 'Here’s what I’m seeing.'; $('assistant-description').textContent = event.text || ''; setAssistantState('speaking'); speaking = true; }
   if (event.type === 'speech_end') { setAssistantState('ready'); speaking = false; }
 }
 window.eddie = { pushEvent: addEvent, wake, voiceEvent };
 $('open-logs').onclick = () => toggleLogs($('assistant-logs').hidden);
 $('close-logs').onclick = () => { toggleLogs(false); $('open-logs').focus(); };
-dialog.addEventListener('cancel', event => { event.preventDefault(); dismiss(); });
+dialog.addEventListener('cancel', event => { event.preventDefault(); closeByUser(); });
 dialog.addEventListener('close', () => { clearTimeout(exitTimer); dialog.classList.remove('closing'); toggleLogs(false); });
-$('wake').onclick = () => wake(true); $('close').onclick = dismiss;
-dialog.addEventListener('click', e => { if (e.target === dialog) { const r=dialog.getBoundingClientRect(); if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom) dismiss(); } });
+$('wake').onclick = () => wake(true); $('close').onclick = closeByUser;
+dialog.addEventListener('click', e => { if (e.target === dialog) { const r=dialog.getBoundingClientRect(); if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom) closeByUser(); } });
 document.addEventListener('keydown', e => { if (e.code === 'Space' && !['INPUT','TEXTAREA','BUTTON'].includes(document.activeElement.tagName)) { e.preventDefault(); wake(true); } });
 $('pause').onclick = () => { paused = !paused; $('pause').textContent = paused ? 'resume' : 'pause'; if (!paused) { queued.forEach(e=>renderEvent(e)); queued=[]; } };
 $('mic').onclick = async () => { try { const r = await fetch(voiceReady ? '/api/voice/stop' : '/api/voice/start',{method:'POST'}); const data=await r.json(); if (!r.ok) throw Error(data.message || 'Could not start microphone.'); notice(data.message); } catch(e) { notice(e.message); } };

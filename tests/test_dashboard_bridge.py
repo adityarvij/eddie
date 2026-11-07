@@ -7,9 +7,11 @@ import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'frontend'))
 import serve
+import voice_agent  # on sys.path once serve is imported
 
 
 def lan_ip():
@@ -64,15 +66,50 @@ class LanAccess(unittest.TestCase):
         self.assertEqual(200, self.call(lan_ip(), '/api/voice/status')[0])
 
     def test_lan_cannot_use_controls(self):
-        for path in ('/api/voice/start', '/api/voice/stop', '/api/voice/ask', '/api/events'):
+        for path in ('/api/voice/start', '/api/voice/stop', '/api/voice/dismiss', '/api/voice/ask', '/api/events'):
             status, body = self.call(lan_ip(), path, {'text': 'hi', 'domain': 'x.com'})
             self.assertEqual(403, status, path)
             self.assertIn('Eddie computer', json.loads(body)['message'])
         self.assertFalse(serve.stopped.is_set())
+        self.assertFalse(serve.dismissed.is_set())
 
     def test_localhost_keeps_controls(self):
         status, _ = self.call('127.0.0.1', '/api/events', {'domain': 'example.com', 'action': 'block'})
         self.assertEqual(200, status)
+
+
+
+class Dismiss(unittest.TestCase):
+    """The close button ends the worker's conversation, not just the overlay."""
+
+    def setUp(self):
+        self.server = ThreadingHTTPServer(('127.0.0.1', 0), serve.Handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.addCleanup(self.server.server_close)
+        self.addCleanup(self.server.shutdown)
+        self.addCleanup(serve.dismissed.clear)
+        self.addCleanup(setattr, serve, 'voice_thread', serve.voice_thread)
+
+    def dismiss(self):
+        request = urllib.request.Request(f'http://127.0.0.1:{self.server.server_address[1]}/api/voice/dismiss', data=b'', method='POST')
+        with urllib.request.urlopen(request, timeout=3) as response:
+            return response.status
+
+    def test_signals_a_running_microphone(self):
+        alive = threading.Event()
+        serve.voice_thread = threading.Thread(target=alive.wait)
+        serve.voice_thread.start()
+        self.addCleanup(alive.set)
+        with patch.dict(voice_agent.RISKY_ACTIONS, {'lockdown': Mock()}):
+            serve.confirmation.request('lockdown', {}, 'Lock down the TV?')
+        self.assertEqual(200, self.dismiss())
+        self.assertTrue(serve.dismissed.is_set())
+        self.assertIsNone(serve.confirmation.status())
+
+    def test_without_a_microphone_nothing_is_left_pending(self):
+        serve.voice_thread = None
+        self.assertEqual(200, self.dismiss())
+        self.assertFalse(serve.dismissed.is_set())
 
 
 if __name__ == '__main__':
