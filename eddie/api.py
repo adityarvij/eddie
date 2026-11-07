@@ -5,6 +5,8 @@ both POST here; Codex's frontend listens on the WebSocket.
 
 /rules writes user rules to eddie.db (EDDIE_DB, the DNS server's database) and
 waits for the DNS server to load them before answering; see docs/EVENTS.md.
+/devices lists the devices the DNS server recorded there, with lookup counts
+from its query log, and stores user labels (devices.py).
 
 Run: uv run uvicorn eddie.api:app --host 0.0.0.0 --port 8000
 """
@@ -17,8 +19,9 @@ import time
 from collections import deque
 
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel, field_validator
 
-from . import inferences, insights, labels, rules, store
+from . import devices, inferences, insights, labels, rules, store
 from .events import AIVerdictEvent, ModeUpdate, QueryEvent
 
 # In memory for now; SQLite (store.py) replaces this once the DNS side lands.
@@ -108,7 +111,7 @@ def rules_db() -> sqlite3.Connection:
     if db["conn"] is None:
         path = os.environ.get("EDDIE_DB", "eddie.db")
         if path == "off":
-            raise HTTPException(503, "Rules need eddie.db, and EDDIE_DB is off.")
+            raise HTTPException(503, "Rules and devices need eddie.db, and EDDIE_DB is off.")
         db["conn"] = store.connect(path)
     return db["conn"]
 
@@ -149,6 +152,32 @@ async def delete_rule(rule_id: int):
         raise HTTPException(404, f"No rule {rule_id}.")
     await rule_change("removed", row)
     return {**row, "deleted": True, "applied": await wait_applied(conn, rev)}
+
+
+class LabelIn(BaseModel):
+    label: str | None  # None or "" clears it
+
+    @field_validator("label")
+    @classmethod
+    def check_label(cls, v: str | None) -> str | None:
+        return devices.clean_label(v)
+
+
+@app.get("/devices")
+async def list_devices(hours: int = Query(24, ge=1, le=168)):
+    since = int(time.time() * 1000) - hours * 3_600_000
+    return {"hours": hours, "devices": devices.all_devices(rules_db(), since)}
+
+
+@app.put("/devices/{key}")
+async def label_device(key: str, body: LabelIn):
+    key = key.strip().lower()
+    if not rules.DEVICE.fullmatch(key):
+        raise HTTPException(422, "Expected a MAC address or client IP.")
+    row = devices.set_label(rules_db(), key, body.label)
+    if row is None:
+        raise HTTPException(404, f"Eddie hasn't seen a device {key}.")
+    return {**row, "name": devices.display_name(key, row["label"], row["hostname"], row["vendor"])}
 
 
 @app.websocket("/ws/events")

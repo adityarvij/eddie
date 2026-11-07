@@ -127,7 +127,7 @@ class DNSServerTests(unittest.IsolatedAsyncioTestCase):
         with patch('eddie.decision.evaluate', return_value=decision.Decision('allow', 'default', '')) as evaluate:
             conn = await self.start_server([self.upstream_addr])
             await self.ask(conn, 'Google.COM.')
-        evaluate.assert_called_once_with('google.com', '127.0.0.1')
+        evaluate.assert_called_once_with('google.com', '127.0.0.1', '127.0.0.1')  # no device map: key is the IP
 
     async def test_every_lookup_writes_one_row(self):
         with tempfile.TemporaryDirectory() as tmp:
