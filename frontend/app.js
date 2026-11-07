@@ -13,14 +13,20 @@ function addEvent(event) {
   if (paused) { queued.push(event); if (queued.length > 100) queued.shift(); return; }
   renderEvent(event, device, action);
 }
+// A feed line: a coloured status tag ([approved], [blocked], [flagged], [ai]) then the text.
+const TAGS = { allow: 'approved', block: 'blocked', flag: 'flagged', ai: 'ai' };
+function taggedLine(kind, text) {
+  const line = document.createElement('span'), tag = document.createElement('span'), body = document.createElement('span');
+  tag.className = 'tag tag-' + kind; tag.textContent = `[${TAGS[kind]}]`; body.textContent = ' ' + text;
+  line.append(tag, body); return line;
+}
 function renderEvent(event, device, action) {
   if (!device) device = typeof event.device === 'object' ? event.device.name || event.device.ip : event.device || event.device_name || event.client_ip || 'Unknown device';
   action ||= String(event.action || event.decision || 'allow').toLowerCase();
   $('feed').querySelector('.empty')?.remove(); const row = document.createElement('div'); row.className = 'event';
   const time = document.createElement('time'); const date = (event.timestamp || event.ts) ? new Date(event.ts || (typeof event.timestamp === 'number' && event.timestamp < 1e12 ? event.timestamp * 1000 : event.timestamp)) : new Date(); time.textContent = Number.isNaN(date.getTime()) ? '—' : date.toLocaleTimeString([], {hour12:false});
-  const line = document.createElement('span');
-  const verdict = ['block','blocked'].includes(action) ? 'blocked' : action === 'flag' ? 'flagged' : 'allowed';
-  line.textContent = `${device} → ${event.domain} — ${verdict}${event.reason ? ' / ' + event.reason : ''}`;
+  const kind = ['block','blocked'].includes(action) ? 'block' : action === 'flag' ? 'flag' : 'allow';
+  const line = taggedLine(kind, `${device} → ${event.domain}${event.reason ? ' — ' + event.reason : ''}`);
   row.append(time, line); $('feed').append(row);
   if (!$('assistant-logs').hidden) { $('voice-logs').append(row.cloneNode(true)); while ($('voice-logs').children.length > 150) $('voice-logs').firstChild.remove(); $('voice-logs').scrollTop = $('voice-logs').scrollHeight; }
   while ($('feed').children.length > 150) $('feed').firstChild.remove();
@@ -31,7 +37,7 @@ function setConfirming(on, ms = 0) { confirming = on; clearTimeout(confirmTimer)
 function consumeEvent(event) {
   if (event.type === 'ai_verdict') {
     const row = document.createElement('div'); row.className = 'event';
-    row.textContent = `[ai] ${event.domain} → ${event.label} / ${event.reason}`;
+    row.append(taggedLine('ai', `${event.domain} → ${event.label} / ${event.reason}`));
     $('feed').querySelector('.empty')?.remove(); $('feed').append(row);
     while ($('feed').children.length > 150) $('feed').firstChild.remove();
     if (!$('assistant-logs').hidden) $('voice-logs').append(row.cloneNode(true));
