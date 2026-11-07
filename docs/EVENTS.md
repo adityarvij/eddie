@@ -34,12 +34,12 @@ Body is one event or a list of events.
 | `source`     | string | `rule` \| `allowlist` \| `blocklist` \| `heuristic` \| `ai` \| `home_mode` \| `default` |
 | `reason`     | string | one short human line, shown on screen |
 
-Will's side, from the DNS server, is fire-and-forget so DNS never waits:
-
-```python
-# in a background thread or asyncio task, never on the reply path
-httpx.post("http://127.0.0.1:8000/ingest", json=event, timeout=1)
-```
+The DNS server sends every lookup here through `eddie/feed.py`: fire-and-forget
+from a background thread, in batches (a list body), with a 1 s timeout, so DNS
+never waits. `EDDIE_API_URL` (default `http://127.0.0.1:8000`, local addresses
+only) picks the API and `EDDIE_FEED=off` turns it off. Events the API doesn't
+accept in time are dropped, not retried. Until device labels (#14) land, real
+events carry `device_mac: "ip:<client IP>"` and `device: "<client IP>"`.
 
 ## Receiving: `WS /ws/events`
 

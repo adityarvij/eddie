@@ -195,11 +195,11 @@ Hand this section and the ones below to a coding agent (Claude Code etc.). Targe
 
 ### Running the DNS server
 
-`eddie/dns_server.py` implements steps 1, 3 and 4 above (UDP only) and the `queries` half of step 5: every lookup writes one row to `eddie.db` through `eddie/store.py`. The rest is not built yet: the device is the client IP until #14 (so `queries.device_mac` holds the IP for now), and nothing is published to the live feed until #16. `eddie/decision.py` implements the full decision order below. At startup the DNS server loads every `blocklists/*.txt` file (StevenBlack hosts, plus the Perflyst smart-TV and Fire TV lists: about 78,000 domains in 0.3 s) and the essentials in `allowlist.txt` (`eddie/lists.py`). Rules come from the `/rules` API (`eddie/rules.py`).
+`eddie/dns_server.py` implements steps 1, 3 and 4 above (UDP only) and the `queries` half of step 5: every lookup writes one row to `eddie.db` through `eddie/store.py`. Each lookup is also sent to the live feed (`POST /ingest`, then `/ws/events`) by `eddie/feed.py`, off the reply path: about 25 ms from lookup to dashboard on the development Mac. Start the API without fake traffic (`./scripts/run_all.sh --no-fake`) so the screen shows only real lookups. Not built yet: the device is the client IP until #14 (so `queries.device_mac` holds the IP, and the feed shows `device_mac: "ip:<IP>"` with the IP as the label). `eddie/decision.py` implements the full decision order below. At startup the DNS server loads every `blocklists/*.txt` file (StevenBlack hosts, plus the Perflyst smart-TV and Fire TV lists: about 78,000 domains in 0.3 s) and the essentials in `allowlist.txt` (`eddie/lists.py`). Rules come from the `/rules` API (`eddie/rules.py`).
 
 ### Running the classifier
 
-`eddie/classifier.py` labels unknown domains with the local model. Its queue is the query log itself: flagged `queries` rows from the last hour with no `ai_verdicts` row yet. Each verdict is written to `ai_verdicts`, and the DNS server reloads rules and verdicts from `eddie.db` within about 0.2 s, so the next lookup of that domain uses it (about 2.5 s end to end with `llama3.2:3b` on the development Mac). DNS never waits on the model. The `ai_verdict` live-feed event isn't sent yet (#16).
+`eddie/classifier.py` labels unknown domains with the local model. Its queue is the query log itself: flagged `queries` rows from the last hour with no `ai_verdicts` row yet. Each verdict is written to `ai_verdicts`, and the DNS server reloads rules and verdicts from `eddie.db` within about 0.2 s, so the next lookup of that domain uses it (about 2.5 s end to end with `llama3.2:3b` on the development Mac). DNS never waits on the model. Each verdict is also sent to the live feed as an `ai_verdict` event (`POST /ai/verdict`).
 
 ```bash
 uv run python -m eddie.classifier   # needs Ollama running and the same EDDIE_DB as the DNS server
@@ -213,7 +213,7 @@ sudo .venv/bin/python -m eddie.dns_server              # Pi / Linux: port 53 nee
 EDDIE_DNS_PORT=8053 uv run python -m eddie.dns_server  # development, any OS: dig @127.0.0.1 -p 8053 google.com
 ```
 
-Settings: `EDDIE_DNS_HOST` (default `0.0.0.0`), `EDDIE_DNS_PORT` (default `53`), `EDDIE_DB` (default `eddie.db` in the working directory, created `0600` on first run; `off` logs nothing), `EDDIE_RETENTION_DAYS` (default `7`; older rows are securely deleted at start and hourly), `EDDIE_BLOCKLISTS` (default the repo's `blocklists/` directory; `off` loads no blocklists), `EDDIE_ALLOWLIST` (default the repo's `allowlist.txt`; if it's missing the server refuses to start, because blocking without it can break devices), `EDDIE_UPSTREAMS` (default `1.1.1.1,9.9.9.9`, tried in order with a 2 s timeout each; if all fail the device gets SERVFAIL). On the Mac, Internet Sharing must be off because it holds port 53. Binding `127.0.0.1:53` still needs sudo on macOS.
+Settings: `EDDIE_DNS_HOST` (default `0.0.0.0`), `EDDIE_DNS_PORT` (default `53`), `EDDIE_DB` (default `eddie.db` in the working directory, created `0600` on first run; `off` logs nothing), `EDDIE_RETENTION_DAYS` (default `7`; older rows are securely deleted at start and hourly), `EDDIE_BLOCKLISTS` (default the repo's `blocklists/` directory; `off` loads no blocklists), `EDDIE_ALLOWLIST` (default the repo's `allowlist.txt`; if it's missing the server refuses to start, because blocking without it can break devices), `EDDIE_UPSTREAMS` (default `1.1.1.1,9.9.9.9`, tried in order with a 2 s timeout each; if all fail the device gets SERVFAIL), `EDDIE_API_URL` (default `http://127.0.0.1:8000`; where lookups are sent for the live feed; must be `localhost` or a loopback or private IP literal), `EDDIE_FEED` (`off` sends nothing to the live feed; if the API is down, events are dropped and DNS carries on). On the Mac, Internet Sharing must be off because it holds port 53. Binding `127.0.0.1:53` still needs sudo on macOS.
 
 ## Agent build spec: data, API, tools
 
@@ -294,6 +294,7 @@ eddie/
   pyproject.toml
   eddie/
     dns_server.py      dnslib resolver, forward/sinkhole
+    feed.py            sends each decision to the live feed (/ingest)
     decision.py        rule order, lists, heuristics
     classifier.py      Ollama queue worker
     devices.py         ARP/DHCP → device labels

@@ -62,8 +62,8 @@ class DNSServerTests(unittest.IsolatedAsyncioTestCase):
         self.closers.append(transport.close)
         return transport.get_extra_info('sockname'), proto
 
-    async def start_server(self, upstreams, timeout=0.3, query_log=None):
-        transport = await dns_server.serve('127.0.0.1', 0, upstreams, timeout, query_log)
+    async def start_server(self, upstreams, timeout=0.3, query_log=None, feed=None):
+        transport = await dns_server.serve('127.0.0.1', 0, upstreams, timeout, query_log, feed)
         self.closers.append(transport.close)
         transport_c, client = await asyncio.get_running_loop().create_datagram_endpoint(
             Client, remote_addr=transport.get_extra_info('sockname'))

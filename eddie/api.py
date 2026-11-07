@@ -1,7 +1,7 @@
 """Traffic feed: takes events in on /ingest and pushes them out on /ws/events.
 
-The fake generator (scripts/fake_traffic.py) and later Will's DNS server both
-POST here; Codex's frontend listens on the WebSocket.
+The fake generator (scripts/fake_traffic.py) and the DNS server (eddie/feed.py)
+both POST here; Codex's frontend listens on the WebSocket.
 
 /rules writes user rules to eddie.db (EDDIE_DB, the DNS server's database) and
 waits for the DNS server to load them before answering; see docs/EVENTS.md.
