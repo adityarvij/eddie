@@ -30,7 +30,7 @@ import urllib.parse
 import urllib.request
 
 from . import labels, store
-from .decision import Verdict
+from .decision import PLUMBING_SQL, Verdict
 
 DEFAULT_URL = "http://127.0.0.1:11434"
 DEFAULT_MODEL = "llama3.2:3b"
@@ -107,9 +107,13 @@ def parse_verdict(text) -> Verdict | None:
 
 
 def candidates(conn: sqlite3.Connection, now_ms: int, limit: int) -> list[str]:
-    """Recently looked-up unknown domains with no verdict yet, oldest first."""
+    """Recently looked-up unknown domains with no verdict yet, oldest first.
+
+    Network plumbing (decision.is_plumbing) is skipped: it isn't a company to judge.
+    """
     return [d for (d,) in conn.execute(
         "SELECT domain FROM queries WHERE ts >= ? AND source = 'default'"
+        f" AND NOT {PLUMBING_SQL}"
         " AND domain NOT IN (SELECT domain FROM ai_verdicts)"
         " GROUP BY domain ORDER BY MIN(ts) ASC, domain ASC LIMIT ?", (now_ms - LOOKBACK_MS, limit))]
 

@@ -41,6 +41,14 @@ only) picks the API and `EDDIE_FEED=off` turns it off. Events the API doesn't
 accept in time are dropped, not retried. Until device labels (#14) land, real
 events carry `device_mac: "ip:<client IP>"` and `device: "<client IP>"`.
 
+The DNS server doesn't send every lookup. Network plumbing (reverse lookups
+under `.arpa`, service-discovery names with a `_` label such as
+`_ipp._tcp.…`, `.local` and single-label names) is never sent. The same
+device, domain and action again within 2 s is sent once, so a browser asking
+for A and AAAA together is one event, and `qtype` is the first one asked.
+Both are still answered and written to `eddie.db`. So `totals.seen`,
+`/summary` and the spoken summary count feed events, not every DNS packet.
+
 ## Receiving: `WS /ws/events`
 
 The API adds `id`, `company` and `category` (from `eddie/labels.py`) and pushes:

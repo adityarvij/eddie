@@ -69,6 +69,22 @@ def normalize(domain: str) -> str:
     return domain.strip().lower().rstrip(".")
 
 
+def is_plumbing(domain: str) -> bool:
+    """A lookup the network makes for itself, not an app reaching a company.
+
+    Reverse lookups (*.arpa), service discovery (_ipp._tcp..., b._dns-sd._udp...),
+    .local names and single-label names. They're still answered and logged, but
+    left out of the live feed and the classifier's queue. Keep PLUMBING_SQL in step.
+    """
+    return ("." not in domain or domain.endswith((".arpa", ".local"))
+            or any(label.startswith("_") for label in domain.split(".")))
+
+
+# is_plumbing as a SQL condition on a domain column (true for plumbing).
+PLUMBING_SQL = ("(domain NOT LIKE '%.%' OR domain LIKE '%.arpa' OR domain LIKE '%.local'"
+                r" OR domain LIKE '\_%' ESCAPE '\' OR domain LIKE '%.\_%' ESCAPE '\')")
+
+
 def suffixes(domain: str) -> list[str]:
     """The domain, then each parent: a.b.com, b.com, com."""
     labels = domain.split(".")

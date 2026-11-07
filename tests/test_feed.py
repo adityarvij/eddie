@@ -46,6 +46,11 @@ class Ingest:
         self.server.server_close()
 
 
+def ev(n, domain=None, ts=None, action='allow', qtype='A'):
+    return feed.query_event(n * 10_000 if ts is None else ts, '10.0.0.2', domain or f'd{n}.example.com',
+                            qtype, action, 'default', '')
+
+
 def dead_url():
     probe = ThreadingHTTPServer(('127.0.0.1', 0), BaseHTTPRequestHandler)
     url = f'http://127.0.0.1:{probe.server_port}'
@@ -74,11 +79,11 @@ class FeedPublisherTests(unittest.TestCase):
         ingest = Ingest()
         self.addCleanup(ingest.close)
         pub = feed.FeedPublisher(ingest.url)
-        pub.publish({'n': 1})
-        pub.publish({'n': 2})
+        pub.publish(ev(1))
+        pub.publish(ev(2))
         pub.close()
         self.assertEqual({'/ingest'}, {path for path, _ in ingest.batches})
-        self.assertEqual([{'n': 1}, {'n': 2}], ingest.events())
+        self.assertEqual([ev(1), ev(2)], ingest.events())
 
     def test_publish_never_blocks_when_the_api_is_slow(self):
         ingest = Ingest(delay=0.5)
@@ -86,31 +91,65 @@ class FeedPublisherTests(unittest.TestCase):
         pub = feed.FeedPublisher(ingest.url, max_pending=5)
         start = time.perf_counter()
         for n in range(50):
-            pub.publish({'n': n})
+            pub.publish(ev(n))
         self.assertLess(time.perf_counter() - start, 0.05)
         self.assertGreater(pub.dropped, 0)
         pub.close()
 
     def test_api_down_drops_events_and_recovers(self):
         pub = feed.FeedPublisher(dead_url())
-        pub.publish({'n': 1})
+        pub.publish(ev(1))
         self.assertTrue(wait_for(lambda: pub.dropped == 1))
         self.assertTrue(pub.failing)
         ingest = Ingest()
         self.addCleanup(ingest.close)
         pub.url = ingest.url
-        pub.publish({'n': 2})
+        pub.publish(ev(2))
         pub.close()
-        self.assertEqual([{'n': 2}], ingest.events())
+        self.assertEqual([ev(2)], ingest.events())
         self.assertFalse(pub.failing)
 
     def test_error_status_counts_as_dropped(self):
         ingest = Ingest(status=422)
         self.addCleanup(ingest.close)
         pub = feed.FeedPublisher(ingest.url)
-        pub.publish({'n': 1})
+        pub.publish(ev(1))
         pub.close()
         self.assertEqual(1, pub.dropped)
+
+    def test_plumbing_is_left_out(self):
+        ingest = Ingest()
+        self.addCleanup(ingest.close)
+        pub = feed.FeedPublisher(ingest.url)
+        for domain in ('54.25.110.10.in-addr.arpa', '_dns.resolver.arpa', 'b._dns-sd._udp.neu.edu',
+                       '_ipp._tcp.pc-printer-discovery.nunet.neu.edu', 'printer.local', 'wpad',
+                       'collector.github.com'):
+            pub.publish(ev(1, domain))
+        pub.close()
+        self.assertEqual(['collector.github.com'], [e['domain'] for e in ingest.events()])
+
+    def test_repeats_within_two_seconds_are_one_line(self):
+        ingest = Ingest()
+        self.addCleanup(ingest.close)
+        pub = feed.FeedPublisher(ingest.url)
+        pub.publish(ev(0, 'chatgpt.com', ts=1_000))
+        pub.publish(ev(0, 'chatgpt.com', ts=1_005, qtype='AAAA'))  # browser asks A and AAAA together
+        pub.publish(ev(0, 'chatgpt.com', ts=2_500))  # still within 2 s of the line shown
+        pub.publish(ev(0, 'chatgpt.com', ts=2_600, action='block'))  # decision changed: shown
+        pub.publish(ev(0, 'chatgpt.com', ts=3_100))  # 2.1 s after the last allow line: shown
+        pub.publish(feed.query_event(3_100, '10.0.0.3', 'chatgpt.com', 'A', 'allow', 'default', ''))  # other device
+        pub.close()
+        self.assertEqual([(1_000, 'allow', '10.0.0.2'), (2_600, 'block', '10.0.0.2'),
+                          (3_100, 'allow', '10.0.0.2'), (3_100, 'allow', '10.0.0.3')],
+                         [(e['ts'], e['action'], e['device']) for e in ingest.events()])
+
+    def test_repeat_memory_is_bounded(self):
+        pub = feed.FeedPublisher(dead_url())
+        with patch.object(feed, 'MAX_RECENT', 10):
+            for n in range(25):
+                pub.publish(ev(0, f'd{n}.example.com', ts=n * 10_000))
+            self.assertLessEqual(len(pub.last_sent), 10)
+        pub.close()
 
     def test_refuses_non_local_api(self):
         for url in ('http://8.8.8.8:8000', 'http://api.example.com', 'ftp://127.0.0.1'):
