@@ -37,7 +37,7 @@ Say “Hey Eddie,” then ask your question. The detector uses 16 kHz mono audio
 
 Questions go to the local Ollama agent (`voice/ollama_agent.py`, #29) when it's reachable: “What's the TV doing?”, “What got blocked recently?”, “Why was device-metrics-us.amazon.com blocked?”. It only reads traffic through four tools, every number it says must come from those tools, and if Ollama is down the keyword router below answers instead. `EDDIE_AGENT=off` disables it; `EDDIE_OLLAMA_URL` and `EDDIE_AGENT_MODEL` (default `llama3.2:3b`, provisioned with `ollama pull`) configure it. Try it typed with `EDDIE_API_URL=http://127.0.0.1:8000 python voice/ollama_agent.py "What's the TV doing?"`. See [architecture](../docs/ARCHITECTURE.md#local-tool-calling-agent-29).
 
-Keyword commands: “What's been going on?” (backend facts), “What do they know about me?” / “What do companies know about me?” (reads `GET /what-they-know?hours=168`, up to a week; the local model, when on, rewrites the backend's facts into at most five checked “Someone could guess …” lines, otherwise Eddie speaks the backend template), “turn on home mode”, “turn off home mode”, “block it” / “block device-metrics-us.amazon.com” and “allow Netflix” / “allow api.example.com” (below). Home mode updates backend state; actual network enforcement still depends on Will's decision engine. Undo, lockdown and email are pending; the confirmation step lockdown and email will use is built and already guards service allows (see below). Typed questions use the same router. Do not claim these pending tools work.
+Keyword commands: “What's been going on?” (backend facts), “What do they know about me?” / “What do companies know about me?” (reads `GET /what-they-know?hours=168`, up to a week; the local model, when on, rewrites the backend's facts into at most five checked “Someone could guess …” lines, otherwise Eddie speaks the backend template), “turn on home mode”, “turn off home mode”, “block it” / “block device-metrics-us.amazon.com”, “allow Netflix” / “allow api.example.com” and “undo that” (below). Home mode updates backend state; actual network enforcement still depends on Will's decision engine. Lockdown and email are pending; the confirmation step lockdown and email will use is built and already guards service allows (see below). Typed questions use the same router. Do not claim these pending tools work.
 
 ## Verification before demo
 
@@ -76,7 +76,7 @@ Conversation activity is explicit (`is_eddie_active`): wake activates it, each s
 | “It” can't be resolved, or the target isn't a domain (“block Netflix”) | “Which domain should I block? Say block, then the full domain name. Nothing changed.” |
 | Backend error, timeout or a reply that doesn't echo the rule | “I couldn't add that rule. Nothing changed.” |
 
-Devices may keep using a cached answer for its TTL after a block loads. A timeout after the API already stored the rule is still reported as nothing changed; check `GET /rules`. Per-device blocks and voice undo are not built.
+Devices may keep using a cached answer for its TTL after a block loads. A timeout after the API already stored the rule is still reported as nothing changed; check `GET /rules`. Per-device blocks are not built; “undo” removes the rule (below).
 
 ## Allow a service or domain (#13)
 
@@ -98,6 +98,23 @@ Service names map to patterns in one file, `voice/services.json`: Netflix, YouTu
 | A later rule of a service fails | “I only saved 2 of 9 allow rules for Netflix before the backend stopped answering, so Netflix may still be blocked. The saved rules stay.” Adding stops there; nothing is rolled back. |
 
 Each rule waits up to 2 s for DNS, so a service with DNS down can take about 2 s per rule before Eddie answers.
+
+## Undo the last voice rule (#15)
+
+“Undo”, “undo that”, “never mind, undo that” or “can you undo the last one?” removes the rules from the newest voice block or allow that is still on Eddie's undo list, through `DELETE /rules/{id}`. One command is one undo: “allow Netflix” undoes all 9 of its rules at once. Saying undo again goes back one more command. The same whole-utterance rule applies, so “don't undo that” and “undo that and block it” change nothing.
+
+The list lives in the worker's memory: up to 20 commands, kept across conversations until the worker restarts, never written to disk. Only rules the backend acknowledged to a voice `POST /rules` go on it, so undo never reaches a rule made from the dashboard or by another agent. Because SQLite can give a deleted rule's id to the next new rule, undo first reads `GET /rules` and deletes an id only if that row is still the same voice rule (pattern, action, timestamp, `created_by: voice`).
+
+| Situation | Eddie says |
+|---|---|
+| Nothing on the list | “There's nothing for me to undo.” |
+| Removed and DNS loaded the change (`applied: true`) | “Undone. I removed the block on <domain>, and Eddie's DNS has loaded the change.” |
+| Removed, not loaded within 2 s | “I removed the …, but Eddie's DNS hasn't loaded the change yet, so it may still apply for a moment.” |
+| The rule was already deleted elsewhere (404, or missing from the list) | “The block on <domain> had already been removed elsewhere, so there was nothing to undo.” It is dropped from the list; the next undo goes to the command before it. |
+| Backend down or the delete isn't acknowledged | “I can't reach Eddie's backend, so I couldn't undo the …. Nothing changed.” The entry stays, so undo can be tried again. |
+| A service's rules stop partway | “I only removed 2 of the 9 allow rules for Netflix before the backend stopped answering. Say undo again to remove the rest.” |
+
+Undo has no read-back confirmation; it only puts back the previous decision. A failed block or allow leaves nothing to undo. A rule a timed-out add stored anyway isn't on the list; remove it from the dashboard.
 
 ## Confirmation for risky actions
 

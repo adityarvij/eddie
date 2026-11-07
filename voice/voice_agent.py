@@ -4,14 +4,16 @@ import os
 import re
 import threading
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
 
-def request(path, body=None, timeout=3):
+def request(path, body=None, timeout=3, method=None):
     base = os.environ.get('EDDIE_API_URL', 'http://127.0.0.1:8000').rstrip('/')
     data = None if body is None else json.dumps(body).encode()
-    req = urllib.request.Request(base + path, data=data, headers={'Content-Type': 'application/json'})
+    req = urllib.request.Request(base + path, data=data, headers={'Content-Type': 'application/json'},
+                                 method=method)
     with urllib.request.urlopen(req, timeout=timeout) as response:
         return json.load(response)
 
@@ -92,6 +94,18 @@ ALLOW_UNRESOLVED = (f"Which service or domain should I allow? I know {', '.join(
                     "or say allow, then the full domain name. Nothing changed.")
 # The last domain Eddie spoke about in this conversation; memory only, cleared by forget_conversation.
 context = {'domain': None}
+# Rules this worker created, one entry per command, newest last:
+# {'what': 'block on a.com', 'rules': [{'id', 'pattern', 'action', 'ts'}, ...]}.
+# Memory only, kept until the worker restarts; only POST /rules acks from voice go in,
+# so undo can't reach a dashboard or agent rule.
+undo_stack = []
+UNDO_DEPTH = 20
+UNDO = re.compile(
+    r'(?:(?:ok|okay|eddie|please|never mind|nevermind|actually|oops|wait) )*'
+    r'(?:(?:can|could|would|will) you (?:please )?)?undo'
+    r'(?: (?:it|that|this|that one|the last one|the last rule|the last change|that rule|that change|'
+    r'that block|that allow|what you just did))?(?: (?:please|for me|now))*')
+NOTHING_TO_UNDO = "There's nothing for me to undo."
 
 
 def command_target(raw, command):
@@ -135,18 +149,34 @@ def resolve_it():
     return None
 
 
-def add_rule(pattern, action):
-    """POST a global rule; returns applied, raising unless the backend stored this rule."""
+def add_rule(pattern, action, saved=None):
+    """POST a global rule; returns applied, raising unless the backend stored this rule.
+
+    The acknowledged rule is appended to saved, for remember_rules.
+    """
     result = request('/rules', {'pattern': pattern, 'action': action, 'created_by': 'voice'},
                      timeout=RULE_TIMEOUT)
     if (type(result.get('id')) is not int or result.get('pattern') != pattern
             or result.get('action') != action):
         raise ValueError('Rule was not acknowledged')
+    if saved is not None:
+        saved.append({'id': result['id'], 'pattern': pattern, 'action': action, 'ts': result.get('ts')})
     return result.get('applied') is True
 
 
+def remember_rules(what, saved):
+    """Push one command's acknowledged rules so "undo" can delete them."""
+    if saved:
+        undo_stack.append({'what': what, 'rules': saved})
+        del undo_stack[:-UNDO_DEPTH]
+
+
 def block_domain(domain):
-    return add_rule(domain, 'block')
+    saved = []
+    try:
+        return add_rule(domain, 'block', saved)
+    finally:
+        remember_rules(f'block on {domain}', saved)
 
 
 def block_command(kind, domain):
@@ -203,13 +233,14 @@ def allow_patterns(name, patterns):
 
     The last rule's applied covers the earlier ones: the DNS engine loads whole revisions.
     """
-    saved, applied = 0, False
+    rules, applied = [], False
     for pattern in patterns:
         try:
-            applied = add_rule(pattern, 'allow')
+            applied = add_rule(pattern, 'allow', rules)
         except Exception:
             break
-        saved += 1
+    remember_rules(f'allow rule for {name}' if len(rules) == 1 else f'allow rules for {name}', rules)
+    saved = len(rules)
     if saved == 0:
         return RULE_FAILED
     if saved < len(patterns):
@@ -226,13 +257,73 @@ def allow_command(kind, value):
     """The reply to an allow that needs no confirmation: one exact domain, or an unknown target."""
     if kind == 'unknown':
         return ALLOW_UNRESOLVED
+    saved = []
     try:
-        applied = add_rule(value, 'allow')
+        applied = add_rule(value, 'allow', saved)
     except Exception:
         return RULE_FAILED
+    finally:
+        remember_rules(f'allow rule for {value}', saved)
     if applied:
         return f"Allowed {value} on every device. The rule is saved and Eddie's DNS has loaded it."
     return f"I saved a rule to allow {value}, but Eddie's DNS hasn't loaded it yet, so it may still be blocked."
+
+
+def still_voice_rule(row, rule):
+    """True when a GET /rules row is the rule voice created, not a later rule that reused its id."""
+    return bool(row) and row.get('created_by') == 'voice' and all(
+        row.get(key) == rule[key] for key in ('pattern', 'action', 'ts'))
+
+
+def undo_command():
+    """Delete the rules of the newest voice command still on undo_stack, newest rule first.
+
+    Rules already gone (404, or their id now holds another rule) are dropped, never
+    retried; on a backend failure the rest stay so "undo" can try again.
+    """
+    if not undo_stack:
+        return NOTHING_TO_UNDO
+    entry = undo_stack[-1]
+    rules, what = entry['rules'], entry['what']
+    total, removed, gone, applied = len(rules), 0, 0, False
+    try:
+        current = {row.get('id'): row for row in request('/rules')}
+    except Exception:
+        return f"I can't reach Eddie's backend, so I couldn't undo the {what}. Nothing changed."
+    while rules:
+        rule = rules[-1]
+        if not still_voice_rule(current.get(rule['id']), rule):
+            rules.pop()
+            gone += 1
+            continue
+        try:
+            result = request(f"/rules/{rule['id']}", method='DELETE', timeout=RULE_TIMEOUT)
+        except urllib.error.HTTPError as error:
+            error.close()
+            if error.code != 404:
+                break
+            rules.pop()
+            gone += 1
+            continue
+        except Exception:
+            break
+        if result.get('deleted') is not True or result.get('id') != rule['id']:
+            break
+        rules.pop()
+        removed += 1
+        applied = result.get('applied') is True  # DNS loads whole revisions; the last delete covers the rest
+    if rules:
+        if removed == 0:
+            return f"I couldn't undo the {what}; the backend didn't confirm it. Nothing changed."
+        return (f"I only removed {removed} of the {total} {what} before the backend stopped "
+                "answering. Say undo again to remove the rest.")
+    undo_stack.pop()
+    if removed == 0:
+        return f"The {what} had already been removed elsewhere, so there was nothing to undo."
+    if not applied:
+        return (f"I removed the {what}, but Eddie's DNS hasn't loaded the change yet, "
+                "so it may still apply for a moment.")
+    return f"Undone. I removed the {what}, and Eddie's DNS has loaded the change."
 
 
 def forget_conversation():
@@ -362,8 +453,10 @@ def route(text):
         return block_command(*block)
     if allow:
         return allow_command(*allow)
+    if UNDO.fullmatch(text):
+        return undo_command()
     if re.search(r'\b(block|allow|lock|undo|email|send|mode)\b', text):
-        return "I haven't changed anything. I can block or allow a domain, allow a service like Netflix, or turn home mode on or off; undo, lockdown and email aren't connected yet."
+        return "I haven't changed anything. I can block or allow a domain, allow a service like Netflix, undo my last rule, or turn home mode on or off; lockdown and email aren't connected yet."
     if re.search(r'\bwhat (?:do|does|can|could) (?:\w+|my \w+|the \w+) (?:know|tell|guess|figure out|learn) about (?:me|us|my house|my home|our house)\b', text):
         try:
             report = what_they_know(REPORT_HOURS)
