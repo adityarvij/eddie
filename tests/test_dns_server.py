@@ -1,12 +1,14 @@
 import asyncio
+import sqlite3
 import statistics
+import tempfile
 import time
 import unittest
 from unittest.mock import patch
 
 from dnslib import QTYPE, RCODE, RR, A, DNSRecord
 
-from eddie import decision, dns_server
+from eddie import decision, dns_server, store
 
 BLOCKED = 'device-metrics-us.amazon.com'
 REAL_IP = '93.184.216.34'
@@ -59,8 +61,8 @@ class DNSServerTests(unittest.IsolatedAsyncioTestCase):
         self.closers.append(transport.close)
         return transport.get_extra_info('sockname'), proto
 
-    async def start_server(self, upstreams, timeout=0.3):
-        transport = await dns_server.serve('127.0.0.1', 0, upstreams, timeout)
+    async def start_server(self, upstreams, timeout=0.3, query_log=None):
+        transport = await dns_server.serve('127.0.0.1', 0, upstreams, timeout, query_log)
         self.closers.append(transport.close)
         transport_c, client = await asyncio.get_running_loop().create_datagram_endpoint(
             Client, remote_addr=transport.get_extra_info('sockname'))
@@ -125,6 +127,27 @@ class DNSServerTests(unittest.IsolatedAsyncioTestCase):
             conn = await self.start_server([self.upstream_addr])
             await self.ask(conn, 'Google.COM.')
         evaluate.assert_called_once_with('google.com', '127.0.0.1')
+
+    async def test_every_lookup_writes_one_row(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = f'{tmp}/eddie.db'
+            qlog = store.QueryLog(db)
+            conn = await self.start_server([self.upstream_addr], query_log=qlog)
+            await self.ask(conn, 'Google.com')
+            await self.ask(conn, BLOCKED, 'AAAA')
+            conn[0].sendto(b'not dns at all')  # not a lookup: no row
+            dead = await self.start_server([self.dead_addr], query_log=qlog)
+            await self.ask(dead, 'example.com')  # SERVFAIL still logged
+            qlog.close()
+            with sqlite3.connect(db) as c:
+                rows = c.execute('SELECT device_mac, domain, qtype, action, source, reason FROM queries ORDER BY id').fetchall()
+                ts = [r[0] for r in c.execute('SELECT ts FROM queries')]
+        self.assertEqual([
+            ('127.0.0.1', 'google.com', 'A', 'allow', 'default', ''),
+            ('127.0.0.1', BLOCKED, 'AAAA', 'block', 'blocklist', 'stub blocklist'),
+            ('127.0.0.1', 'example.com', 'A', 'allow', 'default', ''),
+        ], rows)
+        self.assertTrue(all(abs(t - time.time() * 1000) < 60_000 for t in ts))
 
 
 class DecisionStubTests(unittest.TestCase):

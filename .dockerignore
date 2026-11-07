@@ -5,3 +5,5 @@ voice/models
 blocklists
 **/__pycache__
 .DS_Store
+eddie.db
+eddie.db-*

@@ -195,7 +195,7 @@ Hand this section and the ones below to a coding agent (Claude Code etc.). Targe
 
 ### Running the DNS server
 
-`eddie/dns_server.py` implements steps 1, 3 and 4 above (UDP only). Steps 2, 5 and 6 are not built yet: the device is the client IP until #14, nothing is logged until #6, and `eddie/decision.py` is a stub that blocks only `device-metrics-us.amazon.com` until #10.
+`eddie/dns_server.py` implements steps 1, 3 and 4 above (UDP only) and the `queries` half of step 5: every lookup writes one row to `eddie.db` through `eddie/store.py`. The rest is not built yet: the device is the client IP until #14 (so `queries.device_mac` holds the IP for now), nothing is published to the live feed until #16, and `eddie/decision.py` is a stub that blocks only `device-metrics-us.amazon.com` until #10.
 
 ```bash
 uv run python -m eddie.dns_server                      # Mac: 0.0.0.0:53 binds without sudo on recent macOS
@@ -203,7 +203,7 @@ sudo .venv/bin/python -m eddie.dns_server              # Pi / Linux: port 53 nee
 EDDIE_DNS_PORT=8053 uv run python -m eddie.dns_server  # development, any OS: dig @127.0.0.1 -p 8053 google.com
 ```
 
-Settings: `EDDIE_DNS_HOST` (default `0.0.0.0`), `EDDIE_DNS_PORT` (default `53`), `EDDIE_UPSTREAMS` (default `1.1.1.1,9.9.9.9`, tried in order with a 2 s timeout each; if all fail the device gets SERVFAIL). On the Mac, Internet Sharing must be off because it holds port 53. Binding `127.0.0.1:53` still needs sudo on macOS.
+Settings: `EDDIE_DNS_HOST` (default `0.0.0.0`), `EDDIE_DNS_PORT` (default `53`), `EDDIE_DB` (default `eddie.db` in the working directory, created `0600` on first run; `off` logs nothing), `EDDIE_RETENTION_DAYS` (default `7`; older rows are securely deleted at start and hourly), `EDDIE_UPSTREAMS` (default `1.1.1.1,9.9.9.9`, tried in order with a 2 s timeout each; if all fail the device gets SERVFAIL). On the Mac, Internet Sharing must be off because it holds port 53. Binding `127.0.0.1:53` still needs sudo on macOS.
 
 ## Agent build spec: data, API, tools
 
@@ -327,7 +327,7 @@ eddie/
 ### Guardrails for the agent building it
 
 - No cloud APIs for speech or LLM. Only Gmail, only on request.
-- Never log anything beyond domain, device, time, action.
+- Never log anything beyond domain, device, time, qtype, action, source and reason; keep at most `EDDIE_RETENTION_DAYS` (7) of history. See [docs/PRIVACY.md](docs/PRIVACY.md).
 - Keep DNS hot path free of model calls.
 - Dashboard style: black background, thin white type, one red accent for blocks, no clutter.
 

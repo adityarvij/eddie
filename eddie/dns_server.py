@@ -5,7 +5,9 @@ and the answer is passed back untouched. Blocked lookups get a dead end:
 0.0.0.0 for A, :: for AAAA, an empty answer for anything else, TTL 60.
 The decision comes from decision.evaluate, which never waits on a model.
 
-Nothing is logged per query yet; store.py (#6) owns query logging.
+Every lookup is written to the queries table in eddie.db (EDDIE_DB) through
+store.QueryLog, which queues the row and writes it off the event loop.
+EDDIE_DB=off logs nothing; EDDIE_RETENTION_DAYS (default 7) bounds history.
 
 Run (port 53):            sudo .venv/bin/python -m eddie.dns_server
 Development (no sudo):    EDDIE_DNS_PORT=8053 uv run python -m eddie.dns_server
@@ -14,10 +16,13 @@ Development (no sudo):    EDDIE_DNS_PORT=8053 uv run python -m eddie.dns_server
 import asyncio
 import logging
 import os
+import signal
+import time
 
 from dnslib import AAAA, QTYPE, RCODE, RR, A, DNSRecord
 
 from . import decision
+from .store import QueryLog, query_log_from_env
 
 BLOCK_TTL = 60
 UPSTREAM_TIMEOUT = 2.0  # seconds per upstream before trying the next one
@@ -79,7 +84,7 @@ async def forward(packet: bytes, upstreams: list[tuple[str, int]], timeout: floa
 
 
 async def resolve(packet: bytes, client_ip: str, upstreams: list[tuple[str, int]],
-                  timeout: float = UPSTREAM_TIMEOUT) -> bytes | None:
+                  timeout: float = UPSTREAM_TIMEOUT, query_log: QueryLog | None = None) -> bytes | None:
     """The reply to send back, or None to drop a packet that isn't a DNS query."""
     try:
         request = DNSRecord.parse(packet)
@@ -92,9 +97,13 @@ async def resolve(packet: bytes, client_ip: str, upstreams: list[tuple[str, int]
         reply.header.rcode = RCODE.FORMERR
         return reply.pack()
 
+    arrived = int(time.time() * 1000)
     domain = str(request.q.qname).rstrip(".").lower()
-    # Device is the client IP until devices.py (#14) maps it to a label.
+    # Device is the client IP until devices.py (#14) maps it to a MAC and label.
     verdict = decision.evaluate(domain, client_ip)
+    if query_log:
+        query_log.log(domain, client_ip, QTYPE.get(request.q.qtype, str(request.q.qtype)),
+                      verdict.action, verdict.source, verdict.reason, ts=arrived)
     if verdict.action == "block":
         return block_reply(request).pack()
 
@@ -107,9 +116,11 @@ async def resolve(packet: bytes, client_ip: str, upstreams: list[tuple[str, int]
 
 
 class DNSServer(asyncio.DatagramProtocol):
-    def __init__(self, upstreams: list[tuple[str, int]], timeout: float = UPSTREAM_TIMEOUT):
+    def __init__(self, upstreams: list[tuple[str, int]], timeout: float = UPSTREAM_TIMEOUT,
+                 query_log: QueryLog | None = None):
         self.upstreams = upstreams
         self.timeout = timeout
+        self.query_log = query_log
         self.transport = None
         self.tasks: set[asyncio.Task] = set()
 
@@ -124,16 +135,16 @@ class DNSServer(asyncio.DatagramProtocol):
         task.add_done_callback(self.tasks.discard)
 
     async def answer(self, data: bytes, addr) -> None:
-        reply = await resolve(data, addr[0], self.upstreams, self.timeout)
+        reply = await resolve(data, addr[0], self.upstreams, self.timeout, self.query_log)
         if reply and self.transport and not self.transport.is_closing():
             self.transport.sendto(reply, addr)
 
 
 async def serve(host: str, port: int, upstreams: list[tuple[str, int]],
-                timeout: float = UPSTREAM_TIMEOUT) -> asyncio.DatagramTransport:
+                timeout: float = UPSTREAM_TIMEOUT, query_log: QueryLog | None = None) -> asyncio.DatagramTransport:
     loop = asyncio.get_running_loop()
     transport, _ = await loop.create_datagram_endpoint(
-        lambda: DNSServer(upstreams, timeout), local_addr=(host, port))
+        lambda: DNSServer(upstreams, timeout, query_log), local_addr=(host, port))
     return transport
 
 
@@ -142,17 +153,23 @@ def main() -> None:
     host = os.environ.get("EDDIE_DNS_HOST", "0.0.0.0")
     port = int(os.environ.get("EDDIE_DNS_PORT", "53"))
     upstreams = upstreams_from_env()
+    query_log = query_log_from_env()
 
     async def run():
         try:
-            transport = await serve(host, port, upstreams)
+            transport = await serve(host, port, upstreams, query_log=query_log)
         except PermissionError:
             raise SystemExit(f"Port {port} needs root: run with sudo, or set EDDIE_DNS_PORT=8053 for development.")
         except OSError as exc:
             raise SystemExit(f"Can't listen on {host}:{port} ({exc}). On a Mac, turn off Internet Sharing, which holds port 53.")
-        log.info("listening on %s:%s, upstream %s", host, port, ", ".join(f"{h}:{p}" for h, p in upstreams))
+        log.info("listening on %s:%s, upstream %s, query log %s",
+                 host, port, ", ".join(f"{h}:{p}" for h, p in upstreams),
+                 f"{query_log.path} ({query_log.retention_days:g} days)" if query_log else "off")
+        stop = asyncio.Event()
+        # docker stop / systemd send SIGTERM; stop cleanly so queued rows get flushed.
+        asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, stop.set)
         try:
-            await asyncio.Event().wait()
+            await stop.wait()
         finally:
             transport.close()
 
@@ -160,6 +177,9 @@ def main() -> None:
         asyncio.run(run())
     except KeyboardInterrupt:
         pass
+    finally:
+        if query_log:
+            query_log.close()
 
 
 if __name__ == "__main__":
