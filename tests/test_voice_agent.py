@@ -58,5 +58,25 @@ class HomeModeTool(unittest.TestCase):
             voice_agent.set_home_mode('false')
         request.assert_not_called()
 
+class WhatTheyKnowTool(unittest.TestCase):
+    @patch('voice_agent.request', return_value={'text': 'Amazon gets the most tracking data.'})
+    def test_privacy_questions_read_backend(self, request):
+        for phrase in ('What do they know about me?', 'What do companies know about me', 'What does Amazon know about my house?', 'what can the TV tell about us'):
+            with self.subTest(phrase=phrase):
+                request.reset_mock()
+                self.assertEqual('Amazon gets the most tracking data.', voice_agent.respond(phrase))
+                request.assert_called_once_with('/what-they-know?hours=24')
+
+    @patch('voice_agent.request', side_effect=OSError('offline'))
+    def test_backend_failure(self, request):
+        self.assertIn("can't say", voice_agent.respond('what do they know about me'))
+
+    @patch('voice_agent.request')
+    def test_tool_rejects_bad_window(self, request):
+        for hours in (0, 500, '24', True):
+            with self.assertRaises(ValueError):
+                voice_agent.what_they_know(hours)
+        request.assert_not_called()
+
 if __name__ == '__main__':
     unittest.main()

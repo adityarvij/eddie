@@ -38,6 +38,27 @@ def set_home_mode(enabled):
     return {'home_mode': enabled}
 
 
+WHAT_THEY_KNOW_TOOL = {
+    'type': 'function',
+    'function': {
+        'name': 'what_they_know',
+        'description': 'Read what companies could infer about the household from recent device traffic.',
+        'parameters': {
+            'type': 'object',
+            'properties': {'hours': {'type': 'integer', 'minimum': 1, 'maximum': 168}},
+            'additionalProperties': False,
+        },
+    },
+}
+
+
+def what_they_know(hours=24):
+    """Backend-computed inferences only; the reply text comes from /what-they-know."""
+    if type(hours) is not int or not 1 <= hours <= 168:
+        raise ValueError('hours must be an integer from 1 to 168')
+    return request(f'/what-they-know?hours={hours}')
+
+
 def respond(text):
     if not text.strip():
         return "Didn't catch that. Try again."
@@ -56,6 +77,11 @@ def respond(text):
             return "I couldn't update home mode. Check the local backend before trying again."
     if re.search(r'\b(block|allow|lock|undo|email|send|mode)\b', text):
         return "I haven't changed anything. I can turn home mode on or off; domain rules, lockdown and email aren't connected yet."
+    if re.search(r'\bwhat (?:do|does|can|could) (?:\w+|my \w+|the \w+) (?:know|tell|guess|figure out|learn) about (?:me|us|my house|my home|our house)\b', text):
+        try:
+            return str(what_they_know()['text'])
+        except Exception:
+            return "I can't reach Eddie’s traffic backend, so I can't say what they know right now."
     if text in ('hello', 'hi', 'hey', 'hey eddie'):
         return "Hey, I'm Eddie. Ask me what's been going on, or tell me to turn home mode on or off."
     if re.search(r'\b(summary|update|happening|going|requests|blocked|doing|activity)\b', text):

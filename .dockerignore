@@ -1,0 +1,7 @@
+.git
+.venv
+.venv-frontend
+voice/models
+blocklists
+**/__pycache__
+.DS_Store

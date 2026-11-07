@@ -9,9 +9,9 @@ import itertools
 import json
 from collections import deque
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
 
-from . import insights, labels
+from . import inferences, insights, labels
 from .events import ModeUpdate, QueryEvent
 
 # In memory for now; SQLite (store.py) replaces this once the DNS side lands.
@@ -56,6 +56,12 @@ def events(since: int = 0, device: str | None = None, limit: int = 200):
 @app.get("/summary")
 def summary():
     return {**totals, "home_mode": state["home_mode"], "text": insights.summary_text(list(recent))}
+
+
+@app.get("/what-they-know")
+def what_they_know(hours: int = Query(24, ge=1, le=168)):
+    facts = inferences.compute_facts(list(recent), hours)
+    return {"hours": hours, "facts": facts, "text": inferences.spoken_text(facts, hours)}
 
 
 @app.get("/mode")

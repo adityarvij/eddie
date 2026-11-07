@@ -12,6 +12,15 @@
 4. Blocked requests get a dead-end answer. The data never leaves the house.
 5. The screen shows every decision live. "Hey Eddie" lets you ask and command by voice.
 
+## Run it (development)
+
+```bash
+./scripts/run_all.sh            # API + fake traffic in Docker, dashboard on the host
+./scripts/run_all.sh --no-fake  # API only, for a real DNS server posting to :8000
+```
+
+Dashboard at http://localhost:5173, API at http://localhost:8000. The traffic API and `fake_traffic.py` run in Docker (`compose.yaml`) with `restart: unless-stopped`, so they keep running until `docker compose down`. The dashboard (`frontend/serve.py`, launched through `scripts/run_voice.sh` with the Vosk wake prototype and Piper voice) stays on the host because it also runs the voice loop, and Docker on macOS can't reach the microphone or speaker; Ctrl-C stops it. Ollama also stays on the host for Metal GPU access. `EDDIE_BIND=0.0.0.0` exposes the API on the network; the iPad also needs `serve.py` to bind beyond localhost and the page opened with `?traffic=ws://<Mac IP>:8000/ws/events`, which isn't wired up yet. The fake traffic's verdicts, including the "AI:" ones, are scripted, not real classifier output.
+
 ## Stack (hackathon version)
 
 - **Network core:** Python + dnslib (DNS server) on the Raspberry Pi; devices point their DNS at it; optional scapy for non-DNS traffic
@@ -133,7 +142,7 @@ Rehearse Sunday morning and record a backup video.
 
 1. Power the Pi; `ssh <user>@eddie.local` from the Mac.
 2. Get the Pi's IP with `hostname -I` (usually `172.20.10.x` on an iPhone hotspot).
-3. Clone the repo onto the Pi; start Eddie.
+3. Clone the repo onto the Pi; start Eddie (`sudo .venv/bin/python -m eddie.dns_server`, see "Running the DNS server").
 4. Check from the Mac: `dig @<Pi IP> google.com`.
 5. Fire Stick: Settings → Network → forget and reconnect → Advanced → DNS 1 = Pi's IP. Watch lookups scroll.
 6. iPad: open `http://<Pi IP>:8000`, Add to Home Screen.
@@ -184,6 +193,18 @@ Hand this section and the ones below to a coding agent (Claude Code etc.). Targe
 
 **Latency budget:** under 20 ms added per query on the hot path. The AI never blocks a DNS reply.
 
+### Running the DNS server
+
+`eddie/dns_server.py` implements steps 1, 3 and 4 above (UDP only). Steps 2, 5 and 6 are not built yet: the device is the client IP until #14, nothing is logged until #6, and `eddie/decision.py` is a stub that blocks only `device-metrics-us.amazon.com` until #10.
+
+```bash
+uv run python -m eddie.dns_server                      # Mac: 0.0.0.0:53 binds without sudo on recent macOS
+sudo .venv/bin/python -m eddie.dns_server              # Pi / Linux: port 53 needs root
+EDDIE_DNS_PORT=8053 uv run python -m eddie.dns_server  # development, any OS: dig @127.0.0.1 -p 8053 google.com
+```
+
+Settings: `EDDIE_DNS_HOST` (default `0.0.0.0`), `EDDIE_DNS_PORT` (default `53`), `EDDIE_UPSTREAMS` (default `1.1.1.1,9.9.9.9`, tried in order with a 2 s timeout each; if all fail the device gets SERVFAIL). On the Mac, Internet Sharing must be off because it holds port 53. Binding `127.0.0.1:53` still needs sudo on macOS.
+
 ## Agent build spec: data, API, tools
 
 ### SQLite schema
@@ -225,6 +246,7 @@ Use Ollama `format: json`, temperature 0. Never send anything but the domain and
 | GET | `/devices` | Devices with tracker counts |
 | GET | `/events?since=&device=` | Recent query rows |
 | GET | `/summary?window=1h` | Totals: queries, blocked, top blocked domains, top companies, per device |
+| GET | `/what-they-know?hours=24` | "What they know about you" facts `{fact, evidence, confidence}` + spoken text (scaffold; see docs/EVENTS.md) |
 | POST | `/rules` | `{pattern, action, device_mac?}` add rule; takes effect immediately (no cache) |
 | DELETE | `/rules/{id}` | Remove rule |
 | POST | `/offline-mode` | Toggle: stop forwarding to upstream, prove the AI still works |
@@ -236,6 +258,7 @@ Use Ollama `format: json`, temperature 0. Never send anything but the domain and
 |---|---|---|
 | `get_summary` | window, device? | Reads `/summary` |
 | `get_recent_blocks` | device?, limit | Last blocked domains with reasons |
+| `what_they_know` | hours? | Reads `/what-they-know` (implemented in `voice/voice_agent.py`) |
 | `block` | pattern, device? | Adds BLOCK rule |
 | `allow` | pattern, device? | Adds ALLOW rule |
 | `lockdown_device` | device, keep (list) | Blocks everything for that device except keep patterns |
@@ -441,6 +464,6 @@ With a Fire Stick you'll mainly see Safety, What's on screen, Identity linking a
 
 The offline wake/capture/transcription worker and deterministic summary/home-mode tool router are implemented. Whisper, shared wake features, Vosk and Piper Lessac assets are provisioned on the development Mac. The dedicated Hey Eddie ONNX model still needs training; the explicit offline Vosk prototype is available now via `./scripts/run_voice.sh`. Live-room microphone accuracy remains unverified. General Ollama tool calling, domain rules, lockdown and email are not yet connected. See [voice setup](voice/README.md), [architecture and remaining work](docs/ARCHITECTURE.md), and [contributor instructions](AGENTS.md). The Mac is the development host; final deployment stays portable to Linux.
 
-The voice view now features a larger active Eddie, spoken interaction without a text box, and a bottom-right Open logs drawer for recent network activity.
+The voice view now features a larger active Eddie, spoken interaction without a text box, and an Open logs control beneath Eddie that opens a drawer for recent network activity.
 
 Voice conversations remain active between requests without repeating Hey Eddie. Four seconds waiting without speech dismisses Eddie, including immediately after the initial wake.

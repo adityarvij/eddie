@@ -1,0 +1,23 @@
+# Run with ./scripts/run_all.sh, or: docker compose --profile fake up -d --build
+services:
+  api:
+    build: .
+    # Localhost only by default; EDDIE_BIND=0.0.0.0 exposes it to the iPad on the hotspot.
+    ports:
+      - "${EDDIE_BIND:-127.0.0.1}:8000:8000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/mode', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # Stand-in for the DNS server; leave the profile off once real traffic flows.
+  fake-traffic:
+    build: .
+    profiles: ["fake"]
+    command: ["python", "scripts/fake_traffic.py", "--url", "http://api:8000", "--speed", "${FAKE_SPEED:-2}", "--quiet"]
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
