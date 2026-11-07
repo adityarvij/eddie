@@ -103,6 +103,14 @@ Owner: [eddie/store.py](../eddie/store.py), written by [eddie/dns_server.py](../
 | Inferences ("what they know") stay in the house, because the inferences are themselves a profile of the household: facts are computed in Python and phrased only by the local model at `EDDIE_OLLAMA_URL`, which must be localhost or a private IP literal (no proxies, no redirects). No cloud model is ever called. Tested with a stubbed model. | implemented |
 | The live "what they know" report reads the query log read-only and names devices only by user label, "<vendor> device" or "unlabeled device", never MAC, IP or DHCP hostname, because its facts can reach the local model through the voice agent. Facts are computed per request and not stored. Tested. | implemented |
 
+## Spoof stub server (#99)
+
+| Decision | Status |
+| --- | --- |
+| `eddie/spoof_server.py` answers spoofed HTTP requests with 200 OK and an empty body. It reads the request head only to find `Content-Length`, then discards the body as it arrives (at most 1 MB); bodies, paths, hosts and client addresses are never stored or logged. Its only log line is the startup message. Tested. | implemented |
+| Spoofed lookups are logged in `queries` like any other, with `action: spoof`. | implemented |
+| HTTPS isn't faked (no certificate), so a TLS upload to a spoofed name fails rather than reaching Eddie in the clear. | implemented, documented limit |
+
 ## Home mode and camera
 
 | Decision | Status |

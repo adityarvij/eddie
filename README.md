@@ -55,7 +55,7 @@ Dashboard at http://localhost:5173, API at http://localhost:8000. The traffic AP
 - **Self-testing blocks** — block, check the device still works, auto-rollback if it broke
 - **Device baselines** — learn what each device normally talks to; alert on anything new
 - **Idle snitching detector** — flags devices phoning home when nobody is using them
-- **Fake data mode** — feed dummy responses to endpoints that break when blocked
+- **Fake data mode** — feed dummy responses to endpoints that break when blocked (implemented, #99: rule `action: spoof` plus `eddie/spoof_server.py`; plain HTTP only)
 - **Geo alerts** — "Your doorbell started talking to a server in another country"
 - **Plain-English goals** — "The TV can talk to Netflix and nothing else" becomes rules automatically
 
@@ -188,7 +188,7 @@ Hand this section and the ones below to a coding agent (Claude Code etc.). Targe
 1. Fire Stick asks the Pi for `device-metrics-us.amazon.com`.
 2. `eddie-dns` looks up client IP → device.
 3. `decision.evaluate(domain, device)` returns `ALLOW`, `BLOCK` or `FLAG` plus reason and source (rule / allowlist / blocklist / heuristic / ai / default).
-4. `ALLOW` or `FLAG`: forward to upstream, return the real answer. `BLOCK`: return `0.0.0.0` (A) and `::` (AAAA) with TTL 60. Optional `SPOOF`: return the Pi's IP so a local fake server answers 200 OK.
+4. `ALLOW` or `FLAG`: forward to upstream, return the real answer. `BLOCK`: return `0.0.0.0` (A) and `::` (AAAA) with TTL 60. `SPOOF` (a rule with `action: spoof`, #99): return Eddie's IP (`EDDIE_SPOOF_IP`) for A and an empty answer for AAAA, so `eddie/spoof_server.py` answers plain HTTP with 200 OK and an empty body. Without `EDDIE_SPOOF_IP` a spoof rule blocks. HTTPS clients fail the TLS handshake (no certificate for the tracker's name), the same as a block.
 5. Write the row to `queries`; publish event to the WebSocket.
 6. If the domain was unknown, queue it for the classifier; when the verdict lands, cache it and push an `ai_verdict` event. Subsequent queries use the cached verdict.
 
@@ -197,6 +197,8 @@ Hand this section and the ones below to a coding agent (Claude Code etc.). Targe
 ### Running the DNS server
 
 `eddie/dns_server.py` implements steps 1, 3 and 4 above (UDP only) and the `queries` half of step 5: every lookup writes one row to `eddie.db` through `eddie/store.py`. Each lookup is also sent to the live feed (`POST /ingest`, then `/ws/events`) by `eddie/feed.py`, off the reply path: about 25 ms from lookup to dashboard on the development Mac. Start the API without fake traffic (`./scripts/run_all.sh --no-fake`) so the screen shows only real lookups. Step 2 is `eddie/devices.py` (#14): the client IP maps to a MAC from the ARP table, so `queries.device_mac` and the feed's `device_mac` hold the MAC, and the feed's `device` is the device's label, DHCP hostname or vendor ("Amazon device"). A client ARP can't resolve stays `ip:<IP>` with the IP as its name. Devices that look something up are recorded in the `devices` table; `GET /devices` names and counts them. `eddie/decision.py` implements the full decision order below. At startup the DNS server loads every `blocklists/*.txt` file (StevenBlack hosts, the Perflyst smart-TV and Fire TV lists, and Eddie's own `eddie-extra.txt`: about 78,000 domains in 0.3 s) and the essentials in `allowlist.txt` (`eddie/lists.py`). Rules come from the `/rules` API (`eddie/rules.py`).
+
+Spoof rules (#99) need two more things on the Pi: `EDDIE_SPOOF_IP=<Pi's LAN IPv4>` for the DNS server, and the stub server on port 80 (`sudo .venv/bin/python -m eddie.spoof_server`; development: `EDDIE_SPOOF_PORT=8080 uv run python -m eddie.spoof_server`). Nothing listens on 443, so HTTPS uploads to a spoofed name just fail.
 
 ### Running the classifier
 
