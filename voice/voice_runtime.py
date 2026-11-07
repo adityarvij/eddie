@@ -47,6 +47,8 @@ def transcribe_command(samples, transcriber, emit, answer):
 
 def run(emit, answer, speaking, stopped):
     os.environ['HF_HUB_DISABLE_TELEMETRY'] = '1'
+    # Assets come from scripts/provision_voice.py; never let a library fetch at runtime.
+    os.environ['HF_HUB_OFFLINE'] = '1'
     import onnxruntime as ort
     ort.disable_telemetry_events()
     import numpy as np

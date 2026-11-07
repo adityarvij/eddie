@@ -4,10 +4,15 @@ Run from the Eddie repository root with Python 3.11. The laptop is a development
 
 ## Provision once while online
 
-1. Install `voice/requirements.txt` in a dedicated virtual environment. On Linux install PortAudio if sounddevice needs it. Verify platform wheels before moving to Pi ARM64.
-2. Train a custom **hey eddie** model using the official openWakeWord training notebook. Export ONNX to `voice/models/hey_eddie.onnx`. An arbitrary filename does not change what an existing model recognizes. Do not rename Hey Jarvis and present it as Hey Eddie.
+1. Install `voice/requirements.txt` in a dedicated virtual environment. On Linux install PortAudio (`libportaudio2`) if sounddevice needs it. Verify platform wheels before moving to Pi ARM64.
+2. Run `python scripts/provision_voice.py` (#39). It downloads only what's missing from the pinned sources in `voice/assets.json` (Whisper base.en, Piper Lessac medium, the Vosk small prototype model and openWakeWord's shared melspectrogram/embedding ONNX files), checks each file's SHA-256, then runs the hardware check. Same command on the Mac and Linux/Pi; it uses only the standard library to fetch. Steps 4–6 below are what it automates.
+   - A download whose hash or size doesn't match is deleted and the script exits 1 with `PROVISIONING FAILED`. An existing file with the wrong hash is never overwritten; delete it and run again.
+   - `--verify` hashes every asset without using the network and exits 1 listing each missing or altered file. `scripts/run_voice.sh` runs it before launching, so a corrupt model fails before the microphone opens (about 0.3 s on the development Mac).
+   - `--hardware` reports platform, Python version, required packages, whether the input device (`EDDIE_INPUT_DEVICE` or the default) accepts 16 kHz mono int16, the output device, and, on Linux, that `EDDIE_PIPER_MODEL` and its JSON exist. It opens no stream and records nothing, so it doesn't prove the microphone hears you.
+   - The custom `hey_eddie.onnx` isn't in the manifest: it hasn't been trained (#28), so there's nothing to pin.
+3. Train a custom **hey eddie** model using the official openWakeWord training notebook. Export ONNX to `voice/models/hey_eddie.onnx`. An arbitrary filename does not change what an existing model recognizes. Do not rename Hey Jarvis and present it as Hey Eddie.
 3. Provision openWakeWord's shared embedding and mel-spectrogram ONNX assets in its package model directory using its setup utility (`openwakeword.utils.download_models()`) while online. The worker does not call a downloader.
-4. Provision Whisper locally, for example with `huggingface_hub.snapshot_download('Systran/faster-whisper-base.en', local_dir='voice/models/whisper-base.en')`. This is a setup download, not a runtime speech API.
+4. Provision Whisper locally (pinned to revision `3d3d5de` in the manifest), for example with `huggingface_hub.snapshot_download('Systran/faster-whisper-base.en', local_dir='voice/models/whisper-base.en')`. This is a setup download, not a runtime speech API.
 5. For portable speech, provision a licensed Piper `.onnx` voice and matching `.onnx.json` file, then set `EDDIE_PIPER_MODEL` to its absolute path. macOS development falls back to the installed `/usr/bin/say` voice when this variable is unset; Linux needs Piper configured.
 
 References: [openWakeWord training](https://github.com/dscripka/openWakeWord#training-new-models), [faster-whisper](https://github.com/SYSTRAN/faster-whisper), [Piper](https://github.com/OHF-Voice/piper1-gpl).
@@ -37,11 +42,11 @@ Supported commands: “What's been going on?” (backend facts), “What do they
 - Check custom wake phrase with several speakers, background conversation and the actual speakerphone; measure false wakes and missed wakes.
 - Verify leading silence, no-speech timeout, 800 ms endpoint, 10 s cap, device disconnect and queue overflow recovery.
 - Confirm typed and spoken commands reach the same backend; disconnect backend and check Eddie reports unavailable facts.
-- Turn off internet after provisioning; confirm wake, transcription and speech still work.
+- Turn off internet after provisioning; confirm wake, transcription and speech still work. The worker sets `HF_HUB_OFFLINE=1` and Whisper loads with `local_files_only`, so a missing file is an error rather than a fetch.
 - Test self-trigger prevention with loud replies. No barge-in is supported yet.
 - Recheck latency, sound hardware, model licenses and memory on final ARM64 hardware.
 
-Automated command-routing and confirmation tests: `python -m unittest discover -s tests -p 'test_voice*.py'`.
+Automated command-routing, confirmation and provisioning tests: `python -m unittest discover -s tests -p 'test_voice*.py'`.
 
 ## Development prototype launch (2026-11-07)
 

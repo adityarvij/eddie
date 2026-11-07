@@ -44,7 +44,7 @@ Owner: [eddie/store.py](../eddie/store.py), written by [eddie/dns_server.py](../
 | Decision | Status |
 | --- | --- |
 | All wake detection, transcription and speech run locally. There is no cloud speech fallback. | implemented |
-| Models are provisioned once at setup. At runtime Whisper uses `local_files_only`, Hugging Face telemetry is off, and Piper loads a local file. | implemented |
+| Models are provisioned once at setup. At runtime Whisper uses `local_files_only`, `HF_HUB_OFFLINE=1` is set, Hugging Face telemetry is off, and Piper loads a local file. | implemented |
 | Audio stays in memory and is bounded: a small pre-roll, at most 10 s per command, ended by 800 ms of silence. Nothing is written to disk. | implemented |
 | Transcripts and replies are never stored or logged. | implemented |
 | The mic ignores audio while Eddie speaks, so Eddie never transcribes itself. | implemented |
@@ -53,7 +53,7 @@ Owner: [eddie/store.py](../eddie/store.py), written by [eddie/dns_server.py](../
 | **Prototype wake engine (Vosk, the dev default):** it transcribes all room speech locally to spot "hey Eddie", then throws the text away. That is broader listening than a dedicated wake model. | gap, until #28 trains openWakeWord |
 | Transcripts are streamed live over the dashboard's `/events` SSE stream. Any local process can subscribe because GET has no origin check, though the text is never stored. | gap |
 | A visible, persistent mic indicator. | planned |
-| Asset hashing and an offline installer (#39). | planned |
+| Offline installer with pinned hashes (#39): `scripts/provision_voice.py` is the only code that downloads voice models, from the pinned URLs in `voice/assets.json` (Hugging Face, GitHub releases, alphacephei.com). Those hosts see the setup machine's IP and which public models it fetched, nothing about the household. `--verify` and the launcher's pre-start check never use the network. The hardware check lists audio devices but opens no stream. Tested. | implemented |
 
 ## Dashboard and voice bridge (port 5173)
 
@@ -103,7 +103,7 @@ Owner: [eddie/store.py](../eddie/store.py), written by [eddie/dns_server.py](../
 | Upstream DNS (`1.1.1.1`, then `9.9.9.9`), plain UDP | Every **allowed** domain name, from Eddie's IP | implemented. Blocked lookups never leave. "Data never leaves the house" means device data and history, not the lookups we forward. Encrypted upstream (DoT/DoH) is not built. |
 | Gmail API | The report email, only on request and after confirmation | planned |
 | Tavily / Exa (optional) | One unknown domain name, never user data | planned, optional |
-| Model downloads | Nothing about the household | setup only, never at runtime |
+| Model downloads | Nothing about the household | setup only (`scripts/provision_voice.py`, Ollama pulls), never at runtime |
 
 Ollama runs on the host and is local; the classifier refuses any non-private Ollama address, so the domains it sends stay on the home network. The setup checklist's `OLLAMA_HOST=0.0.0.0` exposes it, unauthenticated, to everyone on the hotspot. **Gap:** prefer a localhost bind when the Pi isn't calling it.
 
