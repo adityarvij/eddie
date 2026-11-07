@@ -441,6 +441,6 @@ With a Fire Stick you'll mainly see Safety, What's on screen, Identity linking a
 
 The offline wake/capture/transcription worker and deterministic summary/home-mode tool router are implemented. Whisper, shared wake features, Vosk and Piper Lessac assets are provisioned on the development Mac. The dedicated Hey Eddie ONNX model still needs training; the explicit offline Vosk prototype is available now via `./scripts/run_voice.sh`. Live-room microphone accuracy remains unverified. General Ollama tool calling, domain rules, lockdown and email are not yet connected. See [voice setup](voice/README.md), [architecture and remaining work](docs/ARCHITECTURE.md), and [contributor instructions](AGENTS.md). The Mac is the development host; final deployment stays portable to Linux.
 
-The voice view now features a larger active Eddie, spoken interaction without a text box, and a bottom-right Open logs drawer for recent network activity.
+The voice view now features a larger active Eddie, spoken interaction without a text box, and an Open logs control beneath Eddie that opens a drawer for recent network activity.
 
 Voice conversations remain active between requests without repeating Hey Eddie. Four seconds waiting without speech dismisses Eddie, including immediately after the initial wake.

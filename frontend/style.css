@@ -33,3 +33,7 @@
 #assistant.closing::backdrop{animation:eddie-backdrop-exit 320ms ease both}
 @keyframes eddie-exit{from{opacity:1;transform:translateY(0) scale(1)}to{opacity:0;transform:translateY(14px) scale(.98)}}
 @keyframes eddie-backdrop-exit{from{opacity:1}to{opacity:0}}
+
+/* Keep the logs control beneath Eddie, clear of the ambient edge glow. */
+#assistant .open-logs{position:static;right:auto;bottom:auto;flex-shrink:0;margin:12px auto 0;padding:10px 16px;background:transparent;border:1px solid #444;border-radius:20px;color:#bbb}
+#assistant .open-logs:hover{color:#fff;border-color:#888}
