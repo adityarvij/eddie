@@ -18,6 +18,7 @@ Privacy (docs/PRIVACY.md):
 
 Run:  uv run python -m eddie.classifier    (Ollama must be running)
 """
+from concurrent.futures import ThreadPoolExecutor
 import ipaddress
 import json
 import logging
@@ -28,7 +29,7 @@ import time
 import urllib.parse
 import urllib.request
 
-from . import store
+from . import labels, store
 from .decision import Verdict
 
 DEFAULT_URL = "http://127.0.0.1:11434"
@@ -39,11 +40,12 @@ MAX_REASON_CHARS = 120
 LOOKBACK_MS = 3_600_000  # only unknowns looked up in the last hour are queued
 COUNT_WINDOW_MS = 600_000  # "query count in the last 10 min"
 IDLE_WINDOW_MS = 300_000  # "no allowed media traffic in 5 min"
-BATCH = 10  # domains per pass
-POLL_EVERY = 2.0  # seconds between passes
+BATCH = 10  # domains per synchronous compatibility pass
+POLL_EVERY = 0.25  # seconds between passes
 UNREACHABLE_WAIT = 10.0  # seconds to wait when Ollama is down
 REJECT_BACKOFF = 300.0  # seconds before retrying a domain whose answer was rejected
-MODEL_TIMEOUT = 30.0
+MODEL_TIMEOUT = 7.0
+MAX_IN_FLIGHT = 2
 DOMAIN = re.compile(r"[a-z0-9_-]+(\.[a-z0-9_-]+)*")
 
 PROMPT = """You label one internet domain looked up by a device on a home network.
@@ -91,7 +93,7 @@ def parse_verdict(text) -> Verdict | None:
     if not isinstance(data, dict) or set(data) != {"label", "confidence", "reason"}:
         return None
     label, confidence, reason = data["label"], data["confidence"], data["reason"]
-    if label not in LABELS:
+    if not isinstance(label, str) or label not in LABELS:
         return None
     if isinstance(confidence, bool) or not isinstance(confidence, (int, float)) or not 0 <= confidence <= 1:
         return None
@@ -105,11 +107,11 @@ def parse_verdict(text) -> Verdict | None:
 
 
 def candidates(conn: sqlite3.Connection, now_ms: int, limit: int) -> list[str]:
-    """Recently looked-up unknown domains with no verdict yet, most recent first."""
+    """Recently looked-up unknown domains with no verdict yet, oldest first."""
     return [d for (d,) in conn.execute(
         "SELECT domain FROM queries WHERE ts >= ? AND source = 'default'"
         " AND domain NOT IN (SELECT domain FROM ai_verdicts)"
-        " GROUP BY domain ORDER BY MAX(ts) DESC LIMIT ?", (now_ms - LOOKBACK_MS, limit))]
+        " GROUP BY domain ORDER BY MIN(ts) ASC, domain ASC LIMIT ?", (now_ms - LOOKBACK_MS, limit))]
 
 
 def facts(conn: sqlite3.Connection, domain: str, now_ms: int) -> dict:
@@ -126,19 +128,23 @@ def facts(conn: sqlite3.Connection, domain: str, now_ms: int) -> dict:
 
 
 def idle(conn: sqlite3.Connection, device: str | None, now_ms: int) -> bool | None:
-    """No allowlisted (media and essentials) traffic in 5 min; None if never seen any."""
-    def allowed_since(ms):
-        return conn.execute("SELECT 1 FROM queries WHERE device_mac = ? AND source = 'allowlist'"
-                            " AND ts >= ? LIMIT 1", (device, now_ms - ms)).fetchone() is not None
-    if device is None or not allowed_since(LOOKBACK_MS):
+    """No allowed, labelled media traffic for five minutes; unknown if never seen."""
+    if device is None:
         return None
-    return not allowed_since(IDLE_WINDOW_MS)
+    media = [ts for domain, ts in conn.execute(
+        "SELECT domain, MAX(ts) FROM queries WHERE device_mac = ? AND action = 'allow'"
+        " AND ts BETWEEN ? AND ? GROUP BY domain", (device, now_ms-LOOKBACK_MS, now_ms))
+        if labels.lookup(domain)[1] in labels.HUMAN]
+    if not media:
+        return None
+    return max(media) < now_ms-IDLE_WINDOW_MS
 
 
 def ask_ollama(question: dict, url: str = DEFAULT_URL, model: str = DEFAULT_MODEL,
                timeout: float = MODEL_TIMEOUT) -> str:
     """The model's raw reply text. Raises OSError if Ollama can't be reached."""
-    body = {"model": model, "stream": False, "format": "json", "options": {"temperature": 0},
+    check_local(url)
+    body = {"model": model, "stream": False, "format": "json", "options": {"temperature": 0, "num_predict": 160},
             "messages": [{"role": "system", "content": PROMPT},
                          {"role": "user", "content": json.dumps(question)}]}
     request = urllib.request.Request(url.rstrip("/") + "/api/chat", data=json.dumps(body).encode(),
@@ -184,6 +190,89 @@ class Classifier:
         return stored
 
 
+def publish_verdict(event: dict) -> None:
+    """Publish metadata to the local API, never to an external service."""
+    base = os.environ.get('EDDIE_API_URL', 'http://127.0.0.1:8000').rstrip('/')
+    check_local(base)
+    req = urllib.request.Request(base + '/ai/verdict', data=json.dumps(event).encode(),
+                                 headers={'Content-Type': 'application/json'})
+    with _OPENER.open(req, timeout=1) as response:
+        if json.load(response).get('ok') is not True:
+            raise OSError('Verdict event was not acknowledged')
+
+
+class AsyncClassifier(Classifier):
+    """Bounded background HTTP inference; SQLite remains on the owner thread.
+
+    tick never waits for model futures. A full worker pool leaves the rest
+    in the existing query log, with FIFO scheduling and no duplicate jobs.
+    """
+    def __init__(self, conn, ask, publish=publish_verdict, workers=MAX_IN_FLIGHT):
+        super().__init__(conn, ask)
+        self.pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix='eddie-classifier')
+        self.publish = publish
+        self.workers = workers
+        self.pending = {}
+        self.outbox = {}
+        self.event_retry_at = 0
+
+    def tick(self):
+        now = time.monotonic()
+        now_ms = int(time.time()*1000)
+        stored = 0
+        for domain, future in list(self.pending.items()):
+            if not future.done():
+                continue
+            del self.pending[domain]
+            try:
+                verdict = parse_verdict(future.result())
+            except Exception:
+                self.retry_at[domain] = now + UNREACHABLE_WAIT
+                log.warning('model request failed; retry scheduled')
+                continue
+            if verdict is None:
+                self.retry_at[domain] = now + REJECT_BACKOFF
+                log.warning('rejected malformed model output')
+                continue
+            ts = int(time.time()*1000)
+            with self.conn:
+                self.conn.execute('INSERT OR REPLACE INTO ai_verdicts VALUES (?, ?, ?, ?, ?)',
+                                  (domain, verdict.label, verdict.confidence, verdict.reason, ts))
+            # Existing cache remains authoritative if event delivery is down.
+            if len(self.outbox) >= 1000:
+                self.outbox.pop(next(iter(self.outbox)))
+            self.outbox[domain] = {'domain': domain, 'label': verdict.label,
+                                  'confidence': verdict.confidence, 'reason': verdict.reason, 'ts': ts}
+            stored += 1
+        if now >= self.event_retry_at:
+            for domain in list(self.outbox)[:10]:
+                try:
+                    self.publish(self.outbox[domain])
+                except Exception:
+                    self.event_retry_at = now + 2
+                    log.warning('verdict event unavailable; retry scheduled')
+                    break
+                del self.outbox[domain]
+        self.retry_at = {d:t for d,t in self.retry_at.items() if t > now}
+        slots = self.workers-len(self.pending)
+        if slots:
+            due = candidates(self.conn, now_ms, slots+len(self.pending)+len(self.retry_at))
+            for domain in due:
+                if domain in self.pending or domain in self.retry_at:
+                    continue
+                if not DOMAIN.fullmatch(domain) or len(domain)>253:
+                    self.retry_at[domain] = now+REJECT_BACKOFF
+                    continue
+                question = facts(self.conn, domain, now_ms)
+                self.pending[domain] = self.pool.submit(self.ask, question)
+                if len(self.pending) >= self.workers:
+                    break
+        return stored
+
+    def close(self):
+        self.pool.shutdown(wait=True, cancel_futures=True)
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
     path = os.environ.get("EDDIE_DB", "eddie.db")
@@ -195,12 +284,12 @@ def main() -> None:
     except ValueError as exc:
         raise SystemExit(f"EDDIE_OLLAMA_URL refused: {exc}.")
     model = os.environ.get("EDDIE_CLASSIFIER_MODEL", DEFAULT_MODEL)
-    worker = Classifier(store.connect(path), lambda question: ask_ollama(question, url, model))
+    worker = AsyncClassifier(store.connect(path), lambda question: ask_ollama(question, url, model))
     log.info("classifying unknown domains in %s with %s at %s", path, model, url)
     try:
         while True:
             try:
-                stored = worker.run_once()
+                stored = worker.tick()
                 if stored:
                     log.info("stored %d verdicts", stored)
                 time.sleep(POLL_EVERY)
@@ -212,6 +301,9 @@ def main() -> None:
                 time.sleep(POLL_EVERY)
     except KeyboardInterrupt:
         pass
+    finally:
+        worker.close()
+        worker.conn.close()
 
 
 if __name__ == "__main__":

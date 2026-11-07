@@ -6,7 +6,8 @@ from pathlib import Path
 
 class Capture:
     """16 kHz / 80 ms frames; wait up to 4 s for speech, then stop after 800 ms of silence."""
-    def __init__(self, threshold=0.015, wait_frames=50, max_frames=125):
+    def __init__(self, threshold=0.015, wait_frames=50, max_frames=125, speech_gate=None):
+        self.speech_gate = speech_gate
         self.threshold = threshold
         self.wait_frames = wait_frames
         self.max_frames = max_frames
@@ -18,7 +19,7 @@ class Capture:
 
     def push(self, frame):
         import numpy as np
-        loud = bool(np.sqrt(np.mean((frame.astype(np.float32) / 32768) ** 2)) >= self.threshold)
+        loud = self.speech_gate(frame) if self.speech_gate else bool(np.sqrt(np.mean((frame.astype(np.float32) / 32768) ** 2)) >= self.threshold)
         self.heard |= loud
         self.frames.append(frame.copy())
         if not self.heard:
@@ -51,6 +52,10 @@ def run(emit, answer, speaking, stopped):
     import numpy as np
     import sounddevice as sd
     from faster_whisper import WhisperModel
+    from speech_gate import SpeechGate, ready_cue
+    speech_gate = SpeechGate(aggressiveness=int(os.environ.get('EDDIE_VAD_MODE', '2')),
+                             minimum_rms=float(os.environ.get('EDDIE_SPEECH_THRESHOLD', '0.003')),
+                             margin=float(os.environ.get('EDDIE_NOISE_MARGIN', '2.0')))
 
     wake_path = Path(os.environ.get('EDDIE_WAKE_MODEL', 'voice/models/hey_eddie.onnx')).resolve()
     whisper_path = Path(os.environ.get('EDDIE_WHISPER_MODEL', 'voice/models/whisper-base.en')).resolve()
@@ -74,14 +79,15 @@ def run(emit, answer, speaking, stopped):
         raise ValueError('EDDIE_WAKE_ENGINE must be openwakeword or vosk.')
     transcriber = WhisperModel(str(whisper_path), device='cpu', compute_type='int8', local_files_only=True)
     threshold = float(os.environ.get('EDDIE_WAKE_THRESHOLD', '0.5'))
-    rms = float(os.environ.get('EDDIE_SPEECH_THRESHOLD', '0.015'))
+    rms = float(os.environ.get('EDDIE_SPEECH_THRESHOLD', '0.003'))
     if not 0 < threshold <= 1 or not 0 < rms < 1:
         raise ValueError('Voice thresholds must be between zero and one.')
     audio = queue.Queue(maxsize=32)
     overflow = __import__('threading').Event()
+    cue_suppressed = __import__('threading').Event()
 
     def callback(data, frames, timing, status):
-        if stopped.is_set() or speaking.is_set():
+        if stopped.is_set() or speaking.is_set() or cue_suppressed.is_set():
             return
         if status:
             overflow.set()
@@ -110,7 +116,7 @@ def run(emit, answer, speaking, stopped):
             if speaking.is_set():
                 stopped.wait(0.1)
                 drain()
-                capture = Capture(rms) if is_eddie_active else None
+                capture = Capture(rms, speech_gate=speech_gate) if is_eddie_active else None
                 continue
             try:
                 frame = audio.get(timeout=0.2)
@@ -121,15 +127,17 @@ def run(emit, answer, speaking, stopped):
                 drain()
                 hits = 0
                 if capture is not None:
-                    capture = Capture(rms)
+                    capture = Capture(rms, speech_gate=speech_gate)
                 continue
             if not is_eddie_active:
+                speech_gate.observe(frame)
                 score = max(detector.predict(frame).values(), default=0)
                 hits = hits + 1 if score >= threshold else 0
                 if hits >= 2:
                     hits = 0
-                    capture = Capture(rms)
+                    capture = Capture(rms, speech_gate=speech_gate)
                     is_eddie_active = True
+                    ready_cue(sd, cue_suppressed, drain, stopped)
                     emit({'type': 'wake'})
                     emit({'type': 'voice_state', 'state': 'listening', 'is_eddie_active': True})
                 continue
@@ -145,5 +153,5 @@ def run(emit, answer, speaking, stopped):
             transcribe_command(samples, transcriber, emit, answer)
             # Keep listening for a follow-up without requiring the wake phrase again.
             drain()
-            capture = Capture(rms)
+            capture = Capture(rms, speech_gate=speech_gate)
             emit({'type': 'voice_state', 'state': 'listening', 'is_eddie_active': True})

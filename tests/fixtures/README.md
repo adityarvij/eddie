@@ -1,0 +1,1 @@
+`webrtc-test-audio.pcm`: public 8 kHz, mono signed 16-bit PCM speech fixture from https://github.com/wiseman/py-webrtcvad/blob/master/test-audio.raw, retrieved 2026-11-07. License reproduced in WEBRTC_VAD_LICENSE. Tests resample it in memory, mix deterministic generated noise, and never use household recordings. No raw microphone audio or transcripts are saved.

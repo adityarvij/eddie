@@ -113,3 +113,13 @@ Ollama runs on the host and is local; the classifier refuses any non-private Oll
 ### Company summaries (#25, implemented)
 
 Ownership and public suffix data are bundled setup assets. Labeling makes no outbound requests and creates no cache files. Per-company counters are computed from the existing in-memory API events; no new browsing-history store or retention period is added. They count requested DNS lookups, not uploaded data. Unmapped domains are presented as registrable domains rather than guessed companies.
+
+
+### Voice activity calibration (#38, implemented)
+
+WebRTC VAD runs locally with no model downloads or remote calls. Calibration retains at most 125 scalar energy values in memory (ten seconds); commands retain the existing bounded audio pre-roll only. The ready tone is generated in memory. Capture is disabled during tone playback and its tail, then buffered audio is discarded. Tests use a licensed public speech fixture, not household recordings. No new audio, transcript, or calibration file is written.
+
+
+### Classifier event delivery (#27, implemented)
+
+The worker retains at most two in-flight inference inputs and 1,000 undelivered verdict events in memory. The verdict event carries only domain, label, confidence, short reason and timestamp, never device identity or traffic counts. Local API delivery ignores proxies, refuses public hosts and redirects, and retries failures without storing a new history log. Events are visible to existing live-feed subscribers under the API's existing access limitations; keep it bound to loopback until authentication is built. Worker shutdown/restart drops its in-memory notification outbox. Persistent verdict retention stays unchanged. Model reasons are untrusted display text, never HTML.
