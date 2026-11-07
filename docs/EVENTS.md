@@ -105,17 +105,22 @@ Answers `201` with the stored row plus the DNS acknowledgment:
 and `applied` (same meaning: the previous decision is back once it's true),
 or `404` if there is no such rule.
 
-`GET /rules` lists every rule, newest first, without `applied`.
+`GET /rules` lists every rule, newest first, without `applied`. Each row also
+has `device`: the device's display name (label, DHCP hostname,
+`"<vendor> device"`, or its key if Eddie never recorded it), or `null` for a
+rule on every device.
 
 Every successful add or delete also pushes a `rule_change` on `/ws/events`:
 
 ```json
 {"type": "rule_change", "change": "added", "id": 7, "scope": "device", "device_mac": "172.20.10.5",
- "pattern": "device-metrics-us.amazon.com", "action": "block", "created_by": "voice", "ts": 1762531200123}
+ "device": "Fire Stick", "pattern": "device-metrics-us.amazon.com", "action": "block", "created_by": "voice",
+ "ts": 1762531200123}
 ```
 
 - `change` is `added` or `removed`; the rest is the stored row (`ts` is when
-  the rule was created, also for `removed`).
+  the rule was created, also for `removed`) plus `device`, named as in
+  `GET /rules`.
 - It is sent as soon as the row is written or deleted, **before** the API waits
   for DNS. It means "stored" only. It has no `applied` field and never says the
   rule is enforced; only the HTTP answer's `applied: true` says that.
@@ -124,6 +129,8 @@ Every successful add or delete also pushes a `rule_change` on `/ws/events`:
   read `GET /rules` for the current list.
 - It carries `pattern`, not `domain`, so a feed that renders anything with a
   `domain` as a lookup won't show it as one.
+- The dashboard (#19) shows it as a `[rule]` feed row and a toast, and
+  re-reads the list through `serve.py`'s read-only `GET /api/rules`.
 
 Devices cache answers (60 s for blocked lookups, the upstream TTL for allowed
 ones), so a device may not ask Eddie again until its cache expires.
@@ -181,7 +188,7 @@ Voice recovery: after an initial wake with no command, or an empty/failed transc
 
 Active conversation lifecycle: listening state events include `is_eddie_active: true`; after four seconds with no user speech, `voice_state: dismissed` includes `is_eddie_active: false`. This applies immediately after the wake and after every reply. Two empty transcriptions in a row also end with `dismissed`. `POST /api/voice/dismiss` (the overlay's close button; localhost only, `{"ok": true}`) ends an active conversation: the worker emits `voice_state: dismissed` instead of `listening` and waits for the wake phrase again. It also cancels any pending confirmation.
 
-Confirmation: after Eddie reads back a risky action, the bridge emits `voice_state: confirming` with `kind`, `prompt` and `expires_in_ms` in place of `idle`; the worker's following `listening` event does not clear it. The next `thinking`, `dismissed` or the expiry clears it. Action arguments are never sent.
+Confirmation: after Eddie reads back a risky action, the bridge emits `voice_state: confirming` with `kind`, `prompt` and `expires_in_ms` in place of `idle`; the worker's following `listening` event does not clear it. The next `thinking`, `dismissed` or the expiry clears it. Action arguments are never sent. The dashboard shows `prompt` (Eddie's read-back, not the user's words) under Eddie with “say yes to confirm or no to cancel” until then (#19).
 
 ## Company counts (#25)
 

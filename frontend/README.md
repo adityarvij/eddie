@@ -26,6 +26,24 @@ The voice pipeline now uses openWakeWord and faster-whisper. Follow [offline mod
 
 Supported tools: factual backend summaries and explicit home-mode on/off. Domain rules, lockdown, email and general agent conversation remain pending.
 
+## Rules and confirmations (#19)
+
+Under the counts, **rules** lists up to five active rules, newest first (`block device-metrics-us.amazon.com · Fire Stick · by voice`), from `GET /api/rules`, which `serve.py` relays read-only from the traffic API (`EDDIE_API_URL`, default `http://127.0.0.1:8000`) so the iPad needs no CORS or direct API access. It refreshes on connect and on every `rule_change` event, and says `unavailable` if the API or `eddie.db` is not reachable. There is no full device panel yet (#35); this list stands in for it.
+
+Each `rule_change` adds a `[rule]` feed row and a toast, e.g. “Rule added: block device-metrics-us.amazon.com · Fire Stick · by voice”. The event is sent before DNS acknowledges the rule, so the dashboard says “added”, never “blocked”.
+
+While voice is `confirming`, the overlay shows Eddie's read-back (“Lock down the TV?”) and “SAY YES TO CONFIRM OR NO TO CANCEL”. Both clear on the next reply, on dismissal (Escape, ✕, silence) and when `expires_in_ms` runs out. Nothing is hover-only and nothing is stored in the browser.
+
+Manual check (needs the API and DNS server sharing one `eddie.db`, plus this bridge):
+
+1. Open the dashboard on the Mac and on the iPad (kiosk / Add to Home Screen).
+2. `curl -X POST localhost:8000/rules -H 'Content-Type: application/json' -d '{"pattern":"device-metrics-us.amazon.com","action":"block","created_by":"voice"}'`: both screens show the toast and `[rule]` row, and the list shows the rule.
+3. `curl -X DELETE localhost:8000/rules/<id>`: “Rule removed” appears and the list drops it.
+4. With a confirmation-gated command available, say it: the read-back and yes/no hint stay up through the follow-up listening; wait 15 s and they clear; repeat and press ✕, and they clear.
+5. Reload the iPad page: the list comes back from the API; no toast, feed row or prompt is restored.
+
+Not yet run on hardware: steps 1 to 5 on the iPad in kiosk mode. Step 4 can't be done by voice yet, because no spoken command reaches the confirmation slot until lockdown or email is wired; `node tests/test_frontend_events.cjs` covers expiry and dismissal.
+
 ## Traffic contract for Claude
 
 The browser automatically reconnects to `ws://<page host>:8000/ws/events`: `localhost` on the Mac, the Mac's IP from the iPad. Override with `?traffic=ws://HOST:PORT/path`. Each message may be one event, an array, or `{ "events": [...] }`.

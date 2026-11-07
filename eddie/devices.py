@@ -131,6 +131,12 @@ def display_name(key: str, label: str | None, hostname: str | None, vendor_name:
     return label or hostname or (f"{vendor_name} device" if vendor_name else key)
 
 
+def name_of(conn: sqlite3.Connection, key: str) -> str:
+    """A device key's display name, or the key itself if Eddie hasn't recorded that device."""
+    row = conn.execute("SELECT label, hostname, vendor FROM devices WHERE mac = ?", (key,)).fetchone()
+    return display_name(key, *row) if row else key
+
+
 def clean_label(label: str | None) -> str | None:
     """A label as stored: trimmed, or None to clear it. ValueError if unusable."""
     label = (label or "").strip()
