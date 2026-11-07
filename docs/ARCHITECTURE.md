@@ -58,6 +58,21 @@ Offline mode (#26, `eddie/offline.py`): the watcher also checks `engine_state.of
 
 `eddie/store.py` owns `eddie.db` (path from `EDDIE_DB`) and creates the README schema on first open (WAL mode, so readers don't block the writer). Every parsed DNS question writes one `queries` row with only ts (ms, arrival), device (MAC from `devices.py`, or the client IP if unknown), domain, qtype, action, source and reason; SERVFAILs are logged with the decision that was made, and non-DNS or question-less packets are not logged. The DNS task only puts the row on a bounded in-memory queue (10,000 rows); one writer thread batches inserts. If the writer falls behind, rows are dropped and counted rather than slowing DNS. Ctrl-C and SIGTERM flush the queue before exit; a hard kill loses at most the unflushed rows. Privacy measures: rows older than `EDDIE_RETENTION_DAYS` (default 7) are pruned at start and hourly with `secure_delete` plus a WAL truncate; the database files are `0600`; `EDDIE_DB=off` disables the log. The API reads it for `/devices` counts and recent blocked domains and for the live "what they know" report (`GET /what-they-know` opens its own read-only connection in the thread pool and loads the window's rows, falling back to the in-memory feed when the log has none); the live feed is still the API's own in-memory list. Every privacy decision and known gap is tracked in [PRIVACY.md](PRIVACY.md).
 
+## Traffic monitor (#136)
+
+`eddie/traffic.py` is an optional, separate process (`python -m eddie.traffic`); the DNS server never imports it, so DNS never waits on it. It is off until started with `EDDIE_TRAFFIC_IFACE` (or `--iface`), and refuses to start with `EDDIE_DB=off`. Live capture opens a Linux `AF_PACKET` raw socket on the LAN interface (root or `CAP_NET_RAW`) and reads at most 128 bytes of each frame, enough for Ethernet, 802.1Q, IPv4 / IPv6 and TCP / UDP headers; there is no scapy dependency. `--pcap FILE` replays a classic Ethernet pcap instead (any OS).
+
+Direction comes from Eddie's own MAC on that interface (`/sys/class/net/<iface>/address`, or `--router-mac`): a frame to it is a device's upload, a frame from it a download. The device is the other MAC; the remote is the far IP and port, and only global addresses count, so Eddie's own DNS replies and device-to-device traffic are skipped. Without the router MAC (pcap replay) it falls back to "one side local, the other global", which misses IPv6 devices with global addresses. Bytes are the IP header's length field (headers plus payload as sent). Later IPv4 fragments and IPv6 extension headers are counted with port 0.
+
+Counts stay in memory (at most 10,000 flows; new flows past that are dropped and counted) and are written to `traffic` every 60 s and on exit (Ctrl-C, SIGTERM), then pruned with the query log (`store.prune`, by `last_ts`). Tested against a hand-built fixture capture (`tests/fixtures/traffic.pcap`, checked with `tcpdump -r`) in `tests/test_traffic.py`.
+
+Limits: it only sees other devices' packets when Eddie is their router (#22, not built yet). On the hotspot setup devices send packets straight to the iPhone, so the monitor sees only Eddie's own traffic and records nothing useful; Wi-Fi monitor mode isn't used. Live capture has not been run on the Pi yet. Nothing reads `traffic` yet: mic watch, camera watch and bypass detection are the planned consumers, and there is no API endpoint. nftables counters (kernel-side, no per-packet Python) are the alternative if per-packet parsing proves too slow on the Pi.
+
+```bash
+sudo EDDIE_TRAFFIC_IFACE=wlan0 .venv/bin/python -m eddie.traffic            # Pi in router mode
+uv run python -m eddie.traffic --pcap capture.pcap --router-mac 02:ed:d1:e0:00:01  # replay, any OS
+```
+
 ## Dashboard bridge control (#40)
 
 `frontend/serve.py` serves the page, the `/events` SSE stream and read-only GET endpoints such as `/api/voice/status` to anyone who can reach it; with `--host 0.0.0.0` that includes the iPad. Control routes are POSTs and pass three checks in order:
