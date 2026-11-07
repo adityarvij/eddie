@@ -52,6 +52,14 @@ socket.onmessage({data:JSON.stringify({type:'rule_change',change:'removed',id:8,
 assert.equal(get('notice').textContent,'Rule removed: allow a.example · all devices · by api');
 assert.equal(get('requests').textContent,'3','rule changes are not DNS requests');
 
+// Bypass suspicions: a [bypass?] row and a toast with the API's reason; not a DNS request.
+const bypassReason='TV looked up dns.google (Google Public DNS), an encrypted DNS resolver. It may be sending some lookups there.';
+socket.onmessage({data:JSON.stringify({type:'bypass_suspected',ts:Date.now(),device_mac:'f0:4f:7c:11:22:33',device:'TV',domain:'dns.google',resolver:'Google Public DNS',blocked:false,reason:bypassReason})});
+assert.equal(tag(get('feed').children.at(-1)).parent.textContent,`[bypass?] ${bypassReason}`);
+assert.equal(tag(get('feed').children.at(-1)).className,'tag tag-bypass');
+assert.equal(get('notice').textContent,bypassReason);
+assert.equal(get('requests').textContent,'3','bypass suspicions are not DNS requests');
+
 // Confirming shows the pending read-back, and clears on expiry and on dismissal.
 const confirm=()=>socket.onmessage({data:JSON.stringify({type:'voice_state',state:'confirming',kind:'lockdown',prompt:'Lock down the TV?',expires_in_ms:15000})});
 confirm();

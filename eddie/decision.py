@@ -5,7 +5,8 @@ First match wins:
    rule (the rules table). Under lockdown, an allowlisted domain is still
    allowed, so locking a device down can't cut it off from sign-in, updates or time.
 2. Allowlist: essentials, so a rule or list can't brick a device.
-3. Blocklist.
+3. Blocklist, then, only while block_doh is on (EDDIE_BLOCK_DOH=on), the
+   encrypted DNS resolver names in bypass.RESOLVERS (#97).
 4. Keyword heuristic on the domain's labels.
 5. Cached AI verdict: needed allows; tracker flags as a likely tracker;
    unsure flags. The AI never blocks on its own: on real traffic the local
@@ -39,6 +40,7 @@ import time
 from dataclasses import dataclass
 
 from .beacons import Beacons
+from .bypass import RESOLVERS
 from .events import Action, Source
 
 KEYWORDS = ("metrics", "telemetry", "analytics", "adsystem", "tracking", "beacon", "crashlytics")
@@ -153,6 +155,7 @@ class Engine:
         self.blocklist: frozenset[str] = frozenset()
         self.verdicts: dict[str, Verdict] = {}
         self.beacons = Beacons()
+        self.block_doh = False  # block the resolver names in bypass.RESOLVERS
 
     def set_rules(self, rules) -> None:
         self.rules = RuleIndex(rules)
@@ -187,6 +190,8 @@ class Engine:
             return Decision("allow", "allowlist", entry)
         if entry := matches(domain, self.blocklist):
             return Decision("block", "blocklist", entry)
+        if self.block_doh and (entry := matches(domain, RESOLVERS)):
+            return Decision("block", "blocklist", f"encrypted DNS resolver {entry}")
         if kw := keyword(domain):
             return Decision("block", "heuristic", f'keyword "{kw}"')
         if verdict := self.verdicts.get(domain):
