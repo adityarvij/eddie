@@ -54,3 +54,7 @@ Conversation activity is explicit (`is_eddie_active`): wake activates it, each s
 Dismissal fades and gently lowers Eddie over 320 ms before closing the dialog. Escape uses the same exit. A new wake cancels an unfinished exit; reduced-motion preferences skip the animation. The four-second response timeout starts the exit rather than closing abruptly.
 
 The Open logs control sits directly beneath Eddie, away from the ambient edge glow; its live drawer remains anchored separately.
+
+## Offline company ownership (#25)
+
+`labels.py` preserves precise local category overrides, supplements owner names with 37 public Tracker Radar entries (source/license in `eddie/data/README.md`), and uses tldextract's bundled PSL for unknown registrable domains. Fetching and disk caching are disabled. Owner names alone never trigger blocking or imply tracking. `/summary` adds top-company request/block/tracking counts over the past hour. This view is bounded by the API's in-memory feed and is not an all-time database report.

@@ -55,7 +55,8 @@ def events(since: int = 0, device: str | None = None, limit: int = 200):
 
 @app.get("/summary")
 def summary():
-    return {**totals, "home_mode": state["home_mode"], "text": insights.summary_text(list(recent))}
+    return {**totals, "home_mode": state["home_mode"], "text": insights.summary_text(list(recent)),
+            "companies": insights.company_counts(list(recent)), "company_window_seconds": 3600}
 
 
 @app.get("/what-they-know")

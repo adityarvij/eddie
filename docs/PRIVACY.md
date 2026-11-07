@@ -109,3 +109,7 @@ Ollama runs on the host and is local; the classifier refuses any non-private Oll
 
 - README "Guardrails" said to log only domain, device, time and action. The schema also stores qtype, source and reason, which are needed for the feed and for undo. The guardrail now names those fields too.
 - README "only Gmail" outbound claims leave out upstream DNS and the optional Tavily/Exa lookup. This page is the authoritative list.
+
+### Company summaries (#25, implemented)
+
+Ownership and public suffix data are bundled setup assets. Labeling makes no outbound requests and creates no cache files. Per-company counters are computed from the existing in-memory API events; no new browsing-history store or retention period is added. They count requested DNS lookups, not uploaded data. Unmapped domains are presented as registrable domains rather than guessed companies.
