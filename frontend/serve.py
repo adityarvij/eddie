@@ -15,7 +15,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT.parent / 'voice'))
-from voice_agent import confirmation, request as api_request, forget_conversation respond
+from voice_agent import confirmation, forget_conversation, request as api_request, respond
 from voice_runtime import run as run_voice
 stopped = threading.Event()
 dismissed = threading.Event()  # the close button: end the voice conversation
