@@ -35,7 +35,13 @@ counts = {'requests': 0, 'blocked': 0}
 token = os.environ.get('EDDIE_DASHBOARD_TOKEN') or secrets.token_urlsafe(24)
 # Controls a paired device may use. Starting or stopping the microphone, and feeding traffic
 # events, stay on the Eddie computer whatever token is sent.
-PAIRED_CONTROLS = {'/api/voice/ask'}
+PAIRED_CONTROLS = {'/api/voice/ask', '/api/mode', '/api/offline-mode'}
+# Read-only relays to the traffic API, so the page (and the iPad) need no CORS or direct API access.
+READ_RELAYS = {'/api/rules': ('/rules', 'Rules unavailable.'),
+               '/api/devices': ('/devices?hours=24', 'Devices unavailable.'),
+               '/api/mode': ('/mode', 'Modes unavailable.')}
+# Mode toggles: bridge path -> (API path, the one boolean field it takes).
+MODE_CONTROLS = {'/api/mode': ('/mode', 'home_mode'), '/api/offline-mode': ('/offline-mode', 'offline')}
 
 def is_local(address):
     try:
@@ -148,12 +154,12 @@ class Handler(SimpleHTTPRequestHandler):
     def do_GET(self):
         if self.path == '/api/voice/status':
             return self.json_response(200, {'type': 'voice_status', **voice_state})
-        if self.path == '/api/rules':
-            # Read-only relay so the page (and the iPad) can list rules without the API allowing CORS.
+        if self.path in READ_RELAYS:
+            path, failure = READ_RELAYS[self.path]
             try:
-                return self.json_response(200, api_request('/rules'))
+                return self.json_response(200, api_request(path))
             except Exception:
-                return self.json_response(502, {'message': 'Rules unavailable.'})
+                return self.json_response(502, {'message': failure})
         if self.path in ('/api/what-they-know', '/api/what-they-know?demo=1'):
             # Read-only relay for the report panel; only these two fixed queries are forwarded.
             try:
@@ -235,6 +241,15 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.json_response(400, {'message': 'A question is required.'})
             threading.Thread(target=answer, args=(text,), daemon=True).start()
             return self.json_response(200, {'ok': True})
+        if self.path in MODE_CONTROLS:
+            # The answer is the API's own echo (offline mode adds DNS's `applied`); the page shows only that.
+            path, field = MODE_CONTROLS[self.path]
+            if not isinstance(body, dict) or not isinstance(body.get(field), bool):
+                return self.json_response(400, {'message': f'{field} must be true or false.'})
+            try:
+                return self.json_response(200, api_request(path, {field: body[field]}, timeout=5))
+            except Exception:
+                return self.json_response(502, {'message': 'The traffic API did not confirm the change.'})
         if self.path == '/api/events':
             if not isinstance(body, dict) or not body.get('domain'):
                 return self.json_response(400, {'message': 'A domain is required.'})

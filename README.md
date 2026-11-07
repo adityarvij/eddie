@@ -255,7 +255,7 @@ Use Ollama `format: json`, temperature 0. Never send anything but the domain and
 
 | Method | Path | Returns / does |
 |---|---|---|
-| GET | `/devices?hours=24` | Devices Eddie has seen, with name, vendor and lookup / blocked / flagged counts (see docs/EVENTS.md) |
+| GET | `/devices?hours=24` | Devices Eddie has seen, with name, vendor, lookup / blocked / flagged counts, distinct trackers blocked and the latest blocked domains (see docs/EVENTS.md) |
 | PUT | `/devices/{mac}` | `{label}` names a device ("Fire Stick"); `""` or `null` clears it |
 | GET | `/events?since=&device=` | Recent query rows |
 | GET | `/summary?window=1h` | Totals: queries, blocked, top blocked domains, top companies, per device |

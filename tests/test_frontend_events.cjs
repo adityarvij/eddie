@@ -4,20 +4,20 @@ const fs = require('node:fs');
 class Element {
   get textContent(){return this._text ?? this.children.map(node=>node.textContent).join('');}
   set textContent(value){this._text=value;}
-  constructor(){this.children=[];this.hidden=true;this.dataset={};this.firstChild={textContent:''};this.classList={add(){},remove(){},toggle(){}};}
+  constructor(){this.children=[];this.hidden=true;this.dataset={};this.attrs={};this.firstChild={textContent:''};this.classList={add(){},remove(){},toggle(){}};}
   append(...nodes){for(const node of nodes){node.parent=this;this.children.push(node);}}
   prepend(...nodes){for(const node of nodes){node.parent=this;this.children.unshift(node);}}
   remove(){this.parent.children=this.parent.children.filter(node=>node!==this);}
   querySelector(){return null;} cloneNode(){return new Element();}
   replaceChildren(...nodes){this.children=[];this.append(...nodes);}
-  addEventListener(){} setAttribute(){} focus(){}
+  addEventListener(){} setAttribute(k,v){this.attrs[k]=v;} focus(){}
 }
 const ids=new Map();
 const get=id=>{if(!ids.has(id))ids.set(id,new Element());return ids.get(id);};
 let socket;
 const timers=[];
 const context={document:{getElementById:get,createElement:()=>new Element(),addEventListener(){},activeElement:{tagName:'BODY'}},window:{},location:{search:'',hostname:'localhost'},URLSearchParams,Date,console,
-  setTimeout(fn,ms){timers.push({fn,ms});return timers.length;},clearTimeout(){},fetch(){},EventSource:class{},WebSocket:class{constructor(){socket=this;}}};
+  setTimeout(fn,ms){timers.push({fn,ms});return timers.length;},clearTimeout(){},fetch(){},AbortController,EventSource:class{},WebSocket:class{constructor(){socket=this;}}};
 const source=fs.readFileSync('frontend/app.js','utf8');
 vm.runInNewContext(source,context);
 socket.onmessage({data:JSON.stringify({domain:'example.org',device:'TV',action:'allow',ts:Date.now()})});
@@ -70,3 +70,82 @@ assert.equal(get('report-facts').children[0].textContent,'Streaming happens most
 context.window.eddie.renderReport({demo:false,hours:24,facts:[]});
 assert.equal(get('report-demo').hidden,true);
 assert.equal(get('report-title').textContent,'what they know · last 24h');
+
+// Device panel (#35): name, distinct trackers blocked and the latest blocked domains.
+(async () => {
+  const flush = () => new Promise(resolve => setImmediate(resolve));
+  const calls = [];
+  // Each fetch waits until the test answers it, so the pending state can be checked in between.
+  context.fetch = (path, init) => new Promise(resolve => calls.push({path, init, reply: (status, body) => resolve({ok: status < 400, status, json: async () => body})}));
+  const answer = async (path, status, body) => { const i = calls.findIndex(c => c.path === path); assert.ok(i >= 0, `no request to ${path}`); calls.splice(i, 1)[0].reply(status, body); await flush(); await flush(); };
+
+  socket.onmessage({data:JSON.stringify({type:'snapshot',events:[],totals:{seen:0,blocked:0},home_mode:false})});
+  await answer('/api/devices', 200, {hours:24, devices:[
+    {mac:'f0:4f:7c:11:22:33', name:'Fire Stick', trackers:14, blocked:160, recent_blocks:[{domain:'device-metrics-us.amazon.com',ts:2},{domain:'unagi-na.amazon.com',ts:1}]},
+    {mac:'172.20.10.9', name:'172.20.10.9', trackers:1, blocked:1, recent_blocks:[{domain:'ads.example',ts:1}]},
+    ...['a','b','c','d'].map(n => ({mac:n, name:n, trackers:0, blocked:0, recent_blocks:[]}))]});
+  assert.equal(get('device-count').textContent, 6);
+  const rows = get('device-list').children;
+  assert.equal(rows[0].textContent, 'Fire Stick · 14 trackers blocked');
+  assert.equal(rows[0].children[0].textContent, 'recent: device-metrics-us.amazon.com, unagi-na.amazon.com');
+  assert.equal(rows[1].textContent, '172.20.10.9 · 1 tracker blocked');
+  assert.equal(rows[2].children.length, 0, 'no recent line without blocks');
+  assert.equal(rows.at(-1).textContent, '+1 more');
+
+  // Modes: the initial state comes from the backend; until then the toggles can't be pressed.
+  assert.equal(get('home-mode').disabled, true);
+  await answer('/api/mode', 200, {home_mode:false, offline:false, offline_applied:true});
+  assert.equal(get('home-mode').textContent, 'home mode: off');
+  assert.equal(get('home-mode').disabled, false);
+  assert.equal(get('offline-mode').textContent, 'offline mode: off');
+
+  // A click shows pending, not the new state, until the bridge answers with the API's echo.
+  get('home-mode').onclick();
+  assert.equal(get('home-mode').textContent, 'home mode: turning on…');
+  assert.equal(get('home-mode').disabled, true);
+  assert.equal(get('home-mode').attrs['aria-busy'], 'true');
+  assert.equal(get('home-mode').attrs['aria-pressed'], 'false', 'not shown as on before the backend confirms');
+  get('home-mode').onclick();
+  assert.equal(calls.filter(c => c.path === '/api/mode' && c.init).length, 1, 'a second tap while pending sends nothing');
+  const sent = calls.find(c => c.path === '/api/mode' && c.init);
+  assert.equal(sent.init.method, 'POST');
+  assert.deepEqual(JSON.parse(sent.init.body), {home_mode:true});
+  await answer('/api/mode', 200, {home_mode:true});
+  assert.equal(get('home-mode').textContent, 'home mode: on');
+  assert.equal(get('home-mode').attrs['aria-pressed'], 'true');
+  assert.equal(get('home-mode').attrs['aria-busy'], 'false');
+  assert.equal(get('home-note').textContent, 'home mode is a backend flag; DNS does not enforce it yet');
+
+  // A failed change keeps the last acknowledged state and says so.
+  get('home-mode').onclick();
+  await answer('/api/mode', 502, {message:'The traffic API did not confirm the change.'});
+  assert.equal(get('notice').textContent, 'Home mode change not confirmed: The traffic API did not confirm the change.');
+  assert.equal(get('home-mode').textContent, 'home mode: on');
+  await answer('/api/mode', 200, {home_mode:true, offline:false, offline_applied:true});  // the reload after a failure
+
+  // Offline mode the API stored but DNS hasn't loaded is shown in red, not as done.
+  get('offline-mode').onclick();
+  assert.equal(get('offline-mode').textContent, 'offline mode: turning on…');
+  assert.deepEqual(JSON.parse(calls.find(c => c.path === '/api/offline-mode').init.body), {offline:true});
+  await answer('/api/offline-mode', 200, {offline:true, applied:false});
+  assert.equal(get('offline-mode').textContent, 'offline mode: on');
+  assert.equal(get('offline-note').textContent, 'offline mode on not yet applied by DNS');
+  assert.equal(get('home-note').textContent, 'home mode is a backend flag; DNS does not enforce it yet', 'both notes show at once');
+
+  // Backend broadcasts (another screen, or voice) update the toggles.
+  socket.onmessage({data:JSON.stringify({type:'offline_mode', offline:true, applied:true})});
+  assert.equal(get('offline-note').textContent, '');
+  socket.onmessage({data:JSON.stringify({type:'mode', home_mode:false})});
+  assert.equal(get('home-mode').textContent, 'home mode: off');
+  assert.equal(get('home-note').textContent, '');
+  assert.equal(get('requests').textContent, '0', 'mode events are not DNS requests (the snapshot reset the count)');
+
+  // No backend: the toggles say unavailable and can't be pressed.
+  timers.filter(t => t.ms === 30000).at(-1).fn();
+  await answer('/api/devices', 502, {message:'Devices unavailable.'});
+  await answer('/api/mode', 502, {message:'Modes unavailable.'});
+  assert.equal(get('device-count').textContent, 'unavailable');
+  assert.equal(get('home-mode').textContent, 'home mode: unavailable');
+  assert.equal(get('offline-mode').disabled, true);
+  console.log('Frontend device panel and mode toggle checks passed');
+})().catch(error => { console.error(error); process.exit(1); });
