@@ -37,6 +37,7 @@ TICK = 1.0  # seconds between checks for new client IPs
 MAX_TRACKED = 4096  # client IPs held between reads; more are ignored until the next read
 LEASES = "/var/lib/misc/dnsmasq.leases"
 MAX_LABEL = 40
+RECENT_BLOCKS = 3  # blocked domains listed per device by GET /devices
 COLUMNS = ("mac", "ip", "hostname", "vendor", "label", "first_seen", "last_seen")
 
 log = logging.getLogger("eddie.devices")
@@ -233,19 +234,28 @@ def all_devices(conn: sqlite3.Connection, since_ms: int) -> list[dict]:
     """Every known device plus any key in the query log since since_ms, with lookup counts.
 
     blocked counts lookups Eddie blocked (trackers, ads, rules); flagged ones
-    were forwarded while unknown. Most blocked first.
+    were forwarded while unknown. trackers counts distinct blocked domains, and
+    recent_blocks holds the last RECENT_BLOCKS of them, newest first.
+    Most blocked first.
     """
     devices = {r[0]: _row(r) for r in conn.execute(f"SELECT {', '.join(COLUMNS)} FROM devices")}
     counts = {key: (n, blocked or 0, flagged or 0, last) for key, n, blocked, flagged, last in conn.execute(
         "SELECT device_mac, COUNT(*), SUM(action = 'block'), SUM(action = 'flag'), MAX(ts)"
         " FROM queries WHERE ts >= ? GROUP BY device_mac", (since_ms,))}
+    blocks: dict[str, list[tuple[int, str]]] = {}
+    for key, domain, last in conn.execute(
+            "SELECT device_mac, domain, MAX(ts) FROM queries WHERE ts >= ? AND action = 'block'"
+            " GROUP BY device_mac, domain", (since_ms,)):
+        blocks.setdefault(key, []).append((last, domain))
     out = []
     for key in devices.keys() | counts.keys():
         d = devices.get(key) or dict.fromkeys(COLUMNS) | {"mac": key}
         n, blocked, flagged, last = counts.get(key, (0, 0, 0, None))
+        domains = sorted(blocks.get(key, ()), reverse=True)
         out.append({**d, "name": display_name(key, d["label"], d["hostname"], d["vendor"]),
                     "last_seen": max(filter(None, (d["last_seen"], last)), default=None),
-                    "queries": n, "blocked": blocked, "flagged": flagged})
+                    "queries": n, "blocked": blocked, "flagged": flagged, "trackers": len(domains),
+                    "recent_blocks": [{"domain": dom, "ts": ts} for ts, dom in domains[:RECENT_BLOCKS]]})
     return sorted(out, key=lambda d: (-d["blocked"], -d["queries"], d["mac"]))
 
 

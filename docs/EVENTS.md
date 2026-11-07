@@ -177,7 +177,9 @@ this needs `EDDIE_DB` (off answers 503).
 {"hours": 24, "devices": [
   {"mac": "f0:4f:7c:11:22:33", "ip": "172.20.10.5", "name": "Fire Stick", "label": "Fire Stick",
    "hostname": null, "vendor": "Amazon", "first_seen": 1762531200123, "last_seen": 1762534800456,
-   "queries": 412, "blocked": 160, "flagged": 12}
+   "queries": 412, "blocked": 160, "flagged": 12, "trackers": 14,
+   "recent_blocks": [{"domain": "device-metrics-us.amazon.com", "ts": 1762534800456},
+                     {"domain": "unagi-na.amazon.com", "ts": 1762534790001}]}
 ]}
 ```
 
@@ -188,6 +190,8 @@ this needs `EDDIE_DB` (off answers 503).
 | `vendor` | from the MAC's OUI prefix (bundled table of household brands); null if unknown or the MAC is a phone's private (randomised) address |
 | `hostname` | from a dnsmasq leases file (router mode); null on the hotspot. Never from reverse DNS |
 | `queries` / `blocked` / `flagged` | lookups in the window: all, blocked by Eddie, forwarded while unknown |
+| `trackers` | distinct domains blocked in the window (each counted once however often it was asked for) |
+| `recent_blocks` | up to three of those domains, newest last block first, with that block's `ts` |
 
 Sorted most blocked first. A device's first lookups can be logged under its
 IP before the first ARP read (about a second), so a short-lived IP row may
@@ -232,7 +236,20 @@ voice tools only read the live report; "what do they know about me" asks for
 
 The dashboard bridge SSE endpoint `/events` emits `voice_status` with `status` (`off`, `starting`, `ready`, `error`), optional `engine` (`vosk` prototype or `openwakeword`) and `message`. `GET /api/voice/status` returns the latest status. Start/stop POST endpoints operate the local microphone. These are separate from the traffic API on port 8000.
 
-Control auth (#40): POSTs need a `Host` that is an IP, `localhost` or `.local`, and a same-origin `Origin` if one is sent (403 otherwise). From the Eddie computer (loopback) no token is needed. From another device, only `POST /api/voice/ask` (`{text}`) is allowed, with `Authorization: Bearer <pairing token>`; a missing or wrong token gets 401 `{message}`. `/api/voice/start`, `/api/voice/stop`, `/api/voice/dismiss` and `/api/events` answer 403 from other devices whatever the token.
+Relays to the traffic API (`EDDIE_API_URL`, default `http://127.0.0.1:8000`), so the page needs no CORS or direct API access. Each answers 502 `{message}` if the API errors or doesn't answer, never an empty or guessed result:
+
+| Bridge | Traffic API | Notes |
+|--------|-------------|-------|
+| `GET /api/rules` | `GET /rules` | read-only |
+| `GET /api/devices` | `GET /devices?hours=24` | read-only |
+| `GET /api/mode` | `GET /mode` | read-only |
+| `GET /api/what-they-know[?demo=1]` | `GET /what-they-know?hours=168` or `?demo=true` | read-only |
+| `POST /api/mode` `{home_mode: bool}` | `POST /mode` | answers with the API's echo `{home_mode}` |
+| `POST /api/offline-mode` `{offline: bool}` | `POST /offline-mode` | answers with `{offline, applied}`; `applied: false` is passed through |
+
+The two POSTs forward only that one boolean (anything else is 400) and wait up to 5 s for the API.
+
+Control auth (#40): POSTs need a `Host` that is an IP, `localhost` or `.local`, and a same-origin `Origin` if one is sent (403 otherwise). From the Eddie computer (loopback) no token is needed. From another device, only `POST /api/voice/ask` (`{text}`), `POST /api/mode` and `POST /api/offline-mode` are allowed, with `Authorization: Bearer <pairing token>`; a missing or wrong token gets 401 `{message}`. `/api/voice/start`, `/api/voice/stop`, `/api/voice/dismiss` and `/api/events` answer 403 from other devices whatever the token.
 
 Wake lifecycle: `wake`, `voice_state: listening`, `voice_state: thinking`, optional `transcript`, `agent_reply`, `speaking`, `speech_end`, then `voice_state: listening` again for a follow-up without the wake phrase. If no speech starts within 4 seconds of listening, the worker emits `voice_state: dismissed` and the dashboard closes Eddie and returns to the live feed; the next request needs the wake phrase. No transcript is persisted. Capture or inference failure yields `voice_status: error`.
 

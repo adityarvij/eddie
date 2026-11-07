@@ -273,6 +273,24 @@ class DevicesAPITests(unittest.IsolatedAsyncioTestCase):
                                      found['172.20.10.9']['flagged']))
         self.assertEqual(3, (await self.listed(hours=48))[FIRE_STICK]['blocked'])
 
+    async def test_trackers_count_distinct_blocked_domains_and_list_the_latest(self):
+        now = int(time.time() * 1000)
+        conn = store.connect(self.path)
+        with conn:
+            conn.executemany(f"INSERT INTO queries ({', '.join(store.QUERY_COLUMNS)}) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                             [(now - 5000, FIRE_STICK, 'unagi-na.amazon.com', 'A', 'block', 'blocklist', ''),
+                              (now + 1000, FIRE_STICK, 'ads.example', 'A', 'block', 'rule', ''),
+                              (now + 2000, FIRE_STICK, 'device-metrics-us.amazon.com', 'AAAA', 'block', 'blocklist', '')])
+        conn.close()
+        stick = (await self.listed())[FIRE_STICK]
+        self.assertEqual((5, 3), (stick['blocked'], stick['trackers']))  # repeats count once; old.example is outside 24 h
+        self.assertEqual(['device-metrics-us.amazon.com', 'ads.example', 'unagi-na.amazon.com'],
+                         [b['domain'] for b in stick['recent_blocks']])
+        self.assertEqual(now + 2000, stick['recent_blocks'][0]['ts'])
+        self.assertEqual(4, (await self.listed(hours=48))[FIRE_STICK]['trackers'])
+        laptop = (await self.listed())['172.20.10.9']
+        self.assertEqual((0, []), (laptop['trackers'], laptop['recent_blocks']))  # flagged isn't blocked
+
     async def test_labeled_device_shows_its_label(self):
         r = await self.http.put(f'/devices/{FIRE_STICK.upper()}', json={'label': 'Fire Stick'})
         self.assertEqual(200, r.status_code)

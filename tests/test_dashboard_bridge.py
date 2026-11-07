@@ -103,6 +103,15 @@ class LanAccess(unittest.TestCase):
                 threading.Event().wait(0.02)
             answer.assert_called_once_with('what is the TV doing?')
 
+    def test_lan_mode_toggles_need_the_pairing_token(self):
+        with patch.object(serve, 'api_request', lambda path, body=None, timeout=3: dict(body)):
+            for path, body in (('/api/mode', {'home_mode': True}), ('/api/offline-mode', {'offline': False})):
+                status, reply = self.call(lan_ip(), path, body)
+                self.assertEqual(401, status, path)
+                self.assertIn('Pair', json.loads(reply)['message'])
+                status, reply = self.call(lan_ip(), path, body, {'Authorization': 'Bearer ' + serve.token})
+                self.assertEqual((200, body), (status, json.loads(reply)), path)
+
     def test_localhost_keeps_controls(self):
         status, _ = self.call('127.0.0.1', '/api/events', {'domain': 'example.com', 'action': 'block'})
         self.assertEqual(200, status)
@@ -117,12 +126,12 @@ class LanAccess(unittest.TestCase):
 class RulesRelay(unittest.TestCase):
     """GET /api/rules relays the traffic API's rule list read-only, from any viewer."""
 
-    def get(self, api_request):
+    def get(self, api_request, path='/api/rules'):
         server = ThreadingHTTPServer(('127.0.0.1', 0), serve.Handler)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         try:
             with patch.object(serve, 'api_request', api_request):
-                with urllib.request.urlopen(f'http://127.0.0.1:{server.server_address[1]}/api/rules', timeout=3) as r:
+                with urllib.request.urlopen(f'http://127.0.0.1:{server.server_address[1]}{path}', timeout=3) as r:
                     return r.status, json.load(r)
         except urllib.error.HTTPError as error:
             return error.code, json.loads(error.read())
@@ -138,6 +147,62 @@ class RulesRelay(unittest.TestCase):
         def down(path):
             raise urllib.error.URLError('refused')
         self.assertEqual((502, {'message': 'Rules unavailable.'}), self.get(down))
+        self.assertEqual((502, {'message': 'Devices unavailable.'}), self.get(down, '/api/devices'))
+        self.assertEqual((502, {'message': 'Modes unavailable.'}), self.get(down, '/api/mode'))
+
+    def test_relays_devices_and_modes(self):
+        listed = {'hours': 24, 'devices': [{'mac': 'f0:4f:7c:11:22:33', 'name': 'Fire Stick', 'trackers': 2}]}
+        mode = {'home_mode': False, 'offline': True, 'offline_applied': False}
+        api = {'/devices?hours=24': listed, '/mode': mode}.get
+        self.assertEqual((200, listed), self.get(api, '/api/devices'))
+        self.assertEqual((200, mode), self.get(api, '/api/mode'))
+
+
+class ModeControls(unittest.TestCase):
+    """POST /api/mode and /api/offline-mode forward one boolean and answer with the API's own echo."""
+
+    def setUp(self):
+        self.server = ThreadingHTTPServer(('127.0.0.1', 0), serve.Handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.sent = []
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+    def post(self, path, body, api_request):
+        def record(api_path, payload=None, timeout=3):
+            self.sent.append((api_path, payload))
+            return api_request(api_path, payload)
+        request = urllib.request.Request(f'http://127.0.0.1:{self.server.server_address[1]}{path}',
+                                         data=json.dumps(body).encode(), method='POST')
+        with patch.object(serve, 'api_request', record):
+            try:
+                with urllib.request.urlopen(request, timeout=3) as r:
+                    return r.status, json.load(r)
+            except urllib.error.HTTPError as error:
+                return error.code, json.loads(error.read())
+
+    def test_forwards_the_toggle_and_returns_the_echo(self):
+        self.assertEqual((200, {'home_mode': True}),
+                         self.post('/api/mode', {'home_mode': True}, lambda path, body: dict(body)))
+        # Offline mode reports DNS's acknowledgment; the bridge passes `applied: false` through, never upgrades it.
+        self.assertEqual((200, {'offline': True, 'applied': False}),
+                         self.post('/api/offline-mode', {'offline': True}, lambda path, body: {**body, 'applied': False}))
+        self.assertEqual([('/mode', {'home_mode': True}), ('/offline-mode', {'offline': True})], self.sent)
+
+    def test_only_a_boolean_is_forwarded(self):
+        for body in ({}, {'home_mode': 'yes'}, {'home_mode': 1}, {'offline': True}):
+            status, reply = self.post('/api/mode', body, lambda path, payload: {})
+            self.assertEqual(400, status, body)
+            self.assertIn('home_mode', reply['message'])
+        self.assertEqual([], self.sent)
+
+    def test_api_failure_is_502_not_a_success(self):
+        def down(path, body):
+            raise urllib.error.URLError('refused')
+        self.assertEqual((502, {'message': 'The traffic API did not confirm the change.'}),
+                         self.post('/api/offline-mode', {'offline': True}, down))
 
 
 class Dismiss(unittest.TestCase):

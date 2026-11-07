@@ -57,8 +57,64 @@ async function loadRules() {
   try { const r = await fetch('/api/rules'); if (!r.ok) throw Error(); renderRules(await r.json()); }
   catch { $('rules-count').textContent = 'unavailable'; $('rules-list').replaceChildren(); }
 }
+// Device panel (#35): each device's name, distinct domains blocked and the latest of them, from eddie.db.
+function renderDevices(list) {
+  $('device-count').textContent = list.length;
+  const items = list.slice(0, 5).map(d => {
+    const li = document.createElement('li'); li.textContent = `${d.name} · ${d.trackers} tracker${d.trackers === 1 ? '' : 's'} blocked`;
+    const recent = (d.recent_blocks || []).map(b => b.domain);
+    if (recent.length) { const small = document.createElement('small'); small.textContent = `recent: ${recent.join(', ')}`; li.append(small); }
+    return li;
+  });
+  if (list.length > 5) { const more = document.createElement('li'); more.textContent = `+${list.length - 5} more`; items.push(more); }
+  $('device-list').replaceChildren(...items);
+}
+async function loadDevices() {
+  try { const r = await fetch('/api/devices'); if (!r.ok) throw Error(); renderDevices((await r.json()).devices || []); }
+  catch { $('device-count').textContent = 'unavailable'; $('device-list').replaceChildren(); }
+}
+// Mode toggles show only state the backend acknowledged: a click shows "turning on…" until the API
+// answers, and offline mode says when DNS hasn't loaded the change. Home mode is a backend flag only.
+const modes = {home_mode: null, offline: null, offline_applied: false}, modePending = {};
+function applyModes(state) {
+  if (typeof state.home_mode === 'boolean') modes.home_mode = state.home_mode;
+  if (typeof state.offline === 'boolean') { modes.offline = state.offline; modes.offline_applied = state.offline_applied === true; }
+  renderModes();
+}
+function renderModes() {
+  for (const [id, label, key] of [['home-mode', 'home mode', 'home_mode'], ['offline-mode', 'offline mode', 'offline']]) {
+    const button = $(id), pending = modePending[key], on = modes[key];
+    button.disabled = pending !== undefined || on === null;
+    button.setAttribute('aria-busy', String(pending !== undefined)); button.setAttribute('aria-pressed', String(on === true));
+    button.textContent = pending !== undefined ? `${label}: turning ${pending ? 'on' : 'off'}…` : `${label}: ${on === null ? 'unavailable' : on ? 'on' : 'off'}`;
+  }
+  const waiting = modes.offline !== null && modePending.offline === undefined && !modes.offline_applied;
+  $('offline-note').textContent = waiting ? `offline mode ${modes.offline ? 'on' : 'off'} not yet applied by DNS` : '';
+  $('home-note').textContent = modes.home_mode ? 'home mode is a backend flag; DNS does not enforce it yet' : '';
+}
+async function loadModes() {
+  try { const r = await fetch('/api/mode'); if (!r.ok) throw Error(); applyModes(await r.json()); }
+  catch { modes.home_mode = modes.offline = null; renderModes(); }
+}
+async function setMode(key, on) {
+  if (modePending[key] !== undefined) return;
+  modePending[key] = on; renderModes();
+  const abort = new AbortController(), timer = setTimeout(() => abort.abort(), 10000);
+  try {
+    const r = await control(key === 'home_mode' ? '/api/mode' : '/api/offline-mode', {[key]: on}, abort.signal);
+    const data = await r.json(); if (!r.ok) throw Error(data.message);
+    applyModes({...data, offline_applied: data.applied});
+  } catch (e) {
+    notice(`${key === 'home_mode' ? 'Home' : 'Offline'} mode change not confirmed: ${e.name === 'AbortError' || !e.message ? 'the traffic API did not answer.' : e.message}`);
+    loadModes();
+  } finally { clearTimeout(timer); delete modePending[key]; renderModes(); }
+}
+// Counts move with traffic, so the panels refresh every 30 s as well as on (re)connect.
+function refreshPanels() { clearTimeout(refreshPanels.timer); refreshPanels.timer = setTimeout(refreshPanels, 30000); loadDevices(); loadModes(); }
 function consumeEvent(event) {
   if (event.type === 'ai_verdict') return feedNote('ai', `${event.domain} → ${event.label} / ${event.reason}`);
+  if (event.type === 'mode') return applyModes({home_mode: event.home_mode});
+  if (event.type === 'offline_mode') return applyModes({offline: event.offline, offline_applied: event.applied});
   if (event.type === 'rule_change') {
     // Stored, not enforced: the event is sent before DNS acknowledges it, so never say "blocked".
     const text = `Rule ${event.change === 'removed' ? 'removed' : 'added'}: ${ruleLine(event)}`;
@@ -137,11 +193,14 @@ $('pause').onclick = () => { paused = !paused; $('pause').textContent = paused ?
 // A paired device (the iPad) opens the link the Eddie computer prints; the token stays in the
 // URL fragment, which is never sent in a request line and is not written to browser storage.
 const pairToken = new URLSearchParams(String(location.hash || '').slice(1)).get('pair');
-const control = (path, body) => fetch(path, {method:'POST', headers: {'Content-Type':'application/json', ...(pairToken ? {Authorization:`Bearer ${pairToken}`} : {})}, body: JSON.stringify(body || {})});
+const control = (path, body, signal) => fetch(path, {method:'POST', signal, headers: {'Content-Type':'application/json', ...(pairToken ? {Authorization:`Bearer ${pairToken}`} : {})}, body: JSON.stringify(body || {})});
 $('mic').onclick = async () => { try { const r = await control(voiceReady ? '/api/voice/stop' : '/api/voice/start'); const data=await r.json(); if (!r.ok) throw Error(data.message || 'Could not start microphone.'); notice(data.message); } catch(e) { notice(e.message); } };
 const stream = new EventSource('/events'); stream.onopen = () => { $('feed-status').textContent='Connected to local event bridge'; }; stream.onerror=()=>{ $('feed-status').textContent='Reconnecting to local event bridge…'; if(dialog.open) dismiss(); }; stream.onmessage=e=>{ try { const event=JSON.parse(e.data); if(event.type==='traffic_status'){ $('connection').firstChild.textContent=event.connected?'Connected':'Waiting'; $('source-label').textContent=event.connected?'LIVE TRAFFIC':'WAITING FOR TRAFFIC'; } else consumeEvent(event); } catch {} };
 // The traffic API runs on the same machine as this page (localhost on the Mac, its LAN IP from the iPad).
 const trafficUrl = new URLSearchParams(location.search).get('traffic') || `ws://${location.hostname || 'localhost'}:8000/ws/events`;
-function connectTraffic() { let ws; try { ws=new WebSocket(trafficUrl); } catch { return; } ws.onopen=()=>{ $('connection').firstChild.textContent='Connected'; $('source-label').textContent='LIVE TRAFFIC'; }; ws.onmessage=e=>{ try { const message=JSON.parse(e.data); if(message.type==='snapshot'){ total=0; blocked=0; allowedCount=0; deviceSet.clear(); $('feed').replaceChildren(); } const events=Array.isArray(message)?message:Array.isArray(message.events)?message.events:[message]; events.forEach(consumeEvent); if(message.type==='snapshot'){ (message.ai_verdicts || []).forEach(consumeEvent); loadRules(); } const totals=message.totals || (message.type==='totals'?message:null); if(totals){ total=totals.seen; blocked=totals.blocked; $('requests').textContent=total.toLocaleString(); $('blocked').textContent=blocked.toLocaleString(); updateCounts(); } } catch {} }; ws.onclose=()=>{ $('connection').firstChild.textContent='Waiting'; $('source-label').textContent='WAITING FOR TRAFFIC'; setTimeout(connectTraffic,2500); }; ws.onerror=()=>ws.close(); }
+function connectTraffic() { let ws; try { ws=new WebSocket(trafficUrl); } catch { return; } ws.onopen=()=>{ $('connection').firstChild.textContent='Connected'; $('source-label').textContent='LIVE TRAFFIC'; }; ws.onmessage=e=>{ try { const message=JSON.parse(e.data); if(message.type==='snapshot'){ total=0; blocked=0; allowedCount=0; deviceSet.clear(); $('feed').replaceChildren(); } const events=Array.isArray(message)?message:Array.isArray(message.events)?message.events:[message]; events.forEach(consumeEvent); if(message.type==='snapshot'){ (message.ai_verdicts || []).forEach(consumeEvent); loadRules(); refreshPanels(); } const totals=message.totals || (message.type==='totals'?message:null); if(totals){ total=totals.seen; blocked=totals.blocked; $('requests').textContent=total.toLocaleString(); $('blocked').textContent=blocked.toLocaleString(); updateCounts(); } } catch {} }; ws.onclose=()=>{ $('connection').firstChild.textContent='Waiting'; $('source-label').textContent='WAITING FOR TRAFFIC'; setTimeout(connectTraffic,2500); }; ws.onerror=()=>ws.close(); }
+$('home-mode').onclick = () => setMode('home_mode', !modes.home_mode);
+$('offline-mode').onclick = () => setMode('offline', !modes.offline);
 connectTraffic();
 loadRules();
+refreshPanels();
