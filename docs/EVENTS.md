@@ -38,8 +38,10 @@ The DNS server sends every lookup here through `eddie/feed.py`: fire-and-forget
 from a background thread, in batches (a list body), with a 1 s timeout, so DNS
 never waits. `EDDIE_API_URL` (default `http://127.0.0.1:8000`, local addresses
 only) picks the API and `EDDIE_FEED=off` turns it off. Events the API doesn't
-accept in time are dropped, not retried. Until device labels (#14) land, real
-events carry `device_mac: "ip:<client IP>"` and `device: "<client IP>"`.
+accept in time are dropped, not retried. Real events carry the device's MAC
+and name (see Devices below); a client whose MAC isn't known yet is
+`device_mac: "ip:<client IP>"` and `device: "<client IP>"`. A new label shows
+in the feed within 30 s.
 
 The DNS server doesn't send every lookup. Network plumbing (reverse lookups
 under `.arpa`, service-discovery names with a `_` label such as
@@ -81,7 +83,7 @@ before every list: device rule, then global rule (docs/ARCHITECTURE.md).
 |--------------|-------|
 | `pattern`    | `a.com` matches only a.com; `*.a.com` matches a.com and every subdomain. Lowercased, trailing dot dropped. At least two labels: empty, `*`, `com` and `*.com` are refused. IP addresses are refused (`192.168.1.10`, `*.10.0.0.1`, `::1`): a name whose last label is all digits isn't a domain. |
 | `action`     | `block` \| `allow` |
-| `device_mac` | optional; omit for every device. Until #14 the DNS server identifies a device by its client IP, so use the IP for now. |
+| `device_mac` | optional; omit for every device. Use the device's `mac` from `GET /devices` (its MAC, or its client IP while the MAC is unknown). A rule made with a client IP also matches the device after its MAC becomes known. |
 | `created_by` | optional, default `"user"`; exactly `user` \| `voice` \| `agent` |
 
 Answers `201` with the stored row plus the DNS acknowledgment:
@@ -125,6 +127,39 @@ Every successful add or delete also pushes a `rule_change` on `/ws/events`:
 
 Devices cache answers (60 s for blocked lookups, the upstream TTL for allowed
 ones), so a device may not ask Eddie again until its cache expires.
+
+## Devices: `GET /devices`, `PUT /devices/{mac}`
+
+The DNS server maps each client IP to a MAC from the ARP table
+(`eddie/devices.py`) and records every device that looks something up in the
+`devices` table of `eddie.db`. Lookup counts come from the DNS query log, so
+this needs `EDDIE_DB` (off answers 503).
+
+`GET /devices?hours=24` (1 to 168):
+
+```json
+{"hours": 24, "devices": [
+  {"mac": "f0:4f:7c:11:22:33", "ip": "172.20.10.5", "name": "Fire Stick", "label": "Fire Stick",
+   "hostname": null, "vendor": "Amazon", "first_seen": 1762531200123, "last_seen": 1762534800456,
+   "queries": 412, "blocked": 160, "flagged": 12}
+]}
+```
+
+| Field | Notes |
+|-------|-------|
+| `mac` | the device key used in `queries` and rules: its MAC, or its client IP if ARP never resolved it (Eddie itself, a client on another subnet) |
+| `name` | first match wins: `label`, DHCP `hostname`, `"<vendor> device"`, then `mac` |
+| `vendor` | from the MAC's OUI prefix (bundled table of household brands); null if unknown or the MAC is a phone's private (randomised) address |
+| `hostname` | from a dnsmasq leases file (router mode); null on the hotspot. Never from reverse DNS |
+| `queries` / `blocked` / `flagged` | lookups in the window: all, blocked by Eddie, forwarded while unknown |
+
+Sorted most blocked first. A device's first lookups can be logged under its
+IP before the first ARP read (about a second), so a short-lived IP row may
+appear next to the MAC row.
+
+`PUT /devices/{mac}` with `{"label": "Fire Stick"}` names a device Eddie has
+seen (`404` otherwise); `""` or `null` clears it. Labels are at most 40
+printable characters. Answers with the stored device and its `name`.
 
 ## What they know: `GET /what-they-know?hours=24`
 
