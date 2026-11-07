@@ -246,6 +246,7 @@ Use Ollama `format: json`, temperature 0. Never send anything but the domain and
 | GET | `/devices` | Devices with tracker counts |
 | GET | `/events?since=&device=` | Recent query rows |
 | GET | `/summary?window=1h` | Totals: queries, blocked, top blocked domains, top companies, per device |
+| GET | `/what-they-know?hours=24` | "What they know about you" facts `{fact, evidence, confidence}` + spoken text (scaffold; see docs/EVENTS.md) |
 | POST | `/rules` | `{pattern, action, device_mac?}` add rule; takes effect immediately (no cache) |
 | DELETE | `/rules/{id}` | Remove rule |
 | POST | `/offline-mode` | Toggle: stop forwarding to upstream, prove the AI still works |
@@ -257,6 +258,7 @@ Use Ollama `format: json`, temperature 0. Never send anything but the domain and
 |---|---|---|
 | `get_summary` | window, device? | Reads `/summary` |
 | `get_recent_blocks` | device?, limit | Last blocked domains with reasons |
+| `what_they_know` | hours? | Reads `/what-they-know` (implemented in `voice/voice_agent.py`) |
 | `block` | pattern, device? | Adds BLOCK rule |
 | `allow` | pattern, device? | Adds ALLOW rule |
 | `lockdown_device` | device, keep (list) | Blocks everything for that device except keep patterns |
@@ -462,6 +464,6 @@ With a Fire Stick you'll mainly see Safety, What's on screen, Identity linking a
 
 The offline wake/capture/transcription worker and deterministic summary/home-mode tool router are implemented. Whisper, shared wake features, Vosk and Piper Lessac assets are provisioned on the development Mac. The dedicated Hey Eddie ONNX model still needs training; the explicit offline Vosk prototype is available now via `./scripts/run_voice.sh`. Live-room microphone accuracy remains unverified. General Ollama tool calling, domain rules, lockdown and email are not yet connected. See [voice setup](voice/README.md), [architecture and remaining work](docs/ARCHITECTURE.md), and [contributor instructions](AGENTS.md). The Mac is the development host; final deployment stays portable to Linux.
 
-The voice view now features a larger active Eddie, spoken interaction without a text box, and a bottom-right Open logs drawer for recent network activity.
+The voice view now features a larger active Eddie, spoken interaction without a text box, and an Open logs control beneath Eddie that opens a drawer for recent network activity.
 
 Voice conversations remain active between requests without repeating Hey Eddie. Four seconds waiting without speech dismisses Eddie, including immediately after the initial wake.
