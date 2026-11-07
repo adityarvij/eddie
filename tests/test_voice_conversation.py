@@ -35,6 +35,7 @@ class ConversationTests(unittest.TestCase):
             'onnxruntime': SimpleNamespace(disable_telemetry_events=lambda: None),
             'sounddevice': SimpleNamespace(InputStream=Mock(return_value=stream)),
             'faster_whisper': SimpleNamespace(WhisperModel=Mock(return_value=transcriber)),
+            'speech_gate': SimpleNamespace(SpeechGate=lambda **kwargs: Mock(side_effect=lambda frame: bool(np.max(frame)>0)), ready_cue=lambda *args: None),
             'wake_detector': SimpleNamespace(VoskWake=Mock(return_value=detector)),
         }
         with patch.dict(sys.modules, modules), patch.dict(os.environ, {'EDDIE_WAKE_ENGINE':'vosk'}), patch.object(Path, 'is_dir', return_value=True), patch.object(voice_runtime.queue, 'Queue', AudioQueue):

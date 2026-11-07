@@ -87,7 +87,7 @@ class QueueTests(DBTestCase):
         self.query('stale.example', ago_ms=classifier.LOOKBACK_MS + 1000)
         with self.conn:
             self.conn.execute("INSERT INTO ai_verdicts VALUES ('known.example', 'needed', 0.9, 'x', ?)", (now_ms(),))
-        self.assertEqual(['newest.example', 'new.example'], classifier.candidates(self.conn, now_ms(), 10))
+        self.assertEqual(['new.example', 'newest.example'], classifier.candidates(self.conn, now_ms(), 10))
 
     def test_facts_carry_only_domain_label_counts_and_idle(self):
         for ago in (1000, 2000, classifier.COUNT_WINDOW_MS + 1000):
@@ -110,6 +110,13 @@ class QueueTests(DBTestCase):
         self.assertTrue(classifier.facts(self.conn, 't.example', now_ms())['idle'])
         self.query('netflix.com', source='allowlist', action='allow')
         self.assertFalse(classifier.facts(self.conn, 't.example', now_ms())['idle'])
+
+    def test_essentials_are_not_mistaken_for_media_activity(self):
+        self.query('t.example')
+        self.query('netflix.com',ago_ms=classifier.IDLE_WINDOW_MS+1000,source='allowlist',action='allow')
+        self.query('pool.ntp.org',source='allowlist',action='allow')
+        self.assertTrue(classifier.facts(self.conn,'t.example',now_ms())['idle'])
+
 
 
 class ClassifierTests(DBTestCase):
@@ -134,7 +141,7 @@ class ClassifierTests(DBTestCase):
         self.assertNotIn('t.example', '\n'.join(logs.output))
 
     def test_backed_off_domain_doesnt_starve_others(self):
-        self.query('bad.example', ago_ms=10)
+        self.query('bad.example', ago_ms=30)
         self.query('good.example', ago_ms=20)
         worker = classifier.Classifier(self.conn, lambda q: GOOD if q['domain'] == 'good.example' else 'nope')
         with self.assertLogs('eddie.classifier', 'WARNING'):
@@ -201,7 +208,7 @@ class AskOllamaTests(unittest.TestCase):
         self.assertEqual(GOOD, classifier.ask_ollama(question, self.url, 'llama3.2:3b'))
         path, body = FakeOllama.seen[0]
         self.assertEqual('/api/chat', path)
-        self.assertEqual(('json', {'temperature': 0}, False), (body['format'], body['options'], body['stream']))
+        self.assertEqual(('json', {'temperature': 0, 'num_predict': 160}, False), (body['format'], body['options'], body['stream']))
         self.assertEqual(question, json.loads(body['messages'][1]['content']))
 
     def test_does_not_follow_redirects(self):

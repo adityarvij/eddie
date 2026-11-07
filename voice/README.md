@@ -23,7 +23,7 @@ Configuration:
 | `EDDIE_WAKE_MODEL` | `voice/models/hey_eddie.onnx` |
 | `EDDIE_WHISPER_MODEL` | `voice/models/whisper-base.en` directory; local files only |
 | `EDDIE_WAKE_THRESHOLD` | `0.5`; two consecutive positive frames |
-| `EDDIE_SPEECH_THRESHOLD` | `0.015` normalized RMS; tune on the actual microphone |
+| `EDDIE_SPEECH_THRESHOLD` | `0.003` minimum normalized RMS floor; WebRTC speech votes and ambient calibration are also required |
 | `EDDIE_INPUT_DEVICE` | Default microphone; device name or numeric index |
 | `EDDIE_PIPER_MODEL` | Absolute voice model path; companion JSON required |
 | `EDDIE_API_URL` | `http://127.0.0.1:8000`; use the Pi address for split deployment |
@@ -74,3 +74,12 @@ Risky actions (lockdown and email, once built) never run from the command that a
 Replies must match the whole utterance after lowercasing and removing punctuation, so “yes, but not the TV” is unclear, not a yes. Typed asks use the same router. While an action is pending the bridge emits `voice_state: confirming` with `kind`, `prompt` and `expires_in_ms` (never the action's arguments); the dashboard shows “say yes or no” until the next reply, dismissal or expiry. No pending action, reply or transcript is persisted or logged.
 
 No risky action is registered yet: `RISKY_ACTIONS` and `RISKY_COMMANDS` are empty until lockdown (#31) and email (#37) land, so today this flow is only reachable from unit tests. Closing the dashboard overlay by hand does not notify the worker; the 15 second expiry still applies.
+
+
+## Noisy-room voice and ready cue (#38)
+
+`SpeechGate` uses WebRTC VAD (mode 2 by default) on four 20 ms subframes per 80 ms microphone frame. At least two positive votes plus energy above twice the measured ambient floor are required. Calibration uses the lower quintile of the last ten seconds of idle frame energies; audio is not kept for calibration. `EDDIE_VAD_MODE=0..3`, `EDDIE_NOISE_MARGIN` (default 2), and `EDDIE_SPEECH_THRESHOLD` (minimum floor, default .003) let you tune the real speakerphone. RMS alone no longer decides speech in the running worker.
+
+A short locally generated tone plays at wake. Capture is suppressed until playback and a 160 ms acoustic tail finish, and queued audio is then discarded before the listening overlay appears. Start speaking after the tone/overlay. The command keeps 240 ms of in-memory pre-roll. Normal follow-up listening has no repeated tone.
+
+Tests use the licensed public WebRTC speech fixture plus generated stationary noise and an impulse, and exercise suppression through cue playback, tail and queue drain. They do not establish accuracy for every room, nearby conversation, or music; rehearse with the actual microphone. No household audio or transcript fixture is created.
