@@ -1,5 +1,5 @@
 const $ = id => document.getElementById(id);
-let paused = false, total = 0, blocked = 0, deviceSet = new Set(), queued = [], voiceReady = false, speaking = false, closeTimer;
+let total = 0, blocked = 0, deviceSet = new Set(), voiceReady = false, speaking = false, closeTimer;
 let is_eddie_active = false, exitTimer, confirming = false, confirmTimer, userClosed = false;
 const dialog = $('assistant');
 function updateCounts() { $('allowed').textContent = allowedCount.toLocaleString(); $('blocked-count').textContent = blocked.toLocaleString(); }
@@ -10,7 +10,6 @@ function addEvent(event) {
   total++; const action = String(event.action || event.decision || 'allow').toLowerCase(); if (action === 'block' || action === 'blocked') blocked++; if(['allow','allowed'].includes(action)) allowedCount++; updateCounts();
   const device = typeof event.device === 'object' ? event.device.name || event.device.ip || 'Unknown device' : event.device || event.device_name || event.client_ip || 'Unknown device';
   deviceSet.add(String(device)); $('requests').textContent = total.toLocaleString(); $('blocked').textContent = blocked.toLocaleString(); $('devices').textContent = deviceSet.size;
-  if (paused) { queued.push(event); if (queued.length > 100) queued.shift(); return; }
   renderEvent(event, device, action);
 }
 // A feed line: a coloured status tag ([approved], [blocked], [flagged], [ai]) then the text.
@@ -84,14 +83,19 @@ function applyModes(state) {
 function renderModes() {
   for (const [id, label, key] of [['home-mode', 'home mode', 'home_mode'], ['offline-mode', 'offline mode', 'offline']]) {
     const button = $(id), pending = modePending[key], on = modes[key];
+    const text = pending !== undefined ? `${label}: turning ${pending ? 'on' : 'off'}…` : `${label}: ${on === null ? 'unavailable' : on ? 'on' : 'off'}`;
     button.disabled = pending !== undefined || on === null;
     button.setAttribute('aria-busy', String(pending !== undefined)); button.setAttribute('aria-pressed', String(on === true));
-    button.textContent = pending !== undefined ? `${label}: turning ${pending ? 'on' : 'off'}…` : `${label}: ${on === null ? 'unavailable' : on ? 'on' : 'off'}`;
+    // Home mode is the house icon beside the heading, so its state is in the label, not the text.
+    if (key === 'home_mode') { button.setAttribute('aria-label', text); button.setAttribute('title', text); } else button.textContent = text;
   }
+  renderMic();
   const waiting = modes.offline !== null && modePending.offline === undefined && !modes.offline_applied;
   $('offline-note').textContent = waiting ? `offline mode ${modes.offline ? 'on' : 'off'} not yet applied by DNS` : '';
   $('home-note').textContent = modes.home_mode ? 'home mode is a backend flag; DNS does not enforce it yet' : '';
 }
+// One mic button: "start mic" or "stop mic", prefixed "offline •" while offline mode is confirmed on.
+function renderMic() { $('mic').textContent = `${modes.offline ? 'offline • ' : ''}${voiceReady ? 'stop mic' : 'start mic'}`; }
 async function loadModes() {
   try { const r = await fetch('/api/mode'); if (!r.ok) throw Error(); applyModes(await r.json()); }
   catch { modes.home_mode = modes.offline = null; renderModes(); }
@@ -160,7 +164,7 @@ function toggleLogs(open) {
 function voiceEvent(event) {
   if (event.type === 'voice_state') { if (typeof event.is_eddie_active === 'boolean') is_eddie_active = event.is_eddie_active; if (event.state === 'confirming') setConfirming(true, Number(event.expires_in_ms) || 15000, String(event.prompt || '')); else if (['thinking','dismissed'].includes(event.state)) setConfirming(false); if (event.state === 'dismissed') { userClosed = false; return dismiss(); } if (['thinking','speaking','listening'].includes(event.state)) clearTimeout(closeTimer); if (event.state === 'listening') reopen(); setAssistantState(event.state); }
   if (event.type === 'agent_reply') { reopen(); $('assistant-description').textContent = event.text; }
-  if (event.type === 'voice_status') { if (['off','error'].includes(event.status)) { $('character').classList.remove('talking'); if(dialog.open) dismiss(); } voiceReady = event.status === 'ready'; $('mic').textContent = voiceReady ? (event.engine === 'vosk' ? 'Stop mic · offline prototype ●' : 'Stop microphone ●') : 'Enable “Hey Eddie” ○'; if (event.message && !voiceReady) notice(event.message); else if (voiceReady) $('notice').hidden = true; }
+  if (event.type === 'voice_status') { if (['off','error'].includes(event.status)) { $('character').classList.remove('talking'); if(dialog.open) dismiss(); } voiceReady = event.status === 'ready'; renderMic(); if (event.message && !voiceReady) notice(event.message); else if (voiceReady) $('notice').hidden = true; }
   if (event.type === 'wake') wake();
   if (event.type === 'transcript' && event.text) { reopen(); $('assistant-title').textContent = event.text; }
   if (event.type === 'speaking') { reopen(); $('assistant-title').textContent = event.title || 'Here’s what I’m seeing.'; $('assistant-description').textContent = event.text || ''; setAssistantState('speaking'); speaking = true; }
@@ -175,21 +179,15 @@ function renderReport(report) {
   if (!items.length) { const li = document.createElement('li'); li.textContent = 'Not enough traffic yet to say what anyone could guess.'; items.push(li); }
   $('report-facts').replaceChildren(...items); $('report').hidden = false;
 }
-async function loadReport(demo) {
-  try { const r = await fetch(demo ? '/api/what-they-know?demo=1' : '/api/what-they-know'); if (!r.ok) throw Error(); renderReport(await r.json()); }
-  catch { notice('Report unavailable: the traffic API is not answering.'); }
-}
 window.eddie = { pushEvent: addEvent, wake, voiceEvent, renderReport, ask: text => control('/api/voice/ask', {text}) };
-$('report-live').onclick = () => loadReport(false); $('report-demo-week').onclick = () => loadReport(true);
 $('report-close').onclick = () => { $('report').hidden = true; };
 $('open-logs').onclick = () => toggleLogs($('assistant-logs').hidden);
 $('close-logs').onclick = () => { toggleLogs(false); $('open-logs').focus(); };
 dialog.addEventListener('cancel', event => { event.preventDefault(); closeByUser(); });
 dialog.addEventListener('close', () => { clearTimeout(exitTimer); dialog.classList.remove('closing'); toggleLogs(false); });
-$('wake').onclick = () => wake(true); $('close').onclick = closeByUser;
+$('close').onclick = closeByUser;
 dialog.addEventListener('click', e => { if (e.target === dialog) { const r=dialog.getBoundingClientRect(); if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom) closeByUser(); } });
 document.addEventListener('keydown', e => { if (e.code === 'Space' && !['INPUT','TEXTAREA','BUTTON'].includes(document.activeElement.tagName)) { e.preventDefault(); wake(true); } });
-$('pause').onclick = () => { paused = !paused; $('pause').textContent = paused ? 'resume' : 'pause'; if (!paused) { queued.forEach(e=>renderEvent(e)); queued=[]; } };
 // A paired device (the iPad) opens the link the Eddie computer prints; the token stays in the
 // URL fragment, which is never sent in a request line and is not written to browser storage.
 const pairToken = new URLSearchParams(String(location.hash || '').slice(1)).get('pair');
