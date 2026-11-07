@@ -19,7 +19,7 @@
 ./scripts/run_all.sh --no-fake  # API only, for a real DNS server posting to :8000
 ```
 
-Dashboard at http://localhost:5173, API at http://localhost:8000. The traffic API and `fake_traffic.py` run in Docker (`compose.yaml`) with `restart: unless-stopped`, so they keep running until `docker compose down`. The dashboard (`frontend/serve.py`, launched through `scripts/run_voice.sh` with the Vosk wake prototype and Piper voice) stays on the host because it also runs the voice loop, and Docker on macOS can't reach the microphone or speaker; Ctrl-C stops it. Ollama also stays on the host for Metal GPU access. For the iPad, run `EDDIE_BIND=0.0.0.0 EDDIE_DASHBOARD_HOST=0.0.0.0 ./scripts/run_all.sh` and open `http://<Mac IP>:5173`: the API and the dashboard then accept network connections, the page finds the API on the same host, and the mic controls stay on the Mac. The fake traffic's verdicts, including the "AI:" ones, are scripted, not real classifier output.
+Dashboard at http://localhost:5173, API at http://localhost:8000. The traffic API and `fake_traffic.py` run in Docker (`compose.yaml`) with `restart: unless-stopped`, so they keep running until `docker compose down`. The dashboard (`frontend/serve.py`, launched through `scripts/run_voice.sh` with the Vosk wake prototype and Piper voice) stays on the host because it also runs the voice loop, and Docker on macOS can't reach the microphone or speaker; Ctrl-C stops it. Ollama also stays on the host for Metal GPU access. For the iPad, run `EDDIE_BIND=0.0.0.0 EDDIE_DASHBOARD_HOST=0.0.0.0 ./scripts/run_all.sh` and open `http://<Mac IP>:5173`: the API and the dashboard then accept network connections, the page finds the API on the same host, and the mic controls stay on the Mac. The fake traffic's verdicts, including the "AI:" ones, are scripted, not real classifier output. `run_all.sh` gives the API, fake traffic, classifier and voice bridge a shared random `EDDIE_API_TOKEN`, because the containerised API sees host callers as remote; export your own before running it to give the same token to a DNS server started in another shell.
 
 ## Stack (hackathon version)
 
@@ -213,7 +213,7 @@ sudo .venv/bin/python -m eddie.dns_server              # Pi / Linux: port 53 nee
 EDDIE_DNS_PORT=8053 uv run python -m eddie.dns_server  # development, any OS: dig @127.0.0.1 -p 8053 google.com
 ```
 
-Settings: `EDDIE_DHCP_LEASES` (dnsmasq leases file for device hostnames; default `/var/lib/misc/dnsmasq.leases` if it exists, `off` for none), `EDDIE_DNS_HOST` (default `0.0.0.0`), `EDDIE_DNS_PORT` (default `53`), `EDDIE_DB` (default `eddie.db` in the working directory, created `0600` on first run; `off` logs nothing), `EDDIE_RETENTION_DAYS` (default `7`; older rows are securely deleted at start and hourly), `EDDIE_BLOCKLISTS` (default the repo's `blocklists/` directory; `off` loads no blocklists), `EDDIE_ALLOWLIST` (default the repo's `allowlist.txt`; if it's missing the server refuses to start, because blocking without it can break devices), `EDDIE_UPSTREAMS` (default `1.1.1.1,9.9.9.9`, tried in order with a 2 s timeout each; if all fail the device gets SERVFAIL), `EDDIE_API_URL` (default `http://127.0.0.1:8000`; where lookups are sent for the live feed; must be `localhost` or a loopback or private IP literal), `EDDIE_FEED` (`off` sends nothing to the live feed; if the API is down, events are dropped and DNS carries on). On the Mac, Internet Sharing must be off because it holds port 53. Binding `127.0.0.1:53` still needs sudo on macOS.
+Settings: `EDDIE_DHCP_LEASES` (dnsmasq leases file for device hostnames; default `/var/lib/misc/dnsmasq.leases` if it exists, `off` for none), `EDDIE_DNS_HOST` (default `0.0.0.0`), `EDDIE_DNS_PORT` (default `53`), `EDDIE_DB` (default `eddie.db` in the working directory, created `0600` on first run; `off` logs nothing), `EDDIE_RETENTION_DAYS` (default `7`; older rows are securely deleted at start and hourly), `EDDIE_BLOCKLISTS` (default the repo's `blocklists/` directory; `off` loads no blocklists), `EDDIE_ALLOWLIST` (default the repo's `allowlist.txt`; if it's missing the server refuses to start, because blocking without it can break devices), `EDDIE_UPSTREAMS` (default `1.1.1.1,9.9.9.9`, tried in order with a 2 s timeout each; if all fail the device gets SERVFAIL), `EDDIE_API_URL` (default `http://127.0.0.1:8000`; where lookups are sent for the live feed; must be `localhost` or a loopback or private IP literal), `EDDIE_FEED` (`off` sends nothing to the live feed; if the API is down, events are dropped and DNS carries on), `EDDIE_API_TOKEN` (sent to the API as a bearer token; needed when the API isn't on this machine's loopback, such as the Docker API, which takes writes from elsewhere only with it). On the Mac, Internet Sharing must be off because it holds port 53. Binding `127.0.0.1:53` still needs sudo on macOS.
 
 ## Agent build spec: data, API, tools
 
@@ -252,6 +252,8 @@ Input: domain, device label, query count in the last 10 min, whether the device 
 Use Ollama `format: json`, temperature 0. Never send anything but the domain and these counts.
 
 ### REST API (localhost:8000)
+
+Writes from anywhere but loopback need `Authorization: Bearer $EDDIE_API_TOKEN`, and `/ws/events` refuses browser pages from other sites (#96, docs/EVENTS.md). Reads are open.
 
 | Method | Path | Returns / does |
 |---|---|---|

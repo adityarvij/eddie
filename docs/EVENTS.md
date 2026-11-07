@@ -43,6 +43,17 @@ and name (see Devices below); a client whose MAC isn't known yet is
 `device_mac: "ip:<client IP>"` and `device: "<client IP>"`. A new label shows
 in the feed within 30 s.
 
+### Access (#96)
+
+Writes (`POST`, `PUT`, `DELETE`) from loopback need nothing. From any other
+address they need `Authorization: Bearer <EDDIE_API_TOKEN>`; a missing or wrong
+token, or no token configured on the API, gets 401 `{detail}`. Every client
+here (`eddie/feed.py`, the classifier, `voice/voice_agent.py`, the dashboard
+bridge, `scripts/fake_traffic.py`) sends it when `EDDIE_API_TOKEN` is set. A
+write whose `Origin` isn't a loopback page or a page on the same IP or `.local`
+host gets 403. `GET`s are open. `/ws/events` refuses the handshake (403) for
+the same foreign origins; non-browser clients send no `Origin` and connect.
+
 The DNS server doesn't send every lookup. Network plumbing (reverse lookups
 under `.arpa`, service-discovery names with a `_` label such as
 `_ipp._tcp.…`, `.local` and single-label names) is never sent. The same
@@ -273,7 +284,7 @@ Confirmation: after Eddie reads back a risky action, the bridge emits `voice_sta
 
 ## Classifier verdicts (#27)
 
-`POST /ai/verdict` takes `{domain, label, confidence, reason, ts}`. Label is `tracker|needed|unsure`, confidence is a finite number in [0,1], reason is printable, at most 14 words and 120 characters, and ts is epoch milliseconds. Unknown fields and invalid values get 422. A successful response is `{ok: true}` and broadcasts `{type: "ai_verdict", ...payload}` to `/ws/events`. This event does not change historical queries, counters, or rules; later DNS decisions use the cached verdict. Like `/ingest`, this existing local API has no authentication and should stay loopback-only. The classifier refuses external API URLs and redirects. The outbox is bounded to 1,000 in-memory events, retried without repeating inference; it is not a durable notification log.
+`POST /ai/verdict` takes `{domain, label, confidence, reason, ts}`. Label is `tracker|needed|unsure`, confidence is a finite number in [0,1], reason is printable, at most 14 words and 120 characters, and ts is epoch milliseconds. Unknown fields and invalid values get 422. A successful response is `{ok: true}` and broadcasts `{type: "ai_verdict", ...payload}` to `/ws/events`. This event does not change historical queries, counters, or rules; later DNS decisions use the cached verdict. Like every write, it needs the API token from anywhere but loopback (see Access below). The classifier refuses external API URLs and redirects. The outbox is bounded to 1,000 in-memory events, retried without repeating inference; it is not a durable notification log.
 
 
 ## Real AI on the scripted demo feed

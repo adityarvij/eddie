@@ -10,9 +10,15 @@ from its query log, and stores user labels (devices.py).
 /offline-mode turns the DNS server's upstream forwarding off or on through
 eddie.db and waits for DNS to load it the same way (offline.py).
 
+Writes (POST, PUT, DELETE) from anywhere but loopback need EDDIE_API_TOKEN as
+a bearer token (#96). Browsers may only write or open /ws/events from this
+machine's own pages; see allowed_origin.
+
 Run: uv run uvicorn eddie.api:app --host 0.0.0.0 --port 8000
 """
 import asyncio
+import hmac
+import ipaddress
 import itertools
 import json
 import os
@@ -20,8 +26,10 @@ import sqlite3
 import time
 from collections import deque
 from typing import Literal
+from urllib.parse import urlsplit
 
-from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 
 from . import beacons, demo_week, devices, inferences, insights, labels, offline, rules, store
@@ -40,6 +48,57 @@ APPLY_TIMEOUT = 2.0  # seconds to wait for DNS to load a rule or offline change 
 APPLY_POLL = 0.02
 
 app = FastAPI(title="Eddie traffic")
+WRITES = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+def is_loopback(host: str | None) -> bool:
+    try:
+        ip = ipaddress.ip_address(host or "")
+    except ValueError:
+        return False
+    return (getattr(ip, "ipv4_mapped", None) or ip).is_loopback
+
+
+def authorized(header: str | None) -> bool:
+    """A bearer token matching EDDIE_API_TOKEN. With no token set, nothing off loopback may write."""
+    token = os.environ.get("EDDIE_API_TOKEN", "")
+    scheme, _, value = (header or "").partition(" ")
+    return bool(token) and scheme.lower() == "bearer" and hmac.compare_digest(value.strip().encode(), token.encode())
+
+
+def allowed_origin(origin: str | None, host: str | None) -> bool:
+    """No Origin (not a browser), a loopback page, or a page on the host this request names.
+
+    The host must be an IP, localhost or .local, never a domain that could rebind to this machine.
+    """
+    if not origin:
+        return True
+    try:
+        page, ours = urlsplit(origin).hostname, urlsplit("//" + (host or "")).hostname
+    except ValueError:
+        return False
+    if page is None:  # "null": a sandboxed frame or a file
+        return False
+    if page == "localhost" or is_loopback(page):
+        return True
+    if page != ours:
+        return False
+    try:
+        ipaddress.ip_address(page)
+        return True
+    except ValueError:
+        return page.rstrip(".").endswith(".local")
+
+
+@app.middleware("http")
+async def guard_writes(request: Request, call_next):
+    if request.method in WRITES:
+        if not allowed_origin(request.headers.get("origin"), request.headers.get("host")):
+            return JSONResponse({"detail": "Writes only come from Eddie's own pages."}, 403)
+        client = request.client.host if request.client else None
+        if not is_loopback(client) and not authorized(request.headers.get("authorization")):
+            return JSONResponse({"detail": "Send Authorization: Bearer <EDDIE_API_TOKEN>."}, 401)
+    return await call_next(request)
 
 
 async def broadcast(msg: dict) -> None:
@@ -243,6 +302,9 @@ async def label_device(key: str, body: LabelIn):
 
 @app.websocket("/ws/events")
 async def ws_events(ws: WebSocket):
+    if not allowed_origin(ws.headers.get("origin"), ws.headers.get("host")):
+        await ws.close(code=1008)  # before accept, so the handshake gets 403
+        return
     await ws.accept()
     clients.add(ws)
     await ws.send_text(json.dumps({

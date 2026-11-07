@@ -1,5 +1,6 @@
 import sys
 import unittest
+import unittest.mock
 from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'voice'))
@@ -30,6 +31,21 @@ class VoiceCommands(unittest.TestCase):
     @patch('voice_agent.request', return_value={'home_mode': False})
     def test_wrong_acknowledgement_is_failure(self, request):
         self.assertIn("couldn't update", voice_agent.respond('turn on home mode'))
+
+class ApiToken(unittest.TestCase):
+    """The traffic API takes writes from another host only with EDDIE_API_TOKEN (#96)."""
+    def sent_headers(self, env):
+        response = unittest.mock.MagicMock()
+        response.__enter__.return_value.read.return_value = b'{}'
+        with patch.dict('os.environ', env), patch('urllib.request.urlopen', return_value=response) as urlopen:
+            voice_agent.request('/mode', {'home_mode': True})
+        return dict(urlopen.call_args[0][0].header_items())
+
+    def test_sends_the_token_when_set(self):
+        self.assertEqual(self.sent_headers({'EDDIE_API_TOKEN': 'abc'})['Authorization'], 'Bearer abc')
+
+    def test_sends_none_without_it(self):
+        self.assertNotIn('Authorization', self.sent_headers({'EDDIE_API_TOKEN': ''}))
 
 class MissedSpeech(unittest.TestCase):
     @patch('voice_agent.request')
