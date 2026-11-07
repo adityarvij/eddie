@@ -56,6 +56,15 @@ The API adds `id`, `company` and `category` (from `eddie/labels.py`) and pushes:
 shares the state in-process later) and, while on, blocks a device's
 non-essential traffic with `source: "home_mode"`.
 
+## What they know: `GET /what-they-know?hours=24`
+
+`hours` is 1 to 168. Returns `{hours, facts, text}` where each fact is
+`{fact, evidence, confidence}` computed in `eddie/inferences.py` from the
+in-memory event log (tracking company exposure, active streaming hours,
+after-midnight use, longest streaming gap, idle telemetry). `text` is a
+template over those facts; the local-model phrasing and number check are not
+built yet. Empty traffic returns no facts, never guesses.
+
 ## Local voice bridge (port 5173)
 
 The dashboard bridge SSE endpoint `/events` emits `voice_status` with `status` (`off`, `starting`, `ready`, `error`), optional `engine` (`vosk` prototype or `openwakeword`) and `message`. `GET /api/voice/status` returns the latest status. Start/stop POST endpoints operate the local microphone. These are separate from the traffic API on port 8000.
