@@ -95,13 +95,18 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   // Modes: the initial state comes from the backend; until then the toggles can't be pressed.
   assert.equal(get('home-mode').disabled, true);
   await answer('/api/mode', 200, {home_mode:false, offline:false, offline_applied:true});
-  assert.equal(get('home-mode').textContent, 'home mode: off');
+  assert.equal(get('home-mode').attrs['aria-label'], 'home mode: off');
   assert.equal(get('home-mode').disabled, false);
   assert.equal(get('offline-mode').textContent, 'offline mode: off');
+  assert.equal(get('mic').textContent, 'start mic');
+  socket.onmessage({data:JSON.stringify({type:'voice_status',status:'ready',engine:'vosk'})});
+  assert.equal(get('mic').textContent, 'stop mic');
+  socket.onmessage({data:JSON.stringify({type:'voice_status',status:'off'})});
+  assert.equal(get('mic').textContent, 'start mic');
 
   // A click shows pending, not the new state, until the bridge answers with the API's echo.
   get('home-mode').onclick();
-  assert.equal(get('home-mode').textContent, 'home mode: turning on…');
+  assert.equal(get('home-mode').attrs['aria-label'], 'home mode: turning on…');
   assert.equal(get('home-mode').disabled, true);
   assert.equal(get('home-mode').attrs['aria-busy'], 'true');
   assert.equal(get('home-mode').attrs['aria-pressed'], 'false', 'not shown as on before the backend confirms');
@@ -111,7 +116,7 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   assert.equal(sent.init.method, 'POST');
   assert.deepEqual(JSON.parse(sent.init.body), {home_mode:true});
   await answer('/api/mode', 200, {home_mode:true});
-  assert.equal(get('home-mode').textContent, 'home mode: on');
+  assert.equal(get('home-mode').attrs['aria-label'], 'home mode: on');
   assert.equal(get('home-mode').attrs['aria-pressed'], 'true');
   assert.equal(get('home-mode').attrs['aria-busy'], 'false');
   assert.equal(get('home-note').textContent, 'home mode is a backend flag; DNS does not enforce it yet');
@@ -120,15 +125,17 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   get('home-mode').onclick();
   await answer('/api/mode', 502, {message:'The traffic API did not confirm the change.'});
   assert.equal(get('notice').textContent, 'Home mode change not confirmed: The traffic API did not confirm the change.');
-  assert.equal(get('home-mode').textContent, 'home mode: on');
+  assert.equal(get('home-mode').attrs['aria-label'], 'home mode: on');
   await answer('/api/mode', 200, {home_mode:true, offline:false, offline_applied:true});  // the reload after a failure
 
   // Offline mode the API stored but DNS hasn't loaded is shown in red, not as done.
   get('offline-mode').onclick();
   assert.equal(get('offline-mode').textContent, 'offline mode: turning on…');
+  assert.equal(get('mic').textContent, 'start mic', 'no offline prefix before the backend confirms');
   assert.deepEqual(JSON.parse(calls.find(c => c.path === '/api/offline-mode').init.body), {offline:true});
   await answer('/api/offline-mode', 200, {offline:true, applied:false});
   assert.equal(get('offline-mode').textContent, 'offline mode: on');
+  assert.equal(get('mic').textContent, 'offline • start mic');
   assert.equal(get('offline-note').textContent, 'offline mode on not yet applied by DNS');
   assert.equal(get('home-note').textContent, 'home mode is a backend flag; DNS does not enforce it yet', 'both notes show at once');
 
@@ -136,7 +143,7 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   socket.onmessage({data:JSON.stringify({type:'offline_mode', offline:true, applied:true})});
   assert.equal(get('offline-note').textContent, '');
   socket.onmessage({data:JSON.stringify({type:'mode', home_mode:false})});
-  assert.equal(get('home-mode').textContent, 'home mode: off');
+  assert.equal(get('home-mode').attrs['aria-label'], 'home mode: off');
   assert.equal(get('home-note').textContent, '');
   assert.equal(get('requests').textContent, '0', 'mode events are not DNS requests (the snapshot reset the count)');
 
@@ -145,7 +152,7 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   await answer('/api/devices', 502, {message:'Devices unavailable.'});
   await answer('/api/mode', 502, {message:'Modes unavailable.'});
   assert.equal(get('device-count').textContent, 'unavailable');
-  assert.equal(get('home-mode').textContent, 'home mode: unavailable');
+  assert.equal(get('home-mode').attrs['aria-label'], 'home mode: unavailable');
   assert.equal(get('offline-mode').disabled, true);
   console.log('Frontend device panel and mode toggle checks passed');
 })().catch(error => { console.error(error); process.exit(1); });

@@ -8,7 +8,7 @@ python3.11 -m venv .venv-frontend
 .venv-frontend/bin/python frontend/serve.py
 ```
 
-Open http://localhost:5173. Click **Wake Eddie** or press **Space** to preview the character. Escape dismisses him. Mouth animation follows the duration of macOS local speech output. No browser speech-recognition service is used.
+Open http://localhost:5173. Press **Space** to preview the character. The footer has one button, **start mic** / **stop mic** (one or the other, never both), prefixed “offline •” while offline mode is confirmed on. Escape dismisses him. Mouth animation follows the duration of macOS local speech output. No browser speech-recognition service is used.
 
 ### Viewing from the iPad
 
@@ -30,7 +30,7 @@ Supported tools: factual backend summaries and explicit home-mode on/off. Domain
 
 Under the counts, **rules** lists up to five active rules, newest first (`block device-metrics-us.amazon.com · Fire Stick · by voice`), from `GET /api/rules`, which `serve.py` relays read-only from the traffic API (`EDDIE_API_URL`, default `http://127.0.0.1:8000`) so the iPad needs no CORS or direct API access. It refreshes on connect and on every `rule_change` event, and says `unavailable` if the API or `eddie.db` is not reachable. The device panel (#35, below) sits beside it.
 
-Footer buttons **what they know** and **demo week report** open a report panel above the feed with each fact, its evidence and confidence, from `GET /api/what-they-know` (live, last week, from `eddie.db` when the DNS server has logged lookups, else the in-memory feed; the title says “from eddie.db” in the first case) or `GET /api/what-they-know?demo=1`, relayed read-only by `serve.py`. The demo report always carries an inverted "DEMO DATA · …" banner and "DEMO WEEK" in its title; live reports never do.
+The page no longer has buttons for the report; `window.eddie.renderReport(report)` still shows a report panel above the feed with each fact, its evidence and confidence, from `GET /api/what-they-know` (live, last week, from `eddie.db` when the DNS server has logged lookups, else the in-memory feed; the title says “from eddie.db” in the first case) or `GET /api/what-they-know?demo=1`, both still relayed read-only by `serve.py` (voice uses the live report). The demo report always carries an inverted "DEMO DATA · …" banner and "DEMO WEEK" in its title; live reports never do.
 
 Each `rule_change` adds a `[rule]` feed row and a toast, e.g. “Rule added: block device-metrics-us.amazon.com · Fire Stick · by voice”. The event is sent before DNS acknowledges the rule, so the dashboard says “added”, never “blocked”.
 
@@ -48,11 +48,11 @@ Not yet run on hardware: steps 1 to 5 on the iPad in kiosk mode. Step 4 can't be
 
 ## Devices and mode toggles (#35)
 
-Under the counts are two toggles, **home mode** and **offline mode**, and beside the rules a **devices** list: each device's name (label, else DHCP hostname, else "<vendor> device", else its MAC or IP), how many distinct domains Eddie blocked for it, and its three latest blocked domains, for the last 24 hours, most blocked first, up to five devices then "+N more". The list comes from `GET /api/devices` and the toggles' state from `GET /api/mode`, both relayed read-only by `serve.py` from the traffic API (`/devices?hours=24`, `/mode`), so they need the API and `eddie.db` (`EDDIE_DB`). Both refresh on connect and every 30 seconds; the toggles also follow the API's `mode` and `offline_mode` broadcasts, so a change from voice or another screen shows up. If the API doesn't answer, the list says `unavailable` and the toggles read `unavailable` and can't be pressed.
+Home mode is a house icon right after the `eddie_` heading (outlined off, filled on); **offline mode** is a toggle under the counts; and beside the rules a **devices** list: each device's name (label, else DHCP hostname, else "<vendor> device", else its MAC or IP), how many distinct domains Eddie blocked for it, and its three latest blocked domains, for the last 24 hours, most blocked first, up to five devices then "+N more". The list comes from `GET /api/devices` and the toggles' state from `GET /api/mode`, both relayed read-only by `serve.py` from the traffic API (`/devices?hours=24`, `/mode`), so they need the API and `eddie.db` (`EDDIE_DB`). Both refresh on connect and every 30 seconds; the toggles also follow the API's `mode` and `offline_mode` broadcasts, so a change from voice or another screen shows up. If the API doesn't answer, the list says `unavailable` and the toggles are disabled (home mode's label, read by screen readers and shown on hover, says `unavailable`).
 
 The toggles only ever show state the backend acknowledged:
 
-- A tap shows `home mode: turning on…` (dashed border, disabled) and sends `POST /api/mode` (`{home_mode}`) or `POST /api/offline-mode` (`{offline}`). The new state appears only when the API echoes it back. A second tap while pending sends nothing.
+- A tap shows the pending state (the house icon's outline turns dashed; the offline toggle reads `offline mode: turning on…` with a dashed border), disables the control, and sends `POST /api/mode` (`{home_mode}`) or `POST /api/offline-mode` (`{offline}`). The new state appears only when the API echoes it back. A second tap while pending sends nothing.
 - If the API errors or doesn't answer within 10 seconds, a toast says "Home mode change not confirmed: …" and the toggle reloads its real state from the API.
 - Offline mode that the API stored but the DNS server hasn't loaded (`applied: false`) shows in red: "offline mode on not yet applied by DNS". It clears when the DNS server picks it up.
 - Home mode on always adds "home mode is a backend flag; DNS does not enforce it yet", because `decision.py` ignores it.
