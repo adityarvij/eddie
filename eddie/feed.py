@@ -40,8 +40,9 @@ _STOP = object()
 
 
 def query_event(ts: int, client_ip: str, domain: str, qtype: str,
-                action: str, source: str, reason: str) -> dict:
-    return {"type": "query", "ts": ts, "device_mac": f"ip:{client_ip}", "device": client_ip,
+                action: str, source: str, reason: str, mac: str | None = None, name: str | None = None) -> dict:
+    """device_mac is the MAC devices.py found, else "ip:<client IP>"; device is its name, else the IP."""
+    return {"type": "query", "ts": ts, "device_mac": mac or f"ip:{client_ip}", "device": name or client_ip,
             "domain": domain, "qtype": qtype, "action": action, "source": source, "reason": reason}
 
 

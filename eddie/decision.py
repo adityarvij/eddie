@@ -23,6 +23,8 @@ Matching:
 - A rule pattern `a.com` matches only a.com; `*.a.com` matches a.com and every
   subdomain. When several rules match, the most specific wins (exact, then the
   longest suffix), and among equals the newest rule wins.
+- A device rule matches the device's key (its MAC once devices.py knows it) or
+  its client IP, so rules made before the MAC was known keep working.
 """
 import re
 import sqlite3
@@ -123,10 +125,10 @@ class RuleIndex:
             elif pattern:
                 self.exact.setdefault(pattern, []).append(rule)
 
-    def find(self, domain: str, device: str) -> Rule | None:
+    def find(self, domain: str, device: str, ip: str | None = None) -> Rule | None:
         candidates = self.exact.get(domain, []) + [
             r for s in suffixes(domain) for r in self.wildcard.get(s, [])]
-        return (next((r for r in candidates if r.device_mac == device), None)
+        return (next((r for r in candidates if r.device_mac is not None and r.device_mac in (device, ip)), None)
                 or next((r for r in candidates if r.device_mac is None), None))
 
 
@@ -154,11 +156,11 @@ class Engine:
         self.set_verdicts({d: Verdict(label, confidence, reason or "") for d, label, confidence, reason
                            in conn.execute("SELECT domain, label, confidence, reason FROM ai_verdicts")})
 
-    def evaluate(self, domain: str, device: str) -> Decision:
+    def evaluate(self, domain: str, device: str, ip: str | None = None) -> Decision:
         domain = normalize(domain)
         if not domain:
             return Decision("allow", "default", "root query")
-        if rule := self.rules.find(domain, device):
+        if rule := self.rules.find(domain, device, ip):
             scope = "device" if rule.device_mac else "global"
             return Decision(rule.action, "rule", f"{scope} rule {rule.pattern}")
         if entry := matches(domain, self.allowlist):
@@ -179,5 +181,5 @@ class Engine:
 engine = Engine()
 
 
-def evaluate(domain: str, device: str) -> Decision:
-    return engine.evaluate(domain, device)
+def evaluate(domain: str, device: str, ip: str | None = None) -> Decision:
+    return engine.evaluate(domain, device, ip)

@@ -19,7 +19,7 @@ from pydantic import BaseModel, field_validator
 # top-level domain is all digits, so a numeric last label means it isn't a name.
 PATTERN = re.compile(r"(\*\.)?[a-z0-9_-]+(\.[a-z0-9_-]+)+")
 NUMERIC_TLD = re.compile(r".*\.[0-9]+")
-# A MAC address, or the client IP the DNS server uses until #14 maps devices.
+# A device key from /devices: its MAC, or its client IP while the MAC is unknown.
 DEVICE = re.compile(r"[0-9a-z:._-]{1,64}")
 COLUMNS = ("id", "scope", "device_mac", "pattern", "action", "created_by", "ts")
 
