@@ -262,7 +262,8 @@ Use Ollama `format: json`, temperature 0. Never send anything but the domain and
 | GET | `/rules` | Every rule, newest first |
 | POST | `/rules` | `{pattern, action, device_mac?, created_by?}` add rule; answers with the stored id and `applied` once DNS has loaded it (see docs/EVENTS.md) |
 | DELETE | `/rules/{id}` | Remove rule; answers with the removed rule and `applied` |
-| POST | `/offline-mode` | Toggle: stop forwarding to upstream, prove the AI still works |
+| GET | `/mode` | `{home_mode, offline, offline_applied}` |
+| POST | `/offline-mode` | `{offline: bool}` stops (or restarts) forwarding to upstream; allowed lookups get cached answers or SERVFAIL. Answers with `applied` once DNS has loaded it (see docs/EVENTS.md) |
 | WS | `/ws/events` | Pushes events typed `query`, `ai_verdict`, `voice_state` or `agent_reply` |
 
 ### Agent tools (Ollama tool calling)

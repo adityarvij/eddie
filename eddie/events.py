@@ -28,6 +28,10 @@ class ModeUpdate(BaseModel):
     home_mode: bool
 
 
+class OfflineUpdate(BaseModel):
+    offline: bool
+
+
 class AIVerdictEvent(BaseModel):
     model_config = ConfigDict(extra='forbid')
     domain: str = Field(min_length=1, max_length=253, pattern=r'^[a-z0-9_-]+(?:\.[a-z0-9_-]+)*$')

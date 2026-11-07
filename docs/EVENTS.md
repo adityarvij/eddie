@@ -59,6 +59,7 @@ The API adds `id`, `company` and `category` (from `eddie/labels.py`) and pushes:
 - `query`: the event above plus `id`, `company`, `category`
 - `totals`: `{seen, blocked}`
 - `mode`: `{home_mode: bool}`
+- `offline_mode`: `{offline: bool, applied: bool}` after every `POST /offline-mode`
 - `rule_change`: a rule was stored or deleted (see Rules below)
 
 ## Home mode: `GET/POST /mode`
@@ -66,6 +67,25 @@ The API adds `id`, `company` and `category` (from `eddie/labels.py`) and pushes:
 `POST /mode {"home_mode": true}`. The decision engine reads `GET /mode` (or
 shares the state in-process later) and, while on, blocks a device's
 non-essential traffic with `source: "home_mode"`.
+
+`GET /mode` also returns `offline` and `offline_applied` (below).
+
+## Offline mode: `POST /offline-mode` (#26)
+
+`POST /offline-mode {"offline": true}` stores the state in `engine_state`
+(`offline`, `offline_rev`) and waits up to 2 s for the DNS server to load it,
+the same handshake as rules. It answers `{"offline": true, "applied": true}`
+only once DNS has written `offline_loaded` ≥ that revision; `applied: false`
+means it's stored but no running DNS server confirmed it (DNS loads it when it
+starts). `GET /mode` reports `offline` (the stored state) and
+`offline_applied`. With `EDDIE_DB=off` the POST answers 503 and `GET /mode`
+reports `offline: false, offline_applied: false`.
+
+While offline the DNS server forwards nothing. Blocked lookups are answered as
+usual; an allowed lookup gets the answer it last got from upstream (kept in
+memory, at most 4,096 answers and 24 h old, TTLs aged, 30 s once expired), or
+SERVFAIL. Query rows are logged with the normal decision. The state survives
+restarts of both processes, so it stays on until it's turned off.
 
 ## Rules: `GET/POST /rules`, `DELETE /rules/{id}`
 
