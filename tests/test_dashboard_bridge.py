@@ -79,6 +79,32 @@ class LanAccess(unittest.TestCase):
 
 
 
+class RulesRelay(unittest.TestCase):
+    """GET /api/rules relays the traffic API's rule list read-only, from any viewer."""
+
+    def get(self, api_request):
+        server = ThreadingHTTPServer(('127.0.0.1', 0), serve.Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            with patch.object(serve, 'api_request', api_request):
+                with urllib.request.urlopen(f'http://127.0.0.1:{server.server_address[1]}/api/rules', timeout=3) as r:
+                    return r.status, json.load(r)
+        except urllib.error.HTTPError as error:
+            return error.code, json.loads(error.read())
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_relays_the_rule_list(self):
+        listed = [{'id': 1, 'pattern': 'a.example', 'action': 'block', 'device': 'TV', 'created_by': 'voice'}]
+        self.assertEqual((200, listed), self.get(lambda path: listed if path == '/rules' else None))
+
+    def test_api_failure_is_502_not_an_empty_list(self):
+        def down(path):
+            raise urllib.error.URLError('refused')
+        self.assertEqual((502, {'message': 'Rules unavailable.'}), self.get(down))
+
+
 class Dismiss(unittest.TestCase):
     """The close button ends the worker's conversation, not just the overlay."""
 

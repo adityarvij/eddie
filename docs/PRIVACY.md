@@ -66,6 +66,8 @@ Owner: [eddie/store.py](../eddie/store.py), written by [eddie/dns_server.py](../
 | `frontend/serve.py` binds `127.0.0.1` only. | implemented |
 | Cross-origin POSTs are rejected; bodies are capped at 64 KB and typed asks at 1,000 characters. | implemented |
 | The page loads no external fonts, scripts, analytics or cloud audio. | implemented |
+| The page keeps nothing in `localStorage`, `sessionStorage`, IndexedDB or cookies; a pending action's read-back is cleared from the screen on answer, dismissal or expiry. Tested (`tests/test_frontend_events.cjs`). | implemented |
+| `GET /api/rules` relays the traffic API's rule list (pattern, action, device name and MAC or IP, who created it, when) read-only. With `--host 0.0.0.0`, anyone on the network who can open the dashboard can read the household's rules, even if the API itself stays on loopback. It cannot change them. | known behaviour |
 | Authenticated local control before exposing the bridge or mic controls beyond localhost (#40). Mic controls must never be public. | planned |
 
 ## Agent, facts and actions
