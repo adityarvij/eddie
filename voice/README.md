@@ -30,7 +30,7 @@ Configuration:
 
 Say “Hey Eddie,” then ask your question. The detector uses 16 kHz mono audio in 80 ms frames. Recording ends after 800 ms of silence following speech, or after 10 seconds of speech. After each reply Eddie listens again for a follow-up without the wake phrase; if no speech starts within 4 seconds, the conversation ends and Eddie is dismissed. Audio stays in memory. Speech output suspends recognition and queued audio is discarded before rearming. There is no always-on cloud transcription.
 
-Supported commands: “What's been going on?” (backend facts), “turn on home mode”, “turn off home mode”. Home mode updates backend state; actual network enforcement still depends on Will's decision engine. Domain rules, lockdown, email, follow-up confirmation and general Ollama conversation are pending. Typed questions use the same router. Do not claim these pending tools work.
+Supported commands: “What's been going on?” (backend facts), “What do they know about me?” / “What do companies know about me?” (reads `GET /what-they-know`; facts computed by the backend, no model phrasing yet), “turn on home mode”, “turn off home mode”. Home mode updates backend state; actual network enforcement still depends on Will's decision engine. Domain rules, lockdown, email, follow-up confirmation and general Ollama conversation are pending. Typed questions use the same router. Do not claim these pending tools work.
 
 ## Verification before demo
 

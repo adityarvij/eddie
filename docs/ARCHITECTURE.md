@@ -6,7 +6,7 @@ Audio → openWakeWord custom ONNX → bounded in-memory capture → faster-whis
 
 The dashboard bridge publishes `voice_status`, `wake`, `voice_state`, `transcript`, `agent_reply`, `speaking`, and `speech_end` events through its existing SSE connection. It accepts start, stop and typed ask requests. Speech and typed responses share a serialized lock. Recognition discards input during replies and resets detector history before rearming.
 
-Implemented tools are backend summary reads and home-mode writes. Home mode is backend state, not evidence of DNS enforcement. Missing tools explicitly report that no change occurred. The model does not fabricate counts. Ollama tool calling is a future layer over the same tool boundary; use structured validated arguments, bounded iterations and confirmation state for lockdown/email.
+Implemented tools are backend summary reads, “what they know” inference reads (`what_they_know` → `GET /what-they-know`) and home-mode writes. Inferences are a scaffold: deterministic facts from the event log, templated into speech; the Ollama phrasing step and its number validation are pending. Home mode is backend state, not evidence of DNS enforcement. Missing tools explicitly report that no change occurred. The model does not fabricate counts. Ollama tool calling is a future layer over the same tool boundary; use structured validated arguments, bounded iterations and confirmation state for lockdown/email.
 
 ## Remaining work
 

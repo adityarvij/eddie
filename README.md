@@ -225,6 +225,7 @@ Use Ollama `format: json`, temperature 0. Never send anything but the domain and
 | GET | `/devices` | Devices with tracker counts |
 | GET | `/events?since=&device=` | Recent query rows |
 | GET | `/summary?window=1h` | Totals: queries, blocked, top blocked domains, top companies, per device |
+| GET | `/what-they-know?hours=24` | "What they know about you" facts `{fact, evidence, confidence}` + spoken text (scaffold; see docs/EVENTS.md) |
 | POST | `/rules` | `{pattern, action, device_mac?}` add rule; takes effect immediately (no cache) |
 | DELETE | `/rules/{id}` | Remove rule |
 | POST | `/offline-mode` | Toggle: stop forwarding to upstream, prove the AI still works |
@@ -236,6 +237,7 @@ Use Ollama `format: json`, temperature 0. Never send anything but the domain and
 |---|---|---|
 | `get_summary` | window, device? | Reads `/summary` |
 | `get_recent_blocks` | device?, limit | Last blocked domains with reasons |
+| `what_they_know` | hours? | Reads `/what-they-know` (implemented in `voice/voice_agent.py`) |
 | `block` | pattern, device? | Adds BLOCK rule |
 | `allow` | pattern, device? | Adds ALLOW rule |
 | `lockdown_device` | device, keep (list) | Blocks everything for that device except keep patterns |
