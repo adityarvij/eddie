@@ -15,11 +15,12 @@ from typing import Literal
 from pydantic import BaseModel, field_validator
 
 # A domain of two or more labels, optionally "*." for it and its subdomains.
-# A wildcard over a bare TLD ("*.com") is refused.
+# A wildcard over a bare TLD ("*.com") is refused, and so is an IP address: no
+# top-level domain is all digits, so a numeric last label means it isn't a name.
 PATTERN = re.compile(r"(\*\.)?[a-z0-9_-]+(\.[a-z0-9_-]+)+")
+NUMERIC_TLD = re.compile(r".*\.[0-9]+")
 # A MAC address, or the client IP the DNS server uses until #14 maps devices.
 DEVICE = re.compile(r"[0-9a-z:._-]{1,64}")
-CREATED_BY = re.compile(r"[a-z_]{1,32}")
 COLUMNS = ("id", "scope", "device_mac", "pattern", "action", "created_by", "ts")
 
 
@@ -27,13 +28,13 @@ class RuleIn(BaseModel):
     pattern: str
     action: Literal["allow", "block"]
     device_mac: str | None = None  # None for a rule that covers every device
-    created_by: str = "api"
+    created_by: Literal["user", "voice", "agent"] = "user"
 
     @field_validator("pattern")
     @classmethod
     def check_pattern(cls, v: str) -> str:
         v = v.strip().lower().rstrip(".")
-        if len(v) > 253 or not PATTERN.fullmatch(v):
+        if len(v) > 253 or not PATTERN.fullmatch(v) or NUMERIC_TLD.fullmatch(v):
             raise ValueError("expected a domain like a.com, or *.a.com for it and its subdomains")
         return v
 
@@ -45,13 +46,6 @@ class RuleIn(BaseModel):
         v = v.strip().lower()
         if not DEVICE.fullmatch(v):
             raise ValueError("expected a MAC address or client IP")
-        return v
-
-    @field_validator("created_by")
-    @classmethod
-    def check_created_by(cls, v: str) -> str:
-        if not CREATED_BY.fullmatch(v):
-            raise ValueError("expected a short lowercase name such as voice or dashboard")
         return v
 
 

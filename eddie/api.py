@@ -123,6 +123,11 @@ async def wait_applied(conn: sqlite3.Connection, rev: int) -> bool:
     return True
 
 
+async def rule_change(change: str, row: dict) -> None:
+    # Sent once the row is stored or deleted, before DNS loads it: it says nothing about enforcement.
+    await broadcast({"type": "rule_change", "change": change, **row})
+
+
 @app.get("/rules")
 async def list_rules():  # async: the shared connection stays on the event loop thread
     return rules.all_rules(rules_db())
@@ -132,6 +137,7 @@ async def list_rules():  # async: the shared connection stays on the event loop 
 async def add_rule(body: rules.RuleIn):
     conn = rules_db()
     row, rev = rules.add(conn, body)
+    await rule_change("added", row)
     return {**row, "applied": await wait_applied(conn, rev)}
 
 
@@ -141,6 +147,7 @@ async def delete_rule(rule_id: int):
     row, rev = rules.remove(conn, rule_id)
     if row is None:
         raise HTTPException(404, f"No rule {rule_id}.")
+    await rule_change("removed", row)
     return {**row, "deleted": True, "applied": await wait_applied(conn, rev)}
 
 

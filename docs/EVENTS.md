@@ -57,6 +57,7 @@ The API adds `id`, `company` and `category` (from `eddie/labels.py`) and pushes:
 - `query`: the event above plus `id`, `company`, `category`
 - `totals`: `{seen, blocked}`
 - `mode`: `{home_mode: bool}`
+- `rule_change`: a rule was stored or deleted (see Rules below)
 
 ## Home mode: `GET/POST /mode`
 
@@ -78,10 +79,10 @@ before every list: device rule, then global rule (docs/ARCHITECTURE.md).
 
 | Field        | Notes |
 |--------------|-------|
-| `pattern`    | `a.com` matches only a.com; `*.a.com` matches a.com and every subdomain. Lowercased, trailing dot dropped. At least two labels: `com` and `*.com` are refused. |
+| `pattern`    | `a.com` matches only a.com; `*.a.com` matches a.com and every subdomain. Lowercased, trailing dot dropped. At least two labels: empty, `*`, `com` and `*.com` are refused. IP addresses are refused (`192.168.1.10`, `*.10.0.0.1`, `::1`): a name whose last label is all digits isn't a domain. |
 | `action`     | `block` \| `allow` |
 | `device_mac` | optional; omit for every device. Until #14 the DNS server identifies a device by its client IP, so use the IP for now. |
-| `created_by` | optional, default `"api"`; a short lowercase name such as `voice`, `dashboard`, `agent` |
+| `created_by` | optional, default `"user"`; exactly `user` \| `voice` \| `agent` |
 
 Answers `201` with the stored row plus the DNS acknowledgment:
 
@@ -103,6 +104,24 @@ and `applied` (same meaning: the previous decision is back once it's true),
 or `404` if there is no such rule.
 
 `GET /rules` lists every rule, newest first, without `applied`.
+
+Every successful add or delete also pushes a `rule_change` on `/ws/events`:
+
+```json
+{"type": "rule_change", "change": "added", "id": 7, "scope": "device", "device_mac": "172.20.10.5",
+ "pattern": "device-metrics-us.amazon.com", "action": "block", "created_by": "voice", "ts": 1762531200123}
+```
+
+- `change` is `added` or `removed`; the rest is the stored row (`ts` is when
+  the rule was created, also for `removed`).
+- It is sent as soon as the row is written or deleted, **before** the API waits
+  for DNS. It means "stored" only. It has no `applied` field and never says the
+  rule is enforced; only the HTTP answer's `applied: true` says that.
+- Refused requests (`422`) and `404` deletes send nothing. Clients that
+  connect later don't get past changes; the snapshot doesn't include rules, so
+  read `GET /rules` for the current list.
+- It carries `pattern`, not `domain`, so a feed that renders anything with a
+  `domain` as a lookup won't show it as one.
 
 Devices cache answers (60 s for blocked lookups, the upstream TTL for allowed
 ones), so a device may not ask Eddie again until its cache expires.
