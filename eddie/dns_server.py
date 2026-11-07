@@ -13,6 +13,8 @@ are loaded once at startup (lists.py; EDDIE_BLOCKLISTS, EDDIE_ALLOWLIST).
 Rules and AI verdicts written to eddie.db by other processes (rules API,
 classifier) are reloaded into the decision engine within RELOAD_EVERY, and
 the rules revision loaded is written back so the rules API can acknowledge it.
+Each decision is also sent to the live feed (POST /ingest on the local API)
+by feed.FeedPublisher, off the reply path; EDDIE_FEED=off turns that off.
 
 Run (port 53):            sudo .venv/bin/python -m eddie.dns_server
 Development (no sudo):    EDDIE_DNS_PORT=8053 uv run python -m eddie.dns_server
@@ -29,6 +31,7 @@ from dnslib import AAAA, QTYPE, RCODE, RR, A, DNSRecord
 
 from . import decision, lists, rules
 from . import store
+from .feed import FeedPublisher, feed_from_env, query_event
 from .store import QueryLog, query_log_from_env
 
 BLOCK_TTL = 60
@@ -92,7 +95,8 @@ async def forward(packet: bytes, upstreams: list[tuple[str, int]], timeout: floa
 
 
 async def resolve(packet: bytes, client_ip: str, upstreams: list[tuple[str, int]],
-                  timeout: float = UPSTREAM_TIMEOUT, query_log: QueryLog | None = None) -> bytes | None:
+                  timeout: float = UPSTREAM_TIMEOUT, query_log: QueryLog | None = None,
+                  feed: FeedPublisher | None = None) -> bytes | None:
     """The reply to send back, or None to drop a packet that isn't a DNS query."""
     try:
         request = DNSRecord.parse(packet)
@@ -109,9 +113,11 @@ async def resolve(packet: bytes, client_ip: str, upstreams: list[tuple[str, int]
     domain = str(request.q.qname).rstrip(".").lower()
     # Device is the client IP until devices.py (#14) maps it to a MAC and label.
     verdict = decision.evaluate(domain, client_ip)
+    qtype = QTYPE.get(request.q.qtype, str(request.q.qtype))
     if query_log:
-        query_log.log(domain, client_ip, QTYPE.get(request.q.qtype, str(request.q.qtype)),
-                      verdict.action, verdict.source, verdict.reason, ts=arrived)
+        query_log.log(domain, client_ip, qtype, verdict.action, verdict.source, verdict.reason, ts=arrived)
+    if feed:
+        feed.publish(query_event(arrived, client_ip, domain, qtype, verdict.action, verdict.source, verdict.reason))
     if verdict.action == "block":
         return block_reply(request).pack()
 
@@ -125,10 +131,11 @@ async def resolve(packet: bytes, client_ip: str, upstreams: list[tuple[str, int]
 
 class DNSServer(asyncio.DatagramProtocol):
     def __init__(self, upstreams: list[tuple[str, int]], timeout: float = UPSTREAM_TIMEOUT,
-                 query_log: QueryLog | None = None):
+                 query_log: QueryLog | None = None, feed: FeedPublisher | None = None):
         self.upstreams = upstreams
         self.timeout = timeout
         self.query_log = query_log
+        self.feed = feed
         self.transport = None
         self.tasks: set[asyncio.Task] = set()
 
@@ -143,16 +150,17 @@ class DNSServer(asyncio.DatagramProtocol):
         task.add_done_callback(self.tasks.discard)
 
     async def answer(self, data: bytes, addr) -> None:
-        reply = await resolve(data, addr[0], self.upstreams, self.timeout, self.query_log)
+        reply = await resolve(data, addr[0], self.upstreams, self.timeout, self.query_log, self.feed)
         if reply and self.transport and not self.transport.is_closing():
             self.transport.sendto(reply, addr)
 
 
 async def serve(host: str, port: int, upstreams: list[tuple[str, int]],
-                timeout: float = UPSTREAM_TIMEOUT, query_log: QueryLog | None = None) -> asyncio.DatagramTransport:
+                timeout: float = UPSTREAM_TIMEOUT, query_log: QueryLog | None = None,
+                feed: FeedPublisher | None = None) -> asyncio.DatagramTransport:
     loop = asyncio.get_running_loop()
     transport, _ = await loop.create_datagram_endpoint(
-        lambda: DNSServer(upstreams, timeout, query_log), local_addr=(host, port))
+        lambda: DNSServer(upstreams, timeout, query_log, feed), local_addr=(host, port))
     return transport
 
 
@@ -207,18 +215,23 @@ def main() -> None:
     decision.engine.set_lists(allowlist, blocklist)
     log.info("loaded %d blocklist and %d allowlist entries in %.2fs",
              len(blocklist), len(allowlist), time.monotonic() - started)
+    try:
+        feed = feed_from_env()
+    except ValueError as exc:
+        raise SystemExit(f"EDDIE_API_URL refused: {exc}. Set EDDIE_FEED=off to run without the live feed.")
     query_log = query_log_from_env()
 
     async def run():
         try:
-            transport = await serve(host, port, upstreams, query_log=query_log)
+            transport = await serve(host, port, upstreams, query_log=query_log, feed=feed)
         except PermissionError:
             raise SystemExit(f"Port {port} needs root: run with sudo, or set EDDIE_DNS_PORT=8053 for development.")
         except OSError as exc:
             raise SystemExit(f"Can't listen on {host}:{port} ({exc}). On a Mac, turn off Internet Sharing, which holds port 53.")
-        log.info("listening on %s:%s, upstream %s, query log %s",
+        log.info("listening on %s:%s, upstream %s, query log %s, live feed %s",
                  host, port, ", ".join(f"{h}:{p}" for h, p in upstreams),
-                 f"{query_log.path} ({query_log.retention_days:g} days)" if query_log else "off")
+                 f"{query_log.path} ({query_log.retention_days:g} days)" if query_log else "off",
+                 feed.url if feed else "off")
         watcher = asyncio.create_task(watch_store(StoreWatcher(query_log.path))) if query_log else None
         stop = asyncio.Event()
         # docker stop / systemd send SIGTERM; stop cleanly so queued rows get flushed.
@@ -237,6 +250,8 @@ def main() -> None:
     finally:
         if query_log:
             query_log.close()
+        if feed:
+            feed.close()
 
 
 if __name__ == "__main__":
