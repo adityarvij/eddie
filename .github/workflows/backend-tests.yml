@@ -1,0 +1,21 @@
+name: Backend tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: uv sync --locked
+      # Voice tests need the mic/model stack from voice/requirements.txt, so they stay local.
+      - run: uv run python -m unittest -v $(ls tests/test_*.py | grep -v '/test_voice_')
