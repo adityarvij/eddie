@@ -280,11 +280,10 @@ Writes from anywhere but loopback need `Authorization: Bearer $EDDIE_API_TOKEN`,
 |---|---|---|
 | `get_summary` | window, device? | Reads `/summary?window=` per-device counts (implemented in `voice/ollama_agent.py`) |
 | `get_recent_blocks` | device?, limit | Last blocked domains with reasons (implemented) |
-| `what_they_know` | hours? | Reads `/what-they-know` (implemented in `voice/voice_agent.py`); "what do they know about me" reads a week and has the local model phrase checked inferences (`voice/ollama_agent.py`) |
-| `block` | domain | Reads back, then on yes adds a global BLOCK rule (implemented, #108); refuses essentials |
-| `allow` | service or domain | Reads back, then on yes adds the service's or domain's global ALLOW rules (implemented, #108) |
-| `lockdown_device` | device, keep (services) | Reads back, then on yes blocks everything for that device except the keep services and essentials (implemented, #108) |
-| `set_mode` | home_mode | Reads back, then on yes sets home mode (implemented, #108); away mode isn't a backend mode yet |
+| `what_they_know` | hours? | Reads `/what-they-know`; explicit ranges such as "the last 3 days" are honored, otherwise it uses all retained history, and the local model phrases checked inferences |
+| `block` | pattern, device? | Adds BLOCK rule |
+| `allow` | pattern, device? | Adds ALLOW rule |
+| `lockdown_device` | device, keep (list) | Blocks everything for that device except keep patterns |
 | `explain_domain` | domain | Returns stored verdict and reason (implemented) |
 | `draft_email` | to, subject, body | Prepares email, asks for spoken yes |
 | `send_email` | draft_id | Sends via Gmail only after confirmation |

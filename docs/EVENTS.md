@@ -240,8 +240,12 @@ facts, text}` computed from `eddie/demo_week.py`: an invented, seeded week
 (devices named "Living room TV (demo)" and "Kids' tablet (demo)", every event
 `demo: true`). `text` starts with `label`. Demo events are generated per
 request and never enter `/events`, the WebSocket feed or `eddie.db`. The
-voice tools only read the live report; "what do they know about me" asks for
-`hours=168`, and the dashboard's live panel does too.
+voice tools only read the live report. An explicit spoken range is sent as
+`hours`; with no range, voice and the dashboard omit it so the API uses all
+locally retained history. The response includes `requested_hours`, actual
+`hours`, `limited_by_retention`, `data_points`, `covered_hours`, and
+`enough_data`. Longer requests are capped to retention with a `notice`; fewer
+than two observations make Eddie say there is not enough data instead of infer.
 
 ## Local voice bridge (port 5173)
 
@@ -254,7 +258,7 @@ Relays to the traffic API (`EDDIE_API_URL`, default `http://127.0.0.1:8000`), so
 | `GET /api/rules` | `GET /rules` | read-only |
 | `GET /api/devices` | `GET /devices?hours=24` | read-only |
 | `GET /api/mode` | `GET /mode` | read-only |
-| `GET /api/what-they-know[?demo=1]` | `GET /what-they-know?hours=168` or `?demo=true` | read-only |
+| `GET /api/what-they-know[?demo=1]` | `GET /what-they-know` (all retained data) or `?demo=true` | read-only |
 | `POST /api/mode` `{home_mode: bool}` | `POST /mode` | answers with the API's echo `{home_mode}` |
 | `POST /api/offline-mode` `{offline: bool}` | `POST /offline-mode` | answers with `{offline, applied}`; `applied: false` is passed through |
 

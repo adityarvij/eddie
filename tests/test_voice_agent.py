@@ -81,7 +81,22 @@ class WhatTheyKnowTool(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 request.reset_mock()
                 self.assertEqual('Amazon gets the most tracking data.', voice_agent.respond(phrase))
-                request.assert_called_once_with('/what-they-know?hours=168')
+                request.assert_called_once_with('/what-they-know')
+
+    @patch('voice_agent.request', return_value={'facts': [], 'enough_data': False, 'text': 'Not enough data.'})
+    def test_privacy_question_uses_requested_window_and_can_decline(self, request):
+        for phrase, hours in (('What do they know about me in the last 3 days?', 72),
+                              ('What could companies guess about us over two weeks?', 336),
+                              ('What does Amazon know about my house this month?', 720)):
+            with self.subTest(phrase=phrase):
+                request.reset_mock()
+                self.assertEqual('Not enough data.', voice_agent.respond(phrase))
+                request.assert_called_once_with(f'/what-they-know?hours={hours}')
+
+    def test_report_window_parser_defaults_to_all_retained_data(self):
+        self.assertIsNone(voice_agent.report_hours('what do they know about me'))
+        self.assertEqual(24, voice_agent.report_hours('what do they know about me today'))
+        self.assertEqual(1, voice_agent.report_hours('what do they know from the last 20 minutes'))
 
     @patch('voice_agent.request', side_effect=OSError('offline'))
     def test_backend_failure(self, request):
@@ -89,7 +104,7 @@ class WhatTheyKnowTool(unittest.TestCase):
 
     @patch('voice_agent.request')
     def test_tool_rejects_bad_window(self, request):
-        for hours in (0, 500, '24', True):
+        for hours in (0, 9000, '24', True):
             with self.assertRaises(ValueError):
                 voice_agent.what_they_know(hours)
         request.assert_not_called()

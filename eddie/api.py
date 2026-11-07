@@ -159,16 +159,33 @@ def summary(window: Literal["15m", "1h", "24h"] = "1h"):
             "window": window, "devices": insights.device_counts(list(recent), insights.WINDOWS_MS[window])}
 
 
+def report_limit_hours() -> int:
+    """The longest honest report is the configured on-device retention window."""
+    try:
+        days = float(os.environ.get("EDDIE_RETENTION_DAYS", store.RETENTION_DAYS))
+    except ValueError:
+        days = store.RETENTION_DAYS
+    return max(1, int(days * 24))
+
+
 @app.get("/what-they-know")
-def what_they_know(hours: int = Query(24, ge=1, le=168), demo: bool = False):
+def what_they_know(hours: int | None = Query(None, ge=1, le=8760), demo: bool = False):
     if demo:  # the seeded week, generated here and never mixed with real traffic
         facts = inferences.compute_facts(demo_week.events(int(time.time() * 1000)), 168)
         return {"demo": True, "label": demo_week.LABEL, "hours": 168, "facts": facts,
                 "text": f"{demo_week.LABEL} {inferences.spoken_text(facts, 168)}"}
-    events, source = report_events(hours)
-    facts = inferences.compute_facts(events, hours)
-    return {"demo": False, "source": source, "hours": hours, "facts": facts,
-            "text": inferences.spoken_text(facts, hours)}
+    limit = report_limit_hours()
+    requested = hours or limit
+    actual = min(requested, limit)
+    events, source = report_events(actual)
+    facts = inferences.compute_facts(events, actual)
+    quality = inferences.data_quality(events, actual)
+    limited = requested > actual
+    notice = (f"I only retain the last {inferences.period(actual)}, so I used all available data."
+              if limited else None)
+    return {"demo": False, "source": source, "requested_hours": requested, "hours": actual,
+            "limited_by_retention": limited, "notice": notice, "facts": facts, **quality,
+            "text": " ".join(filter(None, (notice, inferences.spoken_text(facts, actual, quality["enough_data"]))))}
 
 
 def report_events(hours: int) -> tuple[list[dict], str]:

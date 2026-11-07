@@ -163,7 +163,7 @@ class Handler(SimpleHTTPRequestHandler):
         if self.path in ('/api/what-they-know', '/api/what-they-know?demo=1'):
             # Read-only relay for the report panel; only these two fixed queries are forwarded.
             try:
-                path = '/what-they-know?demo=true' if self.path.endswith('demo=1') else '/what-they-know?hours=168'
+                path = '/what-they-know?demo=true' if self.path.endswith('demo=1') else '/what-they-know'
                 return self.json_response(200, api_request(path))
             except Exception:
                 return self.json_response(502, {'message': 'Report unavailable.'})
