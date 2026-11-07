@@ -77,7 +77,9 @@ Owner: [eddie/store.py](../eddie/store.py), written by [eddie/dns_server.py](../
 | Eddie never invents numbers. Summaries are computed in code from real events, and if the backend is down Eddie says so. | implemented |
 | A network action is reported as done only after the backend echoes the new state. Home mode state alone doesn't prove DNS enforcement. | implemented |
 | Voice commands that change settings must match the whole utterance, so negations or extra words don't trigger them. | implemented |
-| Rules, lockdown and email are not wired up; Eddie says that nothing changed. | implemented |
+| "Block it" / "Block <domain>" (#11) writes one global block rule through `POST /rules` with `created_by: voice`, stored in `eddie.db` like any other rule. "It" is the last domain named in one of Eddie's replies this conversation (held in memory only, cleared on dismissal or mic stop, never logged), else the newest flagged or allowed tracker in the last 15 minutes of `/events`. The reply names the domain so a wrong guess is audible. Tested. | implemented |
+| Allow, undo, lockdown and email are not wired up; Eddie says that nothing changed. | implemented |
+| A block that times out after the API stored the rule is still reported as "Nothing changed"; the rule then shows in `GET /rules`. | gap |
 | The local model gets only computed facts (`{fact, evidence, confidence}`), never raw logs. Every number in its output is checked against the facts. | planned (for "what they know" phrasing) |
 | The voice agent (`voice/ollama_agent.py`, #29) sends the local model the question's text and read-only tool results: per-device counts by label, the companies blocked most, recent blocked domains with reasons, one domain's latest decision and AI verdict, and "what they know" facts. No MAC or IP addresses, and no raw query log. It uses the same localhost / private-IP-literal check, no-redirect and no-proxy rules as the classifier. Tested. | implemented |
 | The agent's tools only read; it has no tool that changes rules, mode or devices, and an unknown tool name is refused. Tested. | implemented |

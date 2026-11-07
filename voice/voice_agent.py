@@ -7,11 +7,11 @@ import time
 import urllib.request
 
 
-def request(path, body=None):
+def request(path, body=None, timeout=3):
     base = os.environ.get('EDDIE_API_URL', 'http://127.0.0.1:8000').rstrip('/')
     data = None if body is None else json.dumps(body).encode()
     req = urllib.request.Request(base + path, data=data, headers={'Content-Type': 'application/json'})
-    with urllib.request.urlopen(req, timeout=3) as response:
+    with urllib.request.urlopen(req, timeout=timeout) as response:
         return json.load(response)
 
 
@@ -59,6 +59,88 @@ def what_they_know(hours=24):
     if type(hours) is not int or not 1 <= hours <= 168:
         raise ValueError('hours must be an integer from 1 to 168')
     return request(f'/what-they-know?hours={hours}')
+
+
+# A domain as POST /rules accepts it (no wildcard), and a domain inside a spoken reply.
+DOMAIN = re.compile(r'[a-z0-9_-]+(?:\.[a-z0-9_-]+)+')
+SPOKEN_DOMAIN = re.compile(r'\b[a-z0-9_-]+(?:\.[a-z0-9_-]+)*\.[a-z]{2,}\b')
+# eddie/labels.py TRACKING; copied so the voice worker doesn't import the backend.
+TRACKING = {'telemetry', 'ads', 'analytics', 'tracking'}
+IT_WINDOW_MS = 15 * 60 * 1000  # "it" never reaches back further than this in /events
+RULE_TIMEOUT = 5  # POST /rules waits up to 2 s for the DNS engine before answering
+IT_WORDS = r'it|that|this|that one|this one|that domain|this domain|that tracker|this tracker'
+BLOCK = re.compile(
+    r'(?:(?:ok|okay|eddie|please) )*(?:(?:can|could|would|will) you (?:please )?)?(?:go ahead and )?'
+    r'block (?P<target>.+?)(?: (?:please|for me|now|too|as well))*')
+NOT_RESOLVED = 'Which domain should I block? Say block, then the full domain name. Nothing changed.'
+RULE_FAILED = "I couldn't add that rule. Nothing changed."
+# The last domain Eddie spoke about in this conversation; memory only, cleared by forget_conversation.
+context = {'domain': None}
+
+
+def block_target(raw):
+    """(kind, domain) for a whole-utterance block command, else None.
+
+    kind is 'it' (domain None) or 'domain' (domain None when it isn't a domain name).
+    Spoken "dot" becomes "." because transcripts spell domains out.
+    """
+    text = raw.lower().replace("'", '').replace('’', '')
+    text = re.sub(r'\s+dot\s+', '.', text)
+    text = ' '.join(re.sub(r'[^a-z0-9._*-]+', ' ', text).split()).strip('.')
+    match = BLOCK.fullmatch(text)
+    if not match or re.search(r'\b(?:and|but|then)\b', match['target']):
+        return None  # extra requests get the "nothing changed" reply
+    target = re.sub(r'^(?:the )', '', match['target']).rstrip('.')
+    if re.fullmatch(IT_WORDS, target):
+        return 'it', None
+    return 'domain', target if len(target) <= 253 and DOMAIN.fullmatch(target) else None
+
+
+def resolve_it():
+    """The domain "it" means: the last one Eddie spoke about, else the newest flagged or
+    allowed tracker in the last 15 minutes of /events. None if neither exists."""
+    if context['domain']:
+        return context['domain']
+    since = int(time.time() * 1000) - IT_WINDOW_MS
+    for row in reversed(request(f'/events?since={since}')):
+        tracker_like = row.get('action') == 'flag' or (
+            row.get('action') == 'allow' and row.get('category') in TRACKING)
+        if tracker_like and DOMAIN.fullmatch(str(row.get('domain', ''))):
+            return row['domain']
+    return None
+
+
+def block_domain(domain):
+    """POST a global block rule; returns applied, raising unless the backend stored this rule."""
+    result = request('/rules', {'pattern': domain, 'action': 'block', 'created_by': 'voice'},
+                     timeout=RULE_TIMEOUT)
+    if (type(result.get('id')) is not int or result.get('pattern') != domain
+            or result.get('action') != 'block'):
+        raise ValueError('Rule was not acknowledged')
+    return result.get('applied') is True
+
+
+def block_command(kind, domain):
+    if kind == 'it':
+        try:
+            domain = resolve_it()
+        except Exception:
+            return "I can't reach Eddie’s traffic backend, so I don't know what it is. Nothing changed."
+    if domain is None:
+        return NOT_RESOLVED
+    try:
+        applied = block_domain(domain)
+    except Exception:
+        return RULE_FAILED
+    if applied:
+        return f"Blocked {domain} on every device. The rule is saved and Eddie's DNS has loaded it."
+    return (f"I saved a rule to block {domain}, but Eddie's DNS hasn't loaded it yet, "
+            "so it may still get through.")
+
+
+def forget_conversation():
+    """Drop the remembered domain when the conversation or microphone session ends."""
+    context['domain'] = None
 
 
 CONFIRM_SECONDS = 15
@@ -137,6 +219,14 @@ ask_model = None
 
 
 def respond(text):
+    reply = route(text)
+    domains = SPOKEN_DOMAIN.findall(reply.lower())
+    if domains:
+        context['domain'] = domains[-1]
+    return reply
+
+
+def route(text):
     raw = text.strip()
     text = re.sub(r'[^a-z0-9\s]', '', text.lower()).strip()
     text = re.sub(r'\s+', ' ', text)
@@ -162,15 +252,18 @@ def respond(text):
             return f"Home mode turned {'on' if enabled else 'off'}."
         except Exception:
             return "I couldn't update home mode. Check the local backend before trying again."
+    block = block_target(raw)
+    if block:
+        return block_command(*block)
     if re.search(r'\b(block|allow|lock|undo|email|send|mode)\b', text):
-        return "I haven't changed anything. I can turn home mode on or off; domain rules, lockdown and email aren't connected yet."
+        return "I haven't changed anything. I can block a domain or turn home mode on or off; allow, undo, lockdown and email aren't connected yet."
     if re.search(r'\bwhat (?:do|does|can|could) (?:\w+|my \w+|the \w+) (?:know|tell|guess|figure out|learn) about (?:me|us|my house|my home|our house)\b', text):
         try:
             return str(what_they_know()['text'])
         except Exception:
             return "I can't reach Eddie’s traffic backend, so I can't say what they know right now."
     if text in ('hello', 'hi', 'hey', 'hey eddie'):
-        return "Hey, I'm Eddie. Ask me what's been going on, or tell me to turn home mode on or off."
+        return "Hey, I'm Eddie. Ask me what's been going on, tell me to block a domain, or to turn home mode on or off."
     if ask_model is not None:
         reply = ask_model(raw)
         if reply is not None:
