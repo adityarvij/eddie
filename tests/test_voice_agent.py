@@ -23,7 +23,7 @@ class VoiceCommands(unittest.TestCase):
 
     @patch('voice_agent.request')
     def test_unsupported_action_does_not_write(self, request):
-        self.assertIn("haven't changed", voice_agent.respond('block netflix'))
+        self.assertIn("haven't changed", voice_agent.respond('allow netflix'))
         self.assertIn("haven't changed", voice_agent.respond('turn on home mode and send email'))
         request.assert_not_called()
 
@@ -65,7 +65,7 @@ class WhatTheyKnowTool(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 request.reset_mock()
                 self.assertEqual('Amazon gets the most tracking data.', voice_agent.respond(phrase))
-                request.assert_called_once_with('/what-they-know?hours=24')
+                request.assert_called_once_with('/what-they-know?hours=168')
 
     @patch('voice_agent.request', side_effect=OSError('offline'))
     def test_backend_failure(self, request):

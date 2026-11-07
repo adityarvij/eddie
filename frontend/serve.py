@@ -15,9 +15,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT.parent / 'voice'))
-from voice_agent import confirmation, respond
+from voice_agent import confirmation, forget_conversation, request as api_request, respond
 from voice_runtime import run as run_voice
 stopped = threading.Event()
+dismissed = threading.Event()  # the close button: end the voice conversation
 listeners = set()
 lock = threading.Lock()
 voice_lock = threading.Lock()
@@ -80,16 +81,18 @@ def microphone():
         def publish(event):
             if event.get('type') == 'voice_state' and event.get('state') == 'dismissed':
                 confirmation.cancel()
+                forget_conversation()
             if event.get('type') == 'voice_status':
                 voice_state.update({key: value for key, value in event.items() if key != 'type'})
             emit(event)
-        run_voice(publish, answer, speaking, stopped)
+        run_voice(publish, answer, speaking, stopped, dismissed)
     except Exception as error:
         voice_state['status'] = 'error'
         emit({'type': 'voice_status', 'status': 'error', 'message': f'Voice unavailable: {error}'})
     finally:
-        # A pending risky action never outlives the microphone session.
+        # A pending risky action or remembered domain never outlives the microphone session.
         confirmation.cancel()
+        forget_conversation()
         if stopped.is_set():
             voice_state['status'] = 'off'
             emit({'type': 'voice_status', 'status': 'off'})
@@ -109,6 +112,19 @@ class Handler(SimpleHTTPRequestHandler):
     def do_GET(self):
         if self.path == '/api/voice/status':
             return self.json_response(200, {'type': 'voice_status', **voice_state})
+        if self.path == '/api/rules':
+            # Read-only relay so the page (and the iPad) can list rules without the API allowing CORS.
+            try:
+                return self.json_response(200, api_request('/rules'))
+            except Exception:
+                return self.json_response(502, {'message': 'Rules unavailable.'})
+        if self.path in ('/api/what-they-know', '/api/what-they-know?demo=1'):
+            # Read-only relay for the report panel; only these two fixed queries are forwarded.
+            try:
+                path = '/what-they-know?demo=true' if self.path.endswith('demo=1') else '/what-they-know?hours=168'
+                return self.json_response(200, api_request(path))
+            except Exception:
+                return self.json_response(502, {'message': 'Report unavailable.'})
         if self.path == '/events':
             self.send_response(200)
             self.send_header('Content-Type', 'text/event-stream')
@@ -156,6 +172,7 @@ class Handler(SimpleHTTPRequestHandler):
                 if voice_thread and voice_thread.is_alive():
                     return self.json_response(200, {'message': 'Microphone is running or stopping; wait for its status.'})
                 stopped.clear()
+                dismissed.clear()
                 voice_state['status'] = 'starting'
                 voice_thread = threading.Thread(target=microphone, daemon=True)
                 voice_thread.start()
@@ -163,6 +180,13 @@ class Handler(SimpleHTTPRequestHandler):
         if self.path == '/api/voice/stop':
             stopped.set()
             return self.json_response(200, {'message': 'Stopping local microphone.'})
+        if self.path == '/api/voice/dismiss':
+            # Closing the overlay ends the conversation; the next request needs the wake phrase.
+            confirmation.cancel()
+            forget_conversation()
+            if voice_thread and voice_thread.is_alive():
+                dismissed.set()
+            return self.json_response(200, {'ok': True})
         if self.path == '/api/voice/ask':
             text = str(body.get('text', '')).strip()[:1000]
             if not text:
@@ -184,6 +208,16 @@ if __name__ == '__main__':
     # 0.0.0.0 lets the iPad view the dashboard; mic and other controls stay localhost-only.
     parser.add_argument('--host', default=os.environ.get('EDDIE_DASHBOARD_HOST', '127.0.0.1'))
     args = parser.parse_args()
+    if os.environ.get('EDDIE_AGENT', 'ollama') != 'off':
+        import ollama_agent
+        import voice_agent
+        try:
+            agent = ollama_agent.Agent()
+            voice_agent.ask_model = lambda text: ollama_agent.answer(agent, text)
+            voice_agent.phrase_inferences = lambda facts: ollama_agent.phrase(agent, facts)
+            print(f'Local agent: {agent.model} at {agent.url} (keyword router if it is unavailable).', flush=True)
+        except ValueError as error:
+            print(f'Local agent off: EDDIE_OLLAMA_URL refused: {error}.', flush=True)
     print(f'Eddie dashboard: http://localhost:{args.port}', flush=True)
     if not is_local(args.host):
         print(f'Viewable from the network on port {args.port}; controls only work on this computer.', flush=True)

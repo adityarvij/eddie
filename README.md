@@ -195,11 +195,11 @@ Hand this section and the ones below to a coding agent (Claude Code etc.). Targe
 
 ### Running the DNS server
 
-`eddie/dns_server.py` implements steps 1, 3 and 4 above (UDP only) and the `queries` half of step 5: every lookup writes one row to `eddie.db` through `eddie/store.py`. The rest is not built yet: the device is the client IP until #14 (so `queries.device_mac` holds the IP for now), and nothing is published to the live feed until #16. `eddie/decision.py` implements the full decision order below. At startup the DNS server loads every `blocklists/*.txt` file (StevenBlack hosts, plus the Perflyst smart-TV and Fire TV lists: about 78,000 domains in 0.3 s) and the essentials in `allowlist.txt` (`eddie/lists.py`). Rules come from the `/rules` API (`eddie/rules.py`).
+`eddie/dns_server.py` implements steps 1, 3 and 4 above (UDP only) and the `queries` half of step 5: every lookup writes one row to `eddie.db` through `eddie/store.py`. Each lookup is also sent to the live feed (`POST /ingest`, then `/ws/events`) by `eddie/feed.py`, off the reply path: about 25 ms from lookup to dashboard on the development Mac. Start the API without fake traffic (`./scripts/run_all.sh --no-fake`) so the screen shows only real lookups. Step 2 is `eddie/devices.py` (#14): the client IP maps to a MAC from the ARP table, so `queries.device_mac` and the feed's `device_mac` hold the MAC, and the feed's `device` is the device's label, DHCP hostname or vendor ("Amazon device"). A client ARP can't resolve stays `ip:<IP>` with the IP as its name. Devices that look something up are recorded in the `devices` table; `GET /devices` names and counts them. `eddie/decision.py` implements the full decision order below. At startup the DNS server loads every `blocklists/*.txt` file (StevenBlack hosts, the Perflyst smart-TV and Fire TV lists, and Eddie's own `eddie-extra.txt`: about 78,000 domains in 0.3 s) and the essentials in `allowlist.txt` (`eddie/lists.py`). Rules come from the `/rules` API (`eddie/rules.py`).
 
 ### Running the classifier
 
-`eddie/classifier.py` labels unknown domains with the local model. Its queue is the query log itself: flagged `queries` rows from the last hour with no `ai_verdicts` row yet. Each verdict is written to `ai_verdicts`, and the DNS server reloads rules and verdicts from `eddie.db` within about 0.2 s, so the next lookup of that domain uses it (about 2.5 s end to end with `llama3.2:3b` on the development Mac). DNS never waits on the model. The `ai_verdict` live-feed event isn't sent yet (#16).
+`eddie/classifier.py` labels unknown domains with the local model. Its queue is the query log itself: flagged `queries` rows from the last hour with no `ai_verdicts` row yet. Each verdict is written to `ai_verdicts`, and the DNS server reloads rules and verdicts from `eddie.db` within about 0.2 s, so the next lookup of that domain uses it (about 2.5 s end to end with `llama3.2:3b` on the development Mac). DNS never waits on the model. Each verdict is also sent to the live feed as an `ai_verdict` event (`POST /ai/verdict`). Network plumbing (reverse lookups, service-discovery names, `.local`) is never queued, since it isn't a company to judge.
 
 ```bash
 uv run python -m eddie.classifier   # needs Ollama running and the same EDDIE_DB as the DNS server
@@ -213,7 +213,7 @@ sudo .venv/bin/python -m eddie.dns_server              # Pi / Linux: port 53 nee
 EDDIE_DNS_PORT=8053 uv run python -m eddie.dns_server  # development, any OS: dig @127.0.0.1 -p 8053 google.com
 ```
 
-Settings: `EDDIE_DNS_HOST` (default `0.0.0.0`), `EDDIE_DNS_PORT` (default `53`), `EDDIE_DB` (default `eddie.db` in the working directory, created `0600` on first run; `off` logs nothing), `EDDIE_RETENTION_DAYS` (default `7`; older rows are securely deleted at start and hourly), `EDDIE_BLOCKLISTS` (default the repo's `blocklists/` directory; `off` loads no blocklists), `EDDIE_ALLOWLIST` (default the repo's `allowlist.txt`; if it's missing the server refuses to start, because blocking without it can break devices), `EDDIE_UPSTREAMS` (default `1.1.1.1,9.9.9.9`, tried in order with a 2 s timeout each; if all fail the device gets SERVFAIL). On the Mac, Internet Sharing must be off because it holds port 53. Binding `127.0.0.1:53` still needs sudo on macOS.
+Settings: `EDDIE_DHCP_LEASES` (dnsmasq leases file for device hostnames; default `/var/lib/misc/dnsmasq.leases` if it exists, `off` for none), `EDDIE_DNS_HOST` (default `0.0.0.0`), `EDDIE_DNS_PORT` (default `53`), `EDDIE_DB` (default `eddie.db` in the working directory, created `0600` on first run; `off` logs nothing), `EDDIE_RETENTION_DAYS` (default `7`; older rows are securely deleted at start and hourly), `EDDIE_BLOCKLISTS` (default the repo's `blocklists/` directory; `off` loads no blocklists), `EDDIE_ALLOWLIST` (default the repo's `allowlist.txt`; if it's missing the server refuses to start, because blocking without it can break devices), `EDDIE_UPSTREAMS` (default `1.1.1.1,9.9.9.9`, tried in order with a 2 s timeout each; if all fail the device gets SERVFAIL), `EDDIE_API_URL` (default `http://127.0.0.1:8000`; where lookups are sent for the live feed; must be `localhost` or a loopback or private IP literal), `EDDIE_FEED` (`off` sends nothing to the live feed; if the API is down, events are dropped and DNS carries on). On the Mac, Internet Sharing must be off because it holds port 53. Binding `127.0.0.1:53` still needs sudo on macOS.
 
 ## Agent build spec: data, API, tools
 
@@ -229,7 +229,7 @@ CREATE INDEX q_ts ON queries(ts);
 CREATE INDEX q_dev ON queries(device_mac, ts);
 ```
 
-`rules.pattern` matches exact domain or suffix (`*.amazon-adsystem.com`). `scope` = `global` or `device`. `created_by` = `api` (default) / `user` / `voice` / `agent` / `dashboard`. `engine_state` holds `rules_rev` (bumped by every rule write) and `rules_loaded` (the revision the DNS engine last loaded), which `/rules` uses to acknowledge a change.
+`rules.pattern` matches exact domain or suffix (`*.amazon-adsystem.com`). `scope` = `global` or `device`. `created_by` = `user` (default) / `voice` / `agent`. `engine_state` holds `rules_rev` (bumped by every rule write) and `rules_loaded` (the revision the DNS engine last loaded), which `/rules` uses to acknowledge a change.
 
 ### Decision order (first match wins)
 
@@ -237,8 +237,9 @@ CREATE INDEX q_dev ON queries(device_mac, ts);
 2. **Allowlist:** essentials so nothing breaks (Netflix, YouTube video CDNs, Amazon content and auth, Apple, NTP, captive-portal checks). Ship as `allowlist.txt`.
 3. **Blocklist:** StevenBlack hosts + a smart-TV list, loaded into a Python set at startup (`blocklists/*.txt`, downloaded once before the event).
 4. **Keyword heuristic:** labels containing `metrics`, `telemetry`, `analytics`, `ads`, `adsystem`, `tracking`, `beacon`, `crashlytics`, `log` → `BLOCK`, source `heuristic`.
-5. **Cached AI verdict:** tracker with confidence ≥ 0.7 → `BLOCK`; needed → `ALLOW`; else `FLAG`.
-6. **Unknown:** `ALLOW` + `FLAG` now, queue for AI.
+5. **Cached AI verdict:** needed → `ALLOW`; tracker → `FLAG` as a likely tracker; unsure → `FLAG`. The AI never blocks on its own: on real traffic the local model called Google's static files, Apple's update servers and Safe Browsing trackers at 0.8–0.9 confidence. A user rule ("block it"), a list or the keyword heuristic does the blocking.
+6. **Beacon:** an unknown domain the device looks up on a regular timer (gap coefficient of variation ≤ 0.15, see `eddie/beacons.py`) → `FLAG`, source `heuristic`, reason "looked up every 60 s, likely telemetry"; still queued for AI.
+7. **Unknown:** `ALLOW` + `FLAG` now, queue for AI.
 
 ### Classifier prompt contract
 
@@ -254,27 +255,29 @@ Use Ollama `format: json`, temperature 0. Never send anything but the domain and
 
 | Method | Path | Returns / does |
 |---|---|---|
-| GET | `/devices` | Devices with tracker counts |
+| GET | `/devices?hours=24` | Devices Eddie has seen, with name, vendor and lookup / blocked / flagged counts (see docs/EVENTS.md) |
+| PUT | `/devices/{mac}` | `{label}` names a device ("Fire Stick"); `""` or `null` clears it |
 | GET | `/events?since=&device=` | Recent query rows |
 | GET | `/summary?window=1h` | Totals: queries, blocked, top blocked domains, top companies, per device |
-| GET | `/what-they-know?hours=24` | "What they know about you" facts `{fact, evidence, confidence}` + spoken text (scaffold; see docs/EVENTS.md) |
+| GET | `/what-they-know?hours=24` | "What they know about you" facts `{fact, evidence, confidence}` + spoken text, from `eddie.db` (else the in-memory feed); `?demo=true` returns the labelled seeded demo week instead (see docs/EVENTS.md) |
 | GET | `/rules` | Every rule, newest first |
 | POST | `/rules` | `{pattern, action, device_mac?, created_by?}` add rule; answers with the stored id and `applied` once DNS has loaded it (see docs/EVENTS.md) |
 | DELETE | `/rules/{id}` | Remove rule; answers with the removed rule and `applied` |
-| POST | `/offline-mode` | Toggle: stop forwarding to upstream, prove the AI still works |
+| GET | `/mode` | `{home_mode, offline, offline_applied}` |
+| POST | `/offline-mode` | `{offline: bool}` stops (or restarts) forwarding to upstream; allowed lookups get cached answers or SERVFAIL. Answers with `applied` once DNS has loaded it (see docs/EVENTS.md) |
 | WS | `/ws/events` | Pushes events typed `query`, `ai_verdict`, `voice_state` or `agent_reply` |
 
 ### Agent tools (Ollama tool calling)
 
 | Tool | Args | Effect |
 |---|---|---|
-| `get_summary` | window, device? | Reads `/summary` |
-| `get_recent_blocks` | device?, limit | Last blocked domains with reasons |
-| `what_they_know` | hours? | Reads `/what-they-know` (implemented in `voice/voice_agent.py`) |
+| `get_summary` | window, device? | Reads `/summary?window=` per-device counts (implemented in `voice/ollama_agent.py`) |
+| `get_recent_blocks` | device?, limit | Last blocked domains with reasons (implemented) |
+| `what_they_know` | hours? | Reads `/what-they-know` (implemented in `voice/voice_agent.py`); "what do they know about me" reads a week and has the local model phrase checked inferences (`voice/ollama_agent.py`) |
 | `block` | pattern, device? | Adds BLOCK rule |
 | `allow` | pattern, device? | Adds ALLOW rule |
 | `lockdown_device` | device, keep (list) | Blocks everything for that device except keep patterns |
-| `explain_domain` | domain | Returns stored verdict and reason |
+| `explain_domain` | domain | Returns stored verdict and reason (implemented) |
 | `draft_email` | to, subject, body | Prepares email, asks for spoken yes |
 | `send_email` | draft_id | Sends via Gmail only after confirmation |
 
@@ -294,6 +297,7 @@ eddie/
   pyproject.toml
   eddie/
     dns_server.py      dnslib resolver, forward/sinkhole
+    feed.py            sends each decision to the live feed (/ingest)
     decision.py        rule order, lists, heuristics
     classifier.py      Ollama queue worker
     devices.py         ARP/DHCP → device labels
@@ -474,7 +478,7 @@ With a Fire Stick you'll mainly see Safety, What's on screen, Identity linking a
 
 ## Voice implementation update
 
-The offline wake/capture/transcription worker and deterministic summary/home-mode tool router are implemented. Whisper, shared wake features, Vosk and Piper Lessac assets are pinned by SHA-256 in `voice/assets.json` and installed with `python scripts/provision_voice.py` (#39), which also runs a hardware check; `scripts/run_voice.sh` verifies them offline before starting. The dedicated Hey Eddie ONNX model still needs training; the explicit offline Vosk prototype is available now via `./scripts/run_voice.sh`. Live-room microphone accuracy remains unverified. General Ollama tool calling, domain rules, lockdown and email are not yet connected; the one-pending-action confirmation step they will require (yes/no, 15 s expiry, discarded on dismissal) is implemented and unit tested. See [voice setup](voice/README.md), [architecture and remaining work](docs/ARCHITECTURE.md), and [contributor instructions](AGENTS.md). The Mac is the development host; final deployment stays portable to Linux.
+The offline wake/capture/transcription worker and deterministic summary/home-mode tool router are implemented. Whisper, shared wake features, Vosk and Piper Lessac assets are pinned by SHA-256 in `voice/assets.json` and installed with `python scripts/provision_voice.py` (#39), which also runs a hardware check; `scripts/run_voice.sh` verifies them offline before starting. The dedicated Hey Eddie ONNX model still needs training; the explicit offline Vosk prototype is available now via `./scripts/run_voice.sh`. Live-room microphone accuracy remains unverified. Read-only Ollama tool calling (#29: `get_summary`, `get_recent_blocks`, `explain_domain`, `what_they_know`) answers questions, with every spoken number checked against tool results; domain rules, lockdown and email are not yet connected to it; the one-pending-action confirmation step they will require (yes/no, 15 s expiry, discarded on dismissal) is implemented and unit tested. See [voice setup](voice/README.md), [architecture and remaining work](docs/ARCHITECTURE.md), and [contributor instructions](AGENTS.md). The Mac is the development host; final deployment stays portable to Linux.
 
 The voice view now features a larger active Eddie, spoken interaction without a text box, and an Open logs control beneath Eddie that opens a drawer for recent network activity.
 

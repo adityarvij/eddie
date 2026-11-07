@@ -72,7 +72,7 @@ def decide(s: Stream, home_mode: bool, ai_cache=None) -> tuple[str, str, str]:
     verdict = (ai_cache or {}).get(s.domain)
     if s.source == 'default' and verdict:
         label, confidence = verdict['label'], verdict['confidence']
-        action = 'block' if label == 'tracker' and confidence >= .7 else 'allow' if label == 'needed' else 'flag'
+        action = 'allow' if label == 'needed' else 'flag'  # the AI never blocks on its own
         return action, 'ai', f"AI: {label} ({confidence:.2f}), {verdict['reason']}"
     return s.action, s.source, s.reason
 

@@ -30,7 +30,7 @@ import urllib.parse
 import urllib.request
 
 from . import labels, store
-from .decision import Verdict
+from .decision import PLUMBING_SQL, Verdict
 
 DEFAULT_URL = "http://127.0.0.1:11434"
 DEFAULT_MODEL = "llama3.2:3b"
@@ -49,11 +49,22 @@ MAX_IN_FLIGHT = 2
 DOMAIN = re.compile(r"[a-z0-9_-]+(\.[a-z0-9_-]+)*")
 
 PROMPT = """You label one internet domain looked up by a device on a home network.
-Judge mainly by what the domain is: who runs it and what it is for.
-- "tracker": its main purpose is ads, analytics, telemetry, crash reports or usage data collection, and the device works without it.
-- "needed": content, video or app APIs, CDNs, sign-in, payments, software updates, time sync or certificate checks. Blocking it breaks something.
+Judge by what the domain is: who runs it and what it is for.
+- "tracker": its only job is ads, analytics, telemetry, crash reports, A/B testing or usage data collection, and the app or page works without it. Hostnames often say so: analytics, metrics, telemetry, collector, events, beacon, pixel, ads, adservice, intake, ingest, stats.
+- "needed": content, video, images, fonts, scripts and styles, app or website APIs, sign-in, payments, software updates, time sync, certificate or safety checks, DNS. Blocking it breaks something.
 - "unsure": you don't recognise the domain or it could be either.
-queries_10min and idle (the device had no media traffic in the last 5 minutes; null means unknown) are weak hints only. Never call a domain a tracker just because it is looked up often or while idle.
+Shared infrastructure is "needed", not a tracker, even when the company also runs ads: static-file and image hosts (gstatic.com, googleusercontent.com, aaplimg.com, *.cdn.*), CDN and cloud hostnames (akamaiedge.net, cloudfront.net, fastly, amazonaws.com, elb), DNS resolvers, and safe-browsing or security checks.
+Never call a domain a tracker because of the company that owns it, because it is looked up often, or because the device is idle. queries_10min and idle (null means unknown) are weak hints only.
+If you can't name what the domain does, answer "unsure". A wrong "tracker" is worse than "unsure".
+Examples:
+{"domain": "ssl.gstatic.com"} -> {"label": "needed", "confidence": 0.9, "reason": "Google static files used by many sites"}
+{"domain": "swscan.apple.com"} -> {"label": "needed", "confidence": 0.9, "reason": "Apple software update catalog"}
+{"domain": "d1abc2xyz.cloudfront.net"} -> {"label": "unsure", "confidence": 0.4, "reason": "Amazon CloudFront CDN host, owner unknown"}
+{"domain": "dns.google"} -> {"label": "needed", "confidence": 0.9, "reason": "Google public DNS resolver"}
+{"domain": "www.google-analytics.com"} -> {"label": "tracker", "confidence": 0.95, "reason": "Google Analytics usage tracking"}
+{"domain": "api.mixpanel.com"} -> {"label": "tracker", "confidence": 0.9, "reason": "Mixpanel product analytics events"}
+{"domain": "events.statsig.com"} -> {"label": "tracker", "confidence": 0.85, "reason": "Statsig A/B testing and event logging"}
+{"domain": "status.example-app.io"} -> {"label": "unsure", "confidence": 0.3, "reason": "Unrecognised app host"}
 confidence is how sure you are of the label, from 0 to 1. Use below 0.7 unless you recognise the domain.
 Reply with JSON only: {"label": "tracker" | "needed" | "unsure", "confidence": <number>, "reason": "<under 15 words, about what the domain is>"}"""
 
@@ -107,9 +118,13 @@ def parse_verdict(text) -> Verdict | None:
 
 
 def candidates(conn: sqlite3.Connection, now_ms: int, limit: int) -> list[str]:
-    """Recently looked-up unknown domains with no verdict yet, oldest first."""
+    """Recently looked-up unknown domains (beaconing ones included) with no verdict yet, oldest first.
+
+    Network plumbing (decision.is_plumbing) is skipped: it isn't a company to judge.
+    """
     return [d for (d,) in conn.execute(
-        "SELECT domain FROM queries WHERE ts >= ? AND source = 'default'"
+        "SELECT domain FROM queries WHERE ts >= ? AND action = 'flag' AND source IN ('default', 'heuristic')"
+        f" AND NOT {PLUMBING_SQL}"
         " AND domain NOT IN (SELECT domain FROM ai_verdicts)"
         " GROUP BY domain ORDER BY MIN(ts) ASC, domain ASC LIMIT ?", (now_ms - LOOKBACK_MS, limit))]
 

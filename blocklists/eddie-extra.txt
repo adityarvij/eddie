@@ -1,0 +1,25 @@
+# Eddie's own additions: analytics and telemetry hosts seen on real traffic
+# that none of the shipped lists block. One host per line; an entry covers its
+# subdomains. Keep it to hosts whose only job is measurement: blocking any of
+# these must not break the page or app that calls it.
+#
+# Left out on purpose: PerimeterX (*.protechts.net, *.px-cloud.net) is
+# fingerprinting, but it's bot detection; blocking it can make sites like
+# LinkedIn challenge or refuse you. ogads-pa.clients6.google.com also serves
+# Google's account menu.
+
+# GitHub usage analytics
+collector.github.com
+
+# Notion usage logs sent to Splunk
+http-inputs-notion.splunkcloud.com
+
+# Google ad-traffic quality (ad fraud and viewability measurement)
+ep1.adtrafficquality.google
+ep2.adtrafficquality.google
+
+# ChatGPT A/B-testing and analytics (Statsig)
+ab.chatgpt.com
+
+# Cloudflare Network Error Logging reports
+a.nel.cloudflare.com

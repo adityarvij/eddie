@@ -89,6 +89,12 @@ class QueueTests(DBTestCase):
             self.conn.execute("INSERT INTO ai_verdicts VALUES ('known.example', 'needed', 0.9, 'x', ?)", (now_ms(),))
         self.assertEqual(['new.example', 'newest.example'], classifier.candidates(self.conn, now_ms(), 10))
 
+    def test_network_plumbing_is_not_queued(self):
+        for domain in ('54.25.110.10.in-addr.arpa', '_dns.resolver.arpa', 'b._dns-sd._udp.neu.edu',
+                       '_ipp._tcp.printers.example.edu', 'printer.local', 'wpad', 'my_host.example.com'):
+            self.query(domain)
+        self.assertEqual(['my_host.example.com'], classifier.candidates(self.conn, now_ms(), 10))
+
     def test_facts_carry_only_domain_label_counts_and_idle(self):
         for ago in (1000, 2000, classifier.COUNT_WINDOW_MS + 1000):
             self.query('t.example', ago_ms=ago, device=TV_MAC)
@@ -170,8 +176,8 @@ class ClassifierTests(DBTestCase):
         classifier.Classifier(self.conn, lambda q: GOOD).run_once()
         self.assertTrue(watcher.poll())
         self.assertFalse(watcher.poll())
-        self.assertEqual(('block', 'ai'), (engine.evaluate('t.example', TV_IP).action,
-                                           engine.evaluate('t.example', TV_IP).source))
+        self.assertEqual(('flag', 'ai'), (engine.evaluate('t.example', TV_IP).action,
+                                          engine.evaluate('t.example', TV_IP).source))  # AI never blocks alone
         watcher.conn.close()
 
 

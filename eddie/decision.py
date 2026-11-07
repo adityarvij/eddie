@@ -5,13 +5,20 @@ First match wins:
 2. Allowlist: essentials, so a rule or list can't brick a device.
 3. Blocklist.
 4. Keyword heuristic on the domain's labels.
-5. Cached AI verdict: tracker at confidence >= 0.7 blocks, needed allows,
-   anything else flags.
-6. Unknown: flag (the lookup is still forwarded). The flagged queries row in
+5. Cached AI verdict: needed allows; tracker flags as a likely tracker;
+   unsure flags. The AI never blocks on its own: on real traffic the local
+   model called Google's static files, Apple's update servers and Safe
+   Browsing trackers at 0.8-0.9 confidence. Blocking takes a list, the
+   heuristic or a user rule.
+6. Beacon: an unknown domain this device looks up on a regular timer
+   (beacons.py) is flagged as likely telemetry, source heuristic. Still
+   forwarded and queued for the classifier like any unknown.
+7. Unknown: flag (the lookup is still forwarded). The flagged queries row in
    eddie.db is the classifier's queue (classifier.py); nothing else is kept.
 
 This runs on the DNS hot path: no model calls, no network, no disk. Everything
-it reads is in memory. Writers (rules API #12, list loader #8, classifier #27)
+it reads is in memory; the only state it writes is the bounded in-memory
+lookup timing for unknown domains (beacons.Beacons). Writers (rules API #12, list loader #8, classifier #27)
 replace whole snapshots with set_rules / set_lists / set_verdicts instead of
 mutating them, so a lookup never sees a half-updated table.
 
@@ -20,19 +27,23 @@ Matching:
 - A rule pattern `a.com` matches only a.com; `*.a.com` matches a.com and every
   subdomain. When several rules match, the most specific wins (exact, then the
   longest suffix), and among equals the newest rule wins.
+- A device rule matches the device's key (its MAC once devices.py knows it) or
+  its client IP, so rules made before the MAC was known keep working.
 """
 import re
 import sqlite3
+import time
 from dataclasses import dataclass
 
+from .beacons import Beacons
 from .events import Action, Source
 
 KEYWORDS = ("metrics", "telemetry", "analytics", "adsystem", "tracking", "beacon", "crashlytics")
 # Too short to match inside a label (uploads, blog, login), so these must be a
 # whole word: a label split on anything that isn't a letter.
 WHOLE_WORDS = {"ads": "ads", "log": "log", "logs": "log"}
-TRACKER_CONFIDENCE = 0.7
 UNKNOWN = "unknown, waiting for classifier"
+BEACON = "looked up every {} s, likely telemetry; waiting for classifier"
 
 _WORD_SPLIT = re.compile(r"[^a-z]+")
 
@@ -67,6 +78,22 @@ class Verdict:
 
 def normalize(domain: str) -> str:
     return domain.strip().lower().rstrip(".")
+
+
+def is_plumbing(domain: str) -> bool:
+    """A lookup the network makes for itself, not an app reaching a company.
+
+    Reverse lookups (*.arpa), service discovery (_ipp._tcp..., b._dns-sd._udp...),
+    .local names and single-label names. They're still answered and logged, but
+    left out of the live feed and the classifier's queue. Keep PLUMBING_SQL in step.
+    """
+    return ("." not in domain or domain.endswith((".arpa", ".local"))
+            or any(label.startswith("_") for label in domain.split(".")))
+
+
+# is_plumbing as a SQL condition on a domain column (true for plumbing).
+PLUMBING_SQL = ("(domain NOT LIKE '%.%' OR domain LIKE '%.arpa' OR domain LIKE '%.local'"
+                r" OR domain LIKE '\_%' ESCAPE '\' OR domain LIKE '%.\_%' ESCAPE '\')")
 
 
 def suffixes(domain: str) -> list[str]:
@@ -105,10 +132,10 @@ class RuleIndex:
             elif pattern:
                 self.exact.setdefault(pattern, []).append(rule)
 
-    def find(self, domain: str, device: str) -> Rule | None:
+    def find(self, domain: str, device: str, ip: str | None = None) -> Rule | None:
         candidates = self.exact.get(domain, []) + [
             r for s in suffixes(domain) for r in self.wildcard.get(s, [])]
-        return (next((r for r in candidates if r.device_mac == device), None)
+        return (next((r for r in candidates if r.device_mac is not None and r.device_mac in (device, ip)), None)
                 or next((r for r in candidates if r.device_mac is None), None))
 
 
@@ -118,6 +145,7 @@ class Engine:
         self.allowlist: frozenset[str] = frozenset()
         self.blocklist: frozenset[str] = frozenset()
         self.verdicts: dict[str, Verdict] = {}
+        self.beacons = Beacons()
 
     def set_rules(self, rules) -> None:
         self.rules = RuleIndex(rules)
@@ -136,11 +164,11 @@ class Engine:
         self.set_verdicts({d: Verdict(label, confidence, reason or "") for d, label, confidence, reason
                            in conn.execute("SELECT domain, label, confidence, reason FROM ai_verdicts")})
 
-    def evaluate(self, domain: str, device: str) -> Decision:
+    def evaluate(self, domain: str, device: str, ip: str | None = None, now_ms: int | None = None) -> Decision:
         domain = normalize(domain)
         if not domain:
             return Decision("allow", "default", "root query")
-        if rule := self.rules.find(domain, device):
+        if rule := self.rules.find(domain, device, ip):
             scope = "device" if rule.device_mac else "global"
             return Decision(rule.action, "rule", f"{scope} rule {rule.pattern}")
         if entry := matches(domain, self.allowlist):
@@ -150,16 +178,19 @@ class Engine:
         if kw := keyword(domain):
             return Decision("block", "heuristic", f'keyword "{kw}"')
         if verdict := self.verdicts.get(domain):
-            if verdict.label == "tracker" and verdict.confidence >= TRACKER_CONFIDENCE:
-                return Decision("block", "ai", verdict.reason)
+            if verdict.label == "tracker":
+                return Decision("flag", "ai", f"likely tracker: {verdict.reason}" if verdict.reason else "likely tracker")
             if verdict.label == "needed":
                 return Decision("allow", "ai", verdict.reason)
             return Decision("flag", "ai", verdict.reason)
+        now_ms = int(time.time() * 1000) if now_ms is None else now_ms
+        if every := self.beacons.observe(device, domain, now_ms):
+            return Decision("flag", "heuristic", BEACON.format(round(every / 1000)))
         return Decision("flag", "default", UNKNOWN)
 
 
 engine = Engine()
 
 
-def evaluate(domain: str, device: str) -> Decision:
-    return engine.evaluate(domain, device)
+def evaluate(domain: str, device: str, ip: str | None = None, now_ms: int | None = None) -> Decision:
+    return engine.evaluate(domain, device, ip, now_ms)

@@ -18,13 +18,15 @@ Owner: [eddie/store.py](../eddie/store.py), written by [eddie/dns_server.py](../
 | **Off switch:** `EDDIE_DB=off` logs nothing and creates no file. DNS filtering still works. | implemented |
 | Logging never slows DNS. Rows go on a bounded in-memory queue (10,000), and a writer thread inserts them. If the disk stalls, rows are dropped and counted, never waited on. | implemented |
 | `eddie.db*` is git- and docker-ignored. | implemented |
-| The device column holds the client IP until #14 maps it to a MAC address and label. | gap |
+| The device column holds the device's MAC, or its client IP when ARP can't resolve it. A phone's private Wi-Fi address changes per network (and can rotate), so one phone can show up as several devices. | implemented |
 | The file is not encrypted at rest. Anyone with root, or the SD card, can read up to 7 days of history. | gap |
 | A hard kill (`kill -9`, power loss) loses queued rows. That's safe for privacy but leaves a hole in the history. Ctrl-C and SIGTERM flush first. | known behaviour |
 | **Forget timer:** health, beliefs and kids categories would be summarised and their raw rows deleted after 24 hours ("never stored beyond the day"). Needs category labels on stored rows first. | planned |
-| The `devices` table exists but nothing writes to it yet. | planned |
-| `rules` holds only pattern, action, device (client IP until #14), scope, who created it and when. A deleted rule is deleted, not kept as history. Rules are user settings, so they are not pruned by `EDDIE_RETENTION_DAYS`. `engine_state` holds two counters (rules revision written and loaded) and nothing else. | implemented |
+| **Devices** (`eddie/devices.py`, #14): the `devices` table holds MAC, current IP, vendor, DHCP hostname, the user's label, and first / last seen. Only devices that looked something up through Eddie are recorded, never every ARP neighbour. Unlabeled devices not seen for `EDDIE_RETENTION_DAYS` are deleted with the query log; labeled devices are user settings and kept, like rules. With `EDDIE_DB=off` nothing is recorded (the IP → MAC map stays in memory for rules). Tested. | implemented |
+| Device identification makes no network requests: the ARP table is read from the local kernel, vendor names come from a bundled table (`eddie/data/oui_vendors.json`), and hostnames only from a local DHCP leases file. No reverse DNS, which would send the household's private IPs to an upstream resolver. | implemented |
+| `rules` holds only pattern, action, device (MAC, or client IP), scope, who created it and when. A deleted rule is deleted, not kept as history. Rules are user settings, so they are not pruned by `EDDIE_RETENTION_DAYS`. `engine_state` holds the rules revision written and loaded, and offline mode's state and revisions written and loaded (#26), and nothing else. | implemented |
 | `ai_verdicts` holds one row per domain (label, confidence, reason, time): no device, IP or count. It is pruned with the query log after `EDDIE_RETENTION_DAYS`, because the list of domains a household looked up is history even without times. A domain seen again is classified again. Tested. | implemented |
+| **Offline mode's answer cache** (#26, `eddie/offline.py`): the DNS server keeps the last upstream answer per name and type (resolved IPs included) in memory only, at most 4,096 and served for at most 24 h, so offline mode can still answer. Nothing is written to `eddie.db` or disk, it isn't exposed by the API, and a restart clears it. It's kept even with `EDDIE_DB=off`, where offline mode can't be switched on. Tested. | implemented |
 | **No new store for the classifier's queue.** It reads the flagged rows already in `queries`, so classification keeps nothing beyond the query log, and with `EDDIE_DB=off` nothing is classified at all. | implemented |
 
 ## Traffic API and live feed (port 8000)
@@ -32,12 +34,16 @@ Owner: [eddie/store.py](../eddie/store.py), written by [eddie/dns_server.py](../
 | Decision | Status |
 | --- | --- |
 | The API keeps recent events in memory only (at most 20,000), so a restart wipes them. It does not read the `queries` table. | implemented |
+| The DNS server sends every lookup (time, client IP, domain, qtype, action, source, reason: the same fields as a `queries` row) to `POST /ingest` over plain HTTP ([eddie/feed.py](../eddie/feed.py)). `EDDIE_API_URL` must be `localhost` or a loopback or private IP literal; public hosts and hostnames are refused at startup, redirects aren't followed and proxy settings are ignored, so lookups can't leave the house this way. Events wait only in a bounded in-memory queue (1,000) and are dropped, not stored, when the API is unreachable. Events are never written to the DNS server's log. `EDDIE_FEED=off` sends nothing. Tested in [tests/test_feed.py](../tests/test_feed.py). | implemented |
+| With `EDDIE_API_URL` set to another machine's private IP, every lookup crosses the local network unencrypted and unauthenticated, readable by anyone on that network. The default keeps it on the box. | gap |
 | Docker publishes the API on `127.0.0.1` only. `EDDIE_BIND=0.0.0.0` is an explicit opt-in to reach it from the iPad. | implemented |
-| No authentication. With `EDDIE_BIND=0.0.0.0`, anyone on the network can read the feed, post fake events to `/ingest`, toggle `/mode`, and list, add or delete rules (`/rules`), including allowing a tracker or blocking a device's traffic. | gap |
-| `/rules` reads and writes `eddie.db` (`EDDIE_DB`); it never reads the query log. With `EDDIE_DB=off` it answers 503 and stores nothing. In Docker the API uses a database inside the container, which is lost on rebuild and not shared with a DNS server on the host. | implemented |
+| No authentication. With `EDDIE_BIND=0.0.0.0`, anyone on the network can read the feed, post fake events to `/ingest`, toggle `/mode` or `/offline-mode` (cutting the household off from every domain Eddie hasn't cached), and list, add or delete rules (`/rules`), including allowing a tracker or blocking a device's traffic, and list or relabel devices (`/devices`: MACs, IPs, hostnames and per-device lookup counts). | gap |
+| `/devices` reads per-device counts (not domains) from the query log and writes only labels. With `EDDIE_DB=off` it answers 503. | implemented |
+| `/rules` reads and writes `eddie.db` (`EDDIE_DB`); it never reads the query log. Each stored add or delete is pushed to every `/ws/events` client as `rule_change` (pattern, action, device, who created it, when); it is not logged or kept in memory. With `EDDIE_DB=off` it answers 503 and stores nothing. In Docker the API uses a database inside the container, which is lost on rebuild and not shared with a DNS server on the host. | implemented |
 | `/ws/events` does not check `Origin`, so any web page open on the same machine can read the live feed from `ws://localhost:8000`. | gap |
 | uvicorn's default access log (request paths, client IPs) goes to Docker's container log. No request bodies are logged, so rule patterns aren't; a `DELETE /rules/{id}` path shows only the id. | known behaviour |
 | The feed has no time-based retention; old events only drop out after 20,000 newer ones. | gap |
+| Beacon and idle detection (#24, `eddie/beacons.py`) keeps only lookup times in memory: the last 12 per device and domain (at most 10,000 pairs) and each device's latest streaming lookup (at most 1,000 devices), in the DNS server for unknown domains and in the API for feed events. Nothing new is written to `eddie.db` or disk, and a restart clears it. Each feed event gains `beacon_s` and `idle`, which say when a device runs on a timer or reports while nobody is watching, and anyone who can read the feed sees them. Tested. | implemented |
 
 ## Voice (wake word, speech to text, speech)
 
@@ -62,6 +68,8 @@ Owner: [eddie/store.py](../eddie/store.py), written by [eddie/dns_server.py](../
 | `frontend/serve.py` binds `127.0.0.1` only. | implemented |
 | Cross-origin POSTs are rejected; bodies are capped at 64 KB and typed asks at 1,000 characters. | implemented |
 | The page loads no external fonts, scripts, analytics or cloud audio. | implemented |
+| The page keeps nothing in `localStorage`, `sessionStorage`, IndexedDB or cookies; a pending action's read-back is cleared from the screen on answer, dismissal or expiry. Tested (`tests/test_frontend_events.cjs`). | implemented |
+| `GET /api/rules` relays the traffic API's rule list (pattern, action, device name and MAC or IP, who created it, when) read-only. With `--host 0.0.0.0`, anyone on the network who can open the dashboard can read the household's rules, even if the API itself stays on loopback. It cannot change them. | known behaviour |
 | Authenticated local control before exposing the bridge or mic controls beyond localhost (#40). Mic controls must never be public. | planned |
 
 ## Agent, facts and actions
@@ -71,14 +79,22 @@ Owner: [eddie/store.py](../eddie/store.py), written by [eddie/dns_server.py](../
 | Eddie never invents numbers. Summaries are computed in code from real events, and if the backend is down Eddie says so. | implemented |
 | A network action is reported as done only after the backend echoes the new state. Home mode state alone doesn't prove DNS enforcement. | implemented |
 | Voice commands that change settings must match the whole utterance, so negations or extra words don't trigger them. | implemented |
-| Rules, lockdown and email are not wired up; Eddie says that nothing changed. | implemented |
-| The local model gets only computed facts (`{fact, evidence, confidence}`), never raw logs. Every number in its output is checked against the facts. | planned |
-| The classifier sends the model only the domain, the device's label (null until #14; never its MAC or IP), lookups in the last 10 minutes and an idle flag. Tested. | implemented |
+| "Block it" / "Block <domain>" (#11) writes one global block rule through `POST /rules` with `created_by: voice`, stored in `eddie.db` like any other rule. "It" is the last domain named in one of Eddie's replies this conversation (held in memory only, cleared on dismissal or mic stop, never logged), else the newest flagged or allowed tracker in the last 15 minutes of `/events`. The reply names the domain so a wrong guess is audible. Tested. | implemented |
+| Allow, undo, lockdown and email are not wired up; Eddie says that nothing changed. | implemented |
+| A block that times out after the API stored the rule is still reported as "Nothing changed"; the rule then shows in `GET /rules`. | gap |
+| For "what do they know about me", the local model (`ollama_agent.phrase`) gets only the computed facts (`{fact, evidence, confidence}`, at most a week, devices by label or vendor), never raw logs, and no tools. A line is dropped unless every number, clock time and weekday in it is in the facts; if none survive or the model is down, Eddie speaks the backend template. This checks the numbers are real, not that the model read the fact right (llama3.2:3b once turned idle telemetry into "watching when it's not being used"). Tested with a stubbed model. | implemented, with that gap |
+| The voice agent (`voice/ollama_agent.py`, #29) sends the local model the question's text and read-only tool results: per-device counts by label, the companies blocked most, recent blocked domains with reasons, one domain's latest decision and AI verdict, and "what they know" facts. No MAC or IP addresses, and no raw query log. It uses the same localhost / private-IP-literal check, no-redirect and no-proxy rules as the classifier. Tested. | implemented |
+| The agent's tools only read; it has no tool that changes rules, mode or devices, and an unknown tool name is refused. Tested. | implemented |
+| Every number in an agent reply (digits or "two" to "hundred") must appear in that turn's tool results, or Eddie speaks the backend's own summary text or says it can't verify the answer. This checks that the numbers are real, not that the model attached them to the right device. Words like "no requests" aren't checked. Tested with a stubbed model. | implemented, with that gap |
+| If a tool can't reach the backend, Eddie says so and the model never gets to phrase a guess. Tested. | implemented |
+| Agent questions, tool results and replies are never logged or stored. | implemented |
+| The classifier sends the model only the domain, the device's user label (null if unlabeled; never its MAC, IP, vendor or hostname), lookups in the last 10 minutes and an idle flag. Tested. | implemented |
 | The classifier only talks to `localhost` or a loopback or private **IP literal**. Hostnames are refused, so DNS can't point it somewhere else; redirects aren't followed and `HTTP(S)_PROXY` is ignored. Tested. | implemented |
 | Domains, model output and verdicts are never written to the classifier's log; it logs only counts and error types. Malformed model output is rejected, not stored. Tested. | implemented |
 | Ollama itself may keep its own logs; its default doesn't log prompts, but `OLLAMA_DEBUG` would. | known behaviour |
 | Email is sent only after spoken confirmation; lockdown needs confirmation too. | planned |
 | Inferences ("what they know") stay on the box, because the inferences are themselves a profile of the household. | planned |
+| The live "what they know" report reads the query log read-only and names devices only by user label, "<vendor> device" or "unlabeled device", never MAC, IP or DHCP hostname, because its facts can reach the local model through the voice agent. Facts are computed per request and not stored. Tested. | implemented |
 
 ## Home mode and camera
 
@@ -93,14 +109,14 @@ Owner: [eddie/store.py](../eddie/store.py), written by [eddie/dns_server.py](../
 | Decision | Status |
 | --- | --- |
 | `scripts/fake_traffic.py` is scripted. Its devices, MAC address and verdicts (including the "AI:" ones) are invented, and it contains no real household data. | implemented |
-| The seeded "demo week" for the full report must be clearly labelled as demo data. | planned |
+| The seeded "demo week" (`eddie/demo_week.py`, `GET /what-they-know?demo=true`) is invented, generated in memory per request, and never stored or mixed into the live feed. Every event is `demo: true`, device names end in "(demo)", the response has `demo: true` and a label its spoken text starts with, and the dashboard shows a DEMO DATA banner over it. Voice only reads the live report. Tested. | implemented |
 | Eddie reads fake-traffic counts aloud the same way as real ones; the voice summary doesn't say which it is. | gap |
 
 ## What leaves the house
 
 | Outbound | Carries | Status |
 | --- | --- | --- |
-| Upstream DNS (`1.1.1.1`, then `9.9.9.9`), plain UDP | Every **allowed** domain name, from Eddie's IP | implemented. Blocked lookups never leave. "Data never leaves the house" means device data and history, not the lookups we forward. Encrypted upstream (DoT/DoH) is not built. |
+| Upstream DNS (`1.1.1.1`, then `9.9.9.9`), plain UDP | Every **allowed** domain name, from Eddie's IP | implemented. Blocked lookups never leave. With offline mode on (`POST /offline-mode`, #26) nothing is forwarded; it covers Eddie's DNS only, not packets a router-mode Eddie forwards. "Data never leaves the house" means device data and history, not the lookups we forward. Encrypted upstream (DoT/DoH) is not built. |
 | Gmail API | The report email, only on request and after confirmation | planned |
 | Tavily / Exa (optional) | One unknown domain name, never user data | planned, optional |
 | Model downloads | Nothing about the household | setup only (`scripts/provision_voice.py`, Ollama pulls), never at runtime |
