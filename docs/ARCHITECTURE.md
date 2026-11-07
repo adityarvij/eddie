@@ -28,8 +28,8 @@ Risky tools go through a single pending-action slot in `voice/voice_agent.py` (`
 - Provision and hash all local assets; add a repeatable offline installer and hardware compatibility checks.
 - Integrate Will's rule endpoints only after their request/response contract exists; add read-back, expiry and undo semantics.
 - Add authenticated local control before allowing dashboard controls off localhost. `serve.py --host 0.0.0.0` exposes only viewing (page, event stream, status); every POST control is refused unless it comes from a loopback address. Do not expose microphone controls publicly.
-- Add calibrated VAD for noisy rooms; RMS endpointing is the first implementation. Consider an in-memory pre-roll for commands spoken without a pause.
-- Add an audible ready cue without contaminating captured commands; currently the visual listening overlay is the cue.
+- Rehearse the calibrated WebRTC VAD on the actual speakerphone; adjust aggressiveness/noise margin for the room.
+- Ready cue and capture suppression are implemented; test acoustic echo tails on final hardware.
 - Add bounded request admission, cancellation, streaming replies, device reconnect and model caching for Piper.
 - Add a visible persistent microphone indicator and shutdown path for deployment.
 - Keep models/audio out of git. Never retain raw microphone audio or log transcriptions by default.
@@ -58,3 +58,8 @@ The Open logs control sits directly beneath Eddie, away from the ambient edge gl
 ## Offline company ownership (#25)
 
 `labels.py` preserves precise local category overrides, supplements owner names with 37 public Tracker Radar entries (source/license in `eddie/data/README.md`), and uses tldextract's bundled PSL for unknown registrable domains. Fetching and disk caching are disabled. Owner names alone never trigger blocking or imply tracking. `/summary` adds top-company request/block/tracking counts over the past hour. This view is bounded by the API's in-memory feed and is not an all-time database report.
+
+
+## Voice activity and ready tone (#38)
+
+The worker uses a local WebRTC speech gate plus an idle noise-energy estimate, rather than an RMS-only speech threshold. Only scalar calibration energies persist in a bounded deque. A generated 80 ms tone plays after wake; capture suppression covers playback plus 160 ms, and the queue/detector are drained before the listening state is published. The public recorded speech fixture mixed with generated noise and the full worker lifecycle pass automated checks. Live-room accuracy remains a hardware rehearsal task.
