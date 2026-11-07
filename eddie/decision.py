@@ -1,7 +1,9 @@
 """Decides allow / block / flag for one lookup (README "Decision order").
 
 First match wins:
-1. Device rule, then global rule (the rules table).
+1. Device rule, then the device's lockdown rule (pattern "*", #17), then global
+   rule (the rules table). Under lockdown, an allowlisted domain is still
+   allowed, so locking a device down can't cut it off from sign-in, updates or time.
 2. Allowlist: essentials, so a rule or list can't brick a device.
 3. Blocklist.
 4. Keyword heuristic on the domain's labels.
@@ -26,7 +28,8 @@ Matching:
 - Allowlist and blocklist entries match the domain and every subdomain of it.
 - A rule pattern `a.com` matches only a.com; `*.a.com` matches a.com and every
   subdomain. When several rules match, the most specific wins (exact, then the
-  longest suffix), and among equals the newest rule wins.
+  longest suffix), and among equals the newest rule wins. The device rule `*`
+  (block only) matches every domain and is the least specific device rule.
 - A device rule matches the device's key (its MAC once devices.py knows it) or
   its client IP, so rules made before the MAC was known keep working.
 """
@@ -125,16 +128,20 @@ class RuleIndex:
     def __init__(self, rules):
         self.exact: dict[str, list[Rule]] = {}
         self.wildcard: dict[str, list[Rule]] = {}
+        self.everything: list[Rule] = []  # device lockdown rules
         for rule in sorted(rules, key=lambda r: r.id, reverse=True):  # newest first
             pattern = normalize(rule.pattern)
-            if pattern.startswith("*."):
+            if pattern == "*":
+                if rule.device_mac is not None:  # a global "*" can't be stored; ignore one anyway
+                    self.everything.append(rule)
+            elif pattern.startswith("*."):
                 self.wildcard.setdefault(pattern[2:], []).append(rule)
             elif pattern:
                 self.exact.setdefault(pattern, []).append(rule)
 
     def find(self, domain: str, device: str, ip: str | None = None) -> Rule | None:
         candidates = self.exact.get(domain, []) + [
-            r for s in suffixes(domain) for r in self.wildcard.get(s, [])]
+            r for s in suffixes(domain) for r in self.wildcard.get(s, [])] + self.everything
         return (next((r for r in candidates if r.device_mac is not None and r.device_mac in (device, ip)), None)
                 or next((r for r in candidates if r.device_mac is None), None))
 
@@ -168,7 +175,12 @@ class Engine:
         domain = normalize(domain)
         if not domain:
             return Decision("allow", "default", "root query")
-        if rule := self.rules.find(domain, device, ip):
+        rule = self.rules.find(domain, device, ip)
+        if rule and rule.pattern == "*" and (entry := matches(domain, self.allowlist)):
+            return Decision("allow", "allowlist", entry)
+        if rule:
+            if rule.pattern == "*":
+                return Decision("block", "rule", "device lockdown")
             scope = "device" if rule.device_mac else "global"
             return Decision(rule.action, "rule", f"{scope} rule {rule.pattern}")
         if entry := matches(domain, self.allowlist):

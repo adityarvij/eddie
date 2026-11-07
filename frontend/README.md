@@ -24,7 +24,7 @@ Then open `http://<Mac IP>:5173` on the iPad. Other devices can view the page, t
 
 The voice pipeline now uses openWakeWord and faster-whisper. Follow [offline model provisioning and voice setup](../voice/README.md) before enabling the microphone. Custom models are not bundled. Piper supplies portable speech; installed macOS speech remains a development fallback.
 
-Supported tools: factual backend summaries and explicit home-mode on/off. Domain rules, lockdown, email and general agent conversation remain pending.
+Supported voice tools: factual backend summaries, explicit home-mode on/off, block, allow, undo and “lock down <device>” (see [voice/README.md](../voice/README.md)). Email remains pending.
 
 ## Rules and confirmations (#19)
 
@@ -44,7 +44,7 @@ Manual check (needs the API and DNS server sharing one `eddie.db`, plus this bri
 4. With a confirmation-gated command available, say it: the read-back and yes/no hint stay up through the follow-up listening; wait 15 s and they clear; repeat and press ✕, and they clear.
 5. Reload the iPad page: the list comes back from the API; no toast, feed row or prompt is restored.
 
-Not yet run on hardware: steps 1 to 5 on the iPad in kiosk mode. Step 4 can't be done by voice yet, because no spoken command reaches the confirmation slot until lockdown or email is wired; `node tests/test_frontend_events.cjs` covers expiry and dismissal.
+Not yet run on hardware: steps 1 to 5 on the iPad in kiosk mode. For step 4, “allow Netflix” or “lock down the TV” (with a device labelled TV) reach the confirmation slot; `node tests/test_frontend_events.cjs` covers expiry and dismissal.
 
 ## Devices and mode toggles (#35)
 

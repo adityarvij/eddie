@@ -48,7 +48,7 @@ Keyword commands: “What's been going on?” (backend facts), “What do they k
 - Test self-trigger prevention with loud replies. No barge-in is supported yet.
 - Recheck latency, sound hardware, model licenses and memory on final ARM64 hardware.
 
-Automated command-routing, confirmation and provisioning tests: `python -m unittest discover -s tests -p 'test_voice*.py'`.
+Automated command-routing (including lockdown), confirmation and provisioning tests: `python -m unittest discover -s tests -p 'test_voice*.py'`.
 
 ## Development prototype launch (2026-11-07)
 
@@ -116,9 +116,35 @@ The list lives in the worker's memory: up to 20 commands, kept across conversati
 
 Undo has no read-back confirmation; it only puts back the previous decision. A failed block or allow leaves nothing to undo. A rule a timed-out add stored anyway isn't on the list; remove it from the dashboard.
 
+## Lock down a device (#17)
+
+“Lock down the TV”, “please lock down my Fire Stick” or “can you lockdown the kids' iPad?” blocks everything for one device except a keep list, after a spoken yes. The device name is matched against the labels set on the dashboard's device panel (`GET /devices`): an exact label wins, otherwise a label containing the words (“TV” finds “Living Room TV” if it's the only one). Vendor names like “Amazon device” don't count; label the device first. The keep list is every service in `voice/services.json` (Netflix, YouTube, Prime Video, Apple TV); there's no spoken way to change it yet, so “lock down the TV to Netflix” changes nothing. The allowlist's essentials (sign-in, updates, time, captive-portal checks) always survive a lockdown, so it can't brick the device.
+
+| Request | Eddie says |
+|---|---|
+| One labelled device | “Lock down the TV? It'll only reach Netflix, YouTube, Prime Video and Apple TV, plus Eddie's essentials like sign-in and updates. Say yes to confirm or no to cancel.” Nothing is written yet; the confirmation table below applies (no, timeout, dismissal: nothing changes). |
+| No label matches | “I don't know a device called fridge. The devices I know by name are Fire Stick and TV. Label it on the dashboard's device panel, then ask again. Nothing changed.” |
+| Several labels match | “Which one: Living Room TV or Bedroom TV? Nothing changed.” |
+| Already locked down | “The TV is already locked down. Nothing changed.” |
+| Backend down | “I can't reach Eddie's backend, so I can't look up that device. Nothing changed.” |
+
+On yes Eddie adds one device allow rule per keep pattern, then the device block rule `*` last (23 rules today; each waits for DNS, so expect a few seconds).
+
+| Backend answer | Eddie says |
+|---|---|
+| Every rule stored and DNS loaded the last one | “The TV is locked down. The rules are saved and Eddie's DNS has loaded them. I haven't seen its traffic blocked yet, and it only applies while it uses Eddie for DNS.” |
+| Stored, not loaded within 2 s | “I saved the lockdown rules for the TV, but Eddie's DNS hasn't loaded them yet, so nothing is blocked yet.” |
+| The first rule fails | “I couldn't lock down the TV; the backend didn't save any rules. Nothing changed.” |
+| A later rule fails, and the saved ones are deleted again | “I only saved 5 of 23 lockdown rules for the TV before the backend stopped answering, so I removed them again. Nothing is locked down.” |
+| A later rule fails, and some saved ones can't be deleted | “… and couldn't remove 3 of them. Nothing is locked down, but those allow rules are still saved; say undo to remove them.” |
+
+Because the block rule is always last, a failure never leaves the device blocked. “Undo” after a lockdown removes all of its rules at once. The dashboard's rule list shows the block as `block * · TV · by voice`.
+
+Not yet checked on hardware: a real Fire Stick or TV under lockdown, including whether the keep patterns cover each app's sign-in and playback.
+
 ## Confirmation for risky actions
 
-Risky actions (service and wildcard allows; lockdown and email, once built) never run from the command that asks for them. `voice_agent.Confirmation` holds at most **one** pending action, `{kind, args, prompt, expires_at}`, and speaks the read-back prompt followed by “Say yes to confirm or no to cancel.”
+Risky actions (service and wildcard allows, lockdown; email once built) never run from the command that asks for them. `voice_agent.Confirmation` holds at most **one** pending action, `{kind, args, prompt, expires_at}`, and speaks the read-back prompt followed by “Say yes to confirm or no to cancel.”
 
 | Next reply | Result |
 |---|---|
@@ -131,7 +157,7 @@ Risky actions (service and wildcard allows; lockdown and email, once built) neve
 
 Replies must match the whole utterance after lowercasing and removing punctuation, so “yes, but not the TV” is unclear, not a yes. Typed asks use the same router. While an action is pending the bridge emits `voice_state: confirming` with `kind`, `prompt` and `expires_in_ms` (never the action's arguments); the dashboard shows “say yes or no” until the next reply, dismissal or expiry. No pending action, reply or transcript is persisted or logged.
 
-The only registered risky action is `allow` (#13), parsed in `route` from the raw text because a typed wildcard needs its dots; `RISKY_COMMANDS` stays empty until lockdown (#31) and email (#37) land. Closing the dashboard overlay by hand does not notify the worker; the 15 second expiry still applies.
+The registered risky actions are `allow` (#13) and `lockdown` (#17), both parsed in `route`: a typed wildcard needs the raw text's dots, and lockdown looks the device up first. `RISKY_COMMANDS` stays empty until email (#37) lands. Closing the dashboard overlay by hand does not notify the worker; the 15 second expiry still applies.
 
 
 ## Noisy-room voice and ready cue (#38)

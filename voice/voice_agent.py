@@ -149,15 +149,18 @@ def resolve_it():
     return None
 
 
-def add_rule(pattern, action, saved=None):
-    """POST a global rule; returns applied, raising unless the backend stored this rule.
+def add_rule(pattern, action, saved=None, device=None):
+    """POST a rule (global, or for one device key); returns applied, raising unless
+    the backend stored this rule.
 
     The acknowledged rule is appended to saved, for remember_rules.
     """
-    result = request('/rules', {'pattern': pattern, 'action': action, 'created_by': 'voice'},
-                     timeout=RULE_TIMEOUT)
+    body = {'pattern': pattern, 'action': action, 'created_by': 'voice'}
+    if device is not None:
+        body['device_mac'] = device
+    result = request('/rules', body, timeout=RULE_TIMEOUT)
     if (type(result.get('id')) is not int or result.get('pattern') != pattern
-            or result.get('action') != action):
+            or result.get('action') != action or result.get('device_mac') != device):
         raise ValueError('Rule was not acknowledged')
     if saved is not None:
         saved.append({'id': result['id'], 'pattern': pattern, 'action': action, 'ts': result.get('ts')})
@@ -269,6 +272,121 @@ def allow_command(kind, value):
     return f"I saved a rule to allow {value}, but Eddie's DNS hasn't loaded it yet, so it may still be blocked."
 
 
+LOCKDOWN = _command(r'lock ?down')
+LOCKDOWN_ARTICLE = re.compile(r'(?:the|my|our) ')
+# Services a locked-down device keeps by default (#17): every streaming service
+# voice knows. The allowlist's essentials (sign-in, updates, time) survive anyway.
+LOCKDOWN_KEEP = list(SERVICES)
+LOCKDOWN_UNREACHABLE = "I can't reach Eddie's backend, so I can't look up that device. Nothing changed."
+
+
+def words(text):
+    return ' '.join(re.sub(r'[^a-z0-9]+', ' ', text.lower().replace("'", '').replace('’', '')).split())
+
+
+def lockdown_target(raw):
+    """(article, spoken device) for a whole-utterance lockdown command, else None."""
+    match = LOCKDOWN.fullmatch(words(raw))
+    if not match or re.search(r'\b(?:and|but|then|except|to|only)\b', match['target']):
+        return None  # extra requests and keep lists get the "nothing changed" reply
+    target = match['target']
+    article = LOCKDOWN_ARTICLE.match(target)
+    return (article[0] if article else ''), target[article.end() if article else 0:]
+
+
+def find_devices(spoken, devices):
+    """The /devices rows whose label is the spoken name, else those whose label contains
+    it as whole words. Only labels count: vendor guesses and IPs aren't names people say."""
+    labelled = [d for d in devices if d.get('label') and words(d['label'])]
+    exact = [d for d in labelled if words(d['label']) == spoken]
+    return exact or [d for d in labelled if f' {spoken} ' in f" {words(d['label'])} "]
+
+
+def lockdown_request(article, spoken):
+    """Confirmation.request args to lock a device down, or the spoken reply when the
+    device is unknown, ambiguous or already locked down (nothing changes then)."""
+    try:
+        devices = request('/devices')['devices']
+    except Exception:
+        return LOCKDOWN_UNREACHABLE
+    found = find_devices(spoken, devices)
+    if not found:
+        names = sorted({d['label'] for d in devices if d.get('label')})
+        known = f" The devices I know by name are {join(names)}." if names else ''
+        return (f"I don't know a device called {spoken}.{known} Label it on the dashboard's device panel, "
+                "then ask again. Nothing changed.")
+    if len({d['mac'] for d in found}) > 1:
+        return f"Which one: {join([d['label'] for d in found], 'or')}? Nothing changed."
+    device = found[0]
+    name = article + device['label']
+    try:
+        locked = any(r.get('pattern') == '*' and r.get('device_mac') == device['mac'] for r in request('/rules'))
+    except Exception:
+        return LOCKDOWN_UNREACHABLE
+    if locked:
+        return f'{name[0].upper()}{name[1:]} is already locked down. Nothing changed.'
+    keep = [SERVICES[key]['name'] for key in LOCKDOWN_KEEP]
+    prompt = (f"Lock down {name}? It'll only reach {join(keep)}, plus Eddie's essentials "
+              "like sign-in and updates.")
+    return 'lockdown', {'device': device['mac'], 'name': name, 'keep': LOCKDOWN_KEEP}, prompt
+
+
+def join(names, last='and'):
+    return names[0] if len(names) == 1 else f"{', '.join(names[:-1])} {last} {names[-1]}"
+
+
+def delete_rules(rules):
+    """Delete acknowledged rules newest first, popping each one the backend removed
+    (or no longer has). Stops at the first failure; what's left is still stored."""
+    while rules:
+        try:
+            result = request(f"/rules/{rules[-1]['id']}", method='DELETE', timeout=RULE_TIMEOUT)
+        except urllib.error.HTTPError as error:
+            error.close()
+            if error.code != 404:
+                return
+        except Exception:
+            return
+        else:
+            if result.get('deleted') is not True or result.get('id') != rules[-1]['id']:
+                return
+        rules.pop()
+
+
+def lockdown_device(device, name, keep):
+    """RISKY_ACTIONS['lockdown']: device allow rules for every keep pattern, then the
+    device's "*" block rule last, so a device is never blocked without its keep list.
+
+    On any failure the saved rules are deleted again; ones that can't be stay on
+    undo_stack. Success means the rules are saved and loaded, never that traffic
+    was seen blocked.
+    """
+    patterns = [pattern for key in keep for pattern in SERVICES[key]['patterns']]
+    rules, applied = [], False
+    try:
+        for pattern in patterns:
+            add_rule(pattern, 'allow', rules, device)
+        applied = add_rule('*', 'block', rules, device)
+    except Exception:
+        saved = len(rules)
+        delete_rules(rules)
+        remember_rules(f'leftover lockdown rules for {name}', rules)
+        if saved == 0:
+            return f"I couldn't lock down {name}; the backend didn't save any rules. Nothing changed."
+        if not rules:
+            return (f"I only saved {saved} of {len(patterns) + 1} lockdown rules for {name} before the backend "
+                    "stopped answering, so I removed them again. Nothing is locked down.")
+        return (f"I only saved {saved} of {len(patterns) + 1} lockdown rules for {name}, and couldn't remove "
+                f"{len(rules)} of them. Nothing is locked down, but those allow rules are still saved; "
+                "say undo to remove them.")
+    remember_rules(f'lockdown rules for {name}', rules)
+    if not applied:
+        return (f"I saved the lockdown rules for {name}, but Eddie's DNS hasn't loaded them yet, "
+                "so nothing is blocked yet.")
+    return (f"{name[0].upper()}{name[1:]} is locked down. The rules are saved and Eddie's DNS has loaded them. "
+            "I haven't seen its traffic blocked yet, and it only applies while it uses Eddie for DNS.")
+
+
 def still_voice_rule(row, rule):
     """True when a GET /rules row is the rule voice created, not a later rule that reused its id."""
     return bool(row) and row.get('created_by') == 'voice' and all(
@@ -337,9 +455,9 @@ NO = {'no', 'nope', 'no thanks', 'cancel', 'cancel it', 'stop', 'dont', 'never m
 # Risky actions run only from Confirmation.reply after an explicit yes. Each maps
 # kind -> callable(**args) returning the spoken result only after backend
 # acknowledgment. RISKY_COMMANDS parse normalized text -> (kind, args, prompt).
-# Broad allows (a service or a wildcard) are parsed in route, not RISKY_COMMANDS,
-# because they need the raw text's dots.
-RISKY_ACTIONS = {'allow': allow_patterns}
+# Broad allows (a service or a wildcard) and lockdown are parsed in route, not
+# RISKY_COMMANDS: allows need the raw text's dots, lockdown a /devices lookup.
+RISKY_ACTIONS = {'allow': allow_patterns, 'lockdown': lockdown_device}
 RISKY_COMMANDS = []
 
 
@@ -428,6 +546,10 @@ def route(text):
     allow = allow_target(raw)
     if allow and allow[0] in ('service', 'wildcard'):
         return confirmation.request(*allow_request(*allow))
+    lockdown = lockdown_target(raw)
+    if lockdown and lockdown[1]:
+        command = lockdown_request(*lockdown)
+        return command if isinstance(command, str) else confirmation.request(*command)
     for parse in RISKY_COMMANDS:
         command = parse(text)
         if command:
@@ -456,7 +578,7 @@ def route(text):
     if UNDO.fullmatch(text):
         return undo_command()
     if re.search(r'\b(block|allow|lock|undo|email|send|mode)\b', text):
-        return "I haven't changed anything. I can block or allow a domain, allow a service like Netflix, undo my last rule, or turn home mode on or off; lockdown and email aren't connected yet."
+        return "I haven't changed anything. I can block or allow a domain, allow a service like Netflix, lock down a device, undo my last rule, or turn home mode on or off; email isn't connected yet."
     if re.search(r'\bwhat (?:do|does|can|could) (?:\w+|my \w+|the \w+) (?:know|tell|guess|figure out|learn) about (?:me|us|my house|my home|our house)\b', text):
         try:
             report = what_they_know(REPORT_HOURS)
