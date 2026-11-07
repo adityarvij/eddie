@@ -15,7 +15,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT.parent / 'voice'))
-from voice_agent import confirmation, forget_conversation, respond
+from voice_agent import confirmation, forget_conversation, request as api_request, respond
 from voice_runtime import run as run_voice
 stopped = threading.Event()
 dismissed = threading.Event()  # the close button: end the voice conversation
@@ -112,6 +112,12 @@ class Handler(SimpleHTTPRequestHandler):
     def do_GET(self):
         if self.path == '/api/voice/status':
             return self.json_response(200, {'type': 'voice_status', **voice_state})
+        if self.path == '/api/rules':
+            # Read-only relay so the page (and the iPad) can list rules without the API allowing CORS.
+            try:
+                return self.json_response(200, api_request('/rules'))
+            except Exception:
+                return self.json_response(502, {'message': 'Rules unavailable.'})
         if self.path == '/events':
             self.send_response(200)
             self.send_header('Content-Type', 'text/event-stream')

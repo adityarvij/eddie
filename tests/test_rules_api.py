@@ -173,7 +173,7 @@ class RulesAPITests(unittest.IsolatedAsyncioTestCase):
                                                      'device_mac': '172.20.10.5', 'created_by': 'voice'})
             self.assertFalse(r.json()['applied'])
             rule = {k: r.json()[k] for k in rules.COLUMNS}
-            added = {'type': 'rule_change', 'change': 'added', **rule}
+            added = {'type': 'rule_change', 'change': 'added', **rule, 'device': '172.20.10.5'}
             self.assertEqual([added], self.ws.rule_changes())
             self.assertEqual('172.20.10.5', added['device_mac'])
 
@@ -181,6 +181,16 @@ class RulesAPITests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual([added, {**added, 'change': 'removed'}], self.ws.rule_changes())
         for event in self.ws.rule_changes():
             self.assertFalse({'applied', 'enforced', 'blocked'} & event.keys())
+
+    async def test_rule_change_and_list_name_the_device(self):
+        conn = api.rules_db()
+        with conn:
+            conn.execute("INSERT INTO devices (mac, label) VALUES ('f0:4f:7c:11:22:33', 'Fire Stick')")
+        with patch.object(api, 'APPLY_TIMEOUT', 0):
+            await self.http.post('/rules', json={'pattern': DOMAIN, 'action': 'block', 'device_mac': 'f0:4f:7c:11:22:33'})
+            await self.http.post('/rules', json={'pattern': 'b.example', 'action': 'allow'})
+        self.assertEqual(['Fire Stick', None], [e['device'] for e in self.ws.rule_changes()])
+        self.assertEqual([None, 'Fire Stick'], [r['device'] for r in (await self.http.get('/rules')).json()])
 
     async def test_rule_change_is_sent_before_dns_acknowledges(self):
         await self.start_dns()

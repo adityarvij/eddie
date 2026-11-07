@@ -118,7 +118,7 @@ async def resolve(packet: bytes, client_ip: str, upstreams: list[tuple[str, int]
     arrived = int(time.time() * 1000)
     domain = str(request.q.qname).rstrip(".").lower()
     device = device_map.key(client_ip) if device_map else client_ip  # MAC once ARP knows it
-    verdict = decision.evaluate(domain, device, client_ip)
+    verdict = decision.evaluate(domain, device, client_ip, arrived)
     qtype = QTYPE.get(request.q.qtype, str(request.q.qtype))
     if query_log:
         query_log.log(domain, device, qtype, verdict.action, verdict.source, verdict.reason, ts=arrived)

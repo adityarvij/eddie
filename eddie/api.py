@@ -24,7 +24,7 @@ from typing import Literal
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, field_validator
 
-from . import devices, inferences, insights, labels, offline, rules, store
+from . import beacons, devices, inferences, insights, labels, offline, rules, store
 from .events import Action, AIVerdictEvent, ModeUpdate, OfflineUpdate, QueryEvent
 
 # In memory for now; SQLite (store.py) replaces this once the DNS side lands.
@@ -33,6 +33,7 @@ totals = {"seen": 0, "blocked": 0}
 state = {"home_mode": False}
 clients: set[WebSocket] = set()
 ai_verdicts: dict[str, dict] = {}
+timing = {"beacons": beacons.Beacons(), "idle": beacons.Idle()}  # beacon_s and idle on each event (#24)
 ids = itertools.count(1)
 db: dict[str, sqlite3.Connection | None] = {"conn": None}
 APPLY_TIMEOUT = 2.0  # seconds to wait for DNS to load a rule or offline change (it polls every 0.2 s)
@@ -55,7 +56,10 @@ async def ingest(body: QueryEvent | list[QueryEvent]):
     events = body if isinstance(body, list) else [body]
     for ev in events:
         company, category = labels.lookup(ev.domain)
-        row = {**ev.model_dump(), "id": next(ids), "company": company, "category": category}
+        every = timing["beacons"].observe(ev.device_mac, ev.domain, ev.ts)
+        idle = timing["idle"].observe(ev.device_mac, ev.ts, ev.action == "allow" and category in labels.HUMAN)
+        row = {**ev.model_dump(), "id": next(ids), "company": company, "category": category,
+               "beacon_s": every and round(every / 1000), "idle": idle}
         recent.append(row)
         totals["seen"] += 1
         totals["blocked"] += ev.action == "block"
@@ -133,9 +137,14 @@ async def wait_applied(conn: sqlite3.Connection, rev: int, loaded=rules.loaded) 
     return True
 
 
-async def rule_change(change: str, row: dict) -> None:
+def named(conn: sqlite3.Connection, rule: dict) -> dict:
+    """The rule plus its device's display name (None for a rule on every device)."""
+    return {**rule, "device": rule["device_mac"] and devices.name_of(conn, rule["device_mac"])}
+
+
+async def rule_change(conn: sqlite3.Connection, change: str, row: dict) -> None:
     # Sent once the row is stored or deleted, before DNS loads it: it says nothing about enforcement.
-    await broadcast({"type": "rule_change", "change": change, **row})
+    await broadcast({"type": "rule_change", "change": change, **named(conn, row)})
 
 
 def offline_state() -> dict:
@@ -157,14 +166,15 @@ async def set_offline_mode(body: OfflineUpdate):
 
 @app.get("/rules")
 async def list_rules():  # async: the shared connection stays on the event loop thread
-    return rules.all_rules(rules_db())
+    conn = rules_db()
+    return [named(conn, r) for r in rules.all_rules(conn)]
 
 
 @app.post("/rules", status_code=201)
 async def add_rule(body: rules.RuleIn):
     conn = rules_db()
     row, rev = rules.add(conn, body)
-    await rule_change("added", row)
+    await rule_change(conn, "added", row)
     return {**row, "applied": await wait_applied(conn, rev)}
 
 
@@ -174,7 +184,7 @@ async def delete_rule(rule_id: int):
     row, rev = rules.remove(conn, rule_id)
     if row is None:
         raise HTTPException(404, f"No rule {rule_id}.")
-    await rule_change("removed", row)
+    await rule_change(conn, "removed", row)
     return {**row, "deleted": True, "applied": await wait_applied(conn, rev)}
 
 

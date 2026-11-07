@@ -53,10 +53,19 @@ Both are still answered and written to `eddie.db`. So `totals.seen`,
 
 ## Receiving: `WS /ws/events`
 
-The API adds `id`, `company` and `category` (from `eddie/labels.py`) and pushes:
+The API adds `id`, `company` and `category` (from `eddie/labels.py`), plus
+`beacon_s` and `idle` (from `eddie/beacons.py`, #24), and pushes:
 
 - `snapshot`: sent once on connect: `{events, totals, home_mode}`
-- `query`: the event above plus `id`, `company`, `category`
+- `query`: the event above plus `id`, `company`, `category`, `beacon_s`, `idle`
+
+| Added field | Notes |
+|-------------|-------|
+| `beacon_s`  | int or `null`. The interval in seconds when this device has been looking this domain up on a regular timer (last 6 to 12 lookups, gap coefficient of variation ≤ 0.15, 10 s to 1 h); `null` otherwise. Set whatever the action, so blocklisted beacons show too. |
+| `idle`      | `true` when the device had no allowed media (streaming) lookup in the 5 minutes before this one, `false` when it did (or this is one), `null` while the device has never had one. |
+
+Both are computed by the API from the events it has received, keyed by
+`device_mac`, so senders don't send them. They restart with the API.
 - `totals`: `{seen, blocked}`
 - `mode`: `{home_mode: bool}`
 - `offline_mode`: `{offline: bool, applied: bool}` after every `POST /offline-mode`
@@ -125,17 +134,22 @@ Answers `201` with the stored row plus the DNS acknowledgment:
 and `applied` (same meaning: the previous decision is back once it's true),
 or `404` if there is no such rule.
 
-`GET /rules` lists every rule, newest first, without `applied`.
+`GET /rules` lists every rule, newest first, without `applied`. Each row also
+has `device`: the device's display name (label, DHCP hostname,
+`"<vendor> device"`, or its key if Eddie never recorded it), or `null` for a
+rule on every device.
 
 Every successful add or delete also pushes a `rule_change` on `/ws/events`:
 
 ```json
 {"type": "rule_change", "change": "added", "id": 7, "scope": "device", "device_mac": "172.20.10.5",
- "pattern": "device-metrics-us.amazon.com", "action": "block", "created_by": "voice", "ts": 1762531200123}
+ "device": "Fire Stick", "pattern": "device-metrics-us.amazon.com", "action": "block", "created_by": "voice",
+ "ts": 1762531200123}
 ```
 
 - `change` is `added` or `removed`; the rest is the stored row (`ts` is when
-  the rule was created, also for `removed`).
+  the rule was created, also for `removed`) plus `device`, named as in
+  `GET /rules`.
 - It is sent as soon as the row is written or deleted, **before** the API waits
   for DNS. It means "stored" only. It has no `applied` field and never says the
   rule is enforced; only the HTTP answer's `applied: true` says that.
@@ -144,6 +158,8 @@ Every successful add or delete also pushes a `rule_change` on `/ws/events`:
   read `GET /rules` for the current list.
 - It carries `pattern`, not `domain`, so a feed that renders anything with a
   `domain` as a lookup won't show it as one.
+- The dashboard (#19) shows it as a `[rule]` feed row and a toast, and
+  re-reads the list through `serve.py`'s read-only `GET /api/rules`.
 
 Devices cache answers (60 s for blocked lookups, the upstream TTL for allowed
 ones), so a device may not ask Eddie again until its cache expires.
@@ -186,7 +202,8 @@ printable characters. Answers with the stored device and its `name`.
 `hours` is 1 to 168. Returns `{hours, facts, text}` where each fact is
 `{fact, evidence, confidence}` computed in `eddie/inferences.py` from the
 in-memory event log (tracking company exposure, active streaming hours,
-after-midnight use, longest streaming gap, idle telemetry). `text` is a
+after-midnight use, longest streaming gap, idle telemetry, and the device
+and domain looked up most on a regular timer). `text` is a
 template over those facts; the local-model phrasing and number check are not
 built yet. Empty traffic returns no facts, never guesses.
 
@@ -201,7 +218,7 @@ Voice recovery: after an initial wake with no command, or an empty/failed transc
 
 Active conversation lifecycle: listening state events include `is_eddie_active: true`; after four seconds with no user speech, `voice_state: dismissed` includes `is_eddie_active: false`. This applies immediately after the wake and after every reply. Two empty transcriptions in a row also end with `dismissed`. `POST /api/voice/dismiss` (the overlay's close button; localhost only, `{"ok": true}`) ends an active conversation: the worker emits `voice_state: dismissed` instead of `listening` and waits for the wake phrase again. It also cancels any pending confirmation.
 
-Confirmation: after Eddie reads back a risky action, the bridge emits `voice_state: confirming` with `kind`, `prompt` and `expires_in_ms` in place of `idle`; the worker's following `listening` event does not clear it. The next `thinking`, `dismissed` or the expiry clears it. Action arguments are never sent.
+Confirmation: after Eddie reads back a risky action, the bridge emits `voice_state: confirming` with `kind`, `prompt` and `expires_in_ms` in place of `idle`; the worker's following `listening` event does not clear it. The next `thinking`, `dismissed` or the expiry clears it. Action arguments are never sent. The dashboard shows `prompt` (Eddie's read-back, not the user's words) under Eddie with “say yes to confirm or no to cancel” until then (#19).
 
 ## Company counts (#25)
 

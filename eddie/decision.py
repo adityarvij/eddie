@@ -10,11 +10,15 @@ First match wins:
    model called Google's static files, Apple's update servers and Safe
    Browsing trackers at 0.8-0.9 confidence. Blocking takes a list, the
    heuristic or a user rule.
-6. Unknown: flag (the lookup is still forwarded). The flagged queries row in
+6. Beacon: an unknown domain this device looks up on a regular timer
+   (beacons.py) is flagged as likely telemetry, source heuristic. Still
+   forwarded and queued for the classifier like any unknown.
+7. Unknown: flag (the lookup is still forwarded). The flagged queries row in
    eddie.db is the classifier's queue (classifier.py); nothing else is kept.
 
 This runs on the DNS hot path: no model calls, no network, no disk. Everything
-it reads is in memory. Writers (rules API #12, list loader #8, classifier #27)
+it reads is in memory; the only state it writes is the bounded in-memory
+lookup timing for unknown domains (beacons.Beacons). Writers (rules API #12, list loader #8, classifier #27)
 replace whole snapshots with set_rules / set_lists / set_verdicts instead of
 mutating them, so a lookup never sees a half-updated table.
 
@@ -28,8 +32,10 @@ Matching:
 """
 import re
 import sqlite3
+import time
 from dataclasses import dataclass
 
+from .beacons import Beacons
 from .events import Action, Source
 
 KEYWORDS = ("metrics", "telemetry", "analytics", "adsystem", "tracking", "beacon", "crashlytics")
@@ -37,6 +43,7 @@ KEYWORDS = ("metrics", "telemetry", "analytics", "adsystem", "tracking", "beacon
 # whole word: a label split on anything that isn't a letter.
 WHOLE_WORDS = {"ads": "ads", "log": "log", "logs": "log"}
 UNKNOWN = "unknown, waiting for classifier"
+BEACON = "looked up every {} s, likely telemetry; waiting for classifier"
 
 _WORD_SPLIT = re.compile(r"[^a-z]+")
 
@@ -138,6 +145,7 @@ class Engine:
         self.allowlist: frozenset[str] = frozenset()
         self.blocklist: frozenset[str] = frozenset()
         self.verdicts: dict[str, Verdict] = {}
+        self.beacons = Beacons()
 
     def set_rules(self, rules) -> None:
         self.rules = RuleIndex(rules)
@@ -156,7 +164,7 @@ class Engine:
         self.set_verdicts({d: Verdict(label, confidence, reason or "") for d, label, confidence, reason
                            in conn.execute("SELECT domain, label, confidence, reason FROM ai_verdicts")})
 
-    def evaluate(self, domain: str, device: str, ip: str | None = None) -> Decision:
+    def evaluate(self, domain: str, device: str, ip: str | None = None, now_ms: int | None = None) -> Decision:
         domain = normalize(domain)
         if not domain:
             return Decision("allow", "default", "root query")
@@ -175,11 +183,14 @@ class Engine:
             if verdict.label == "needed":
                 return Decision("allow", "ai", verdict.reason)
             return Decision("flag", "ai", verdict.reason)
+        now_ms = int(time.time() * 1000) if now_ms is None else now_ms
+        if every := self.beacons.observe(device, domain, now_ms):
+            return Decision("flag", "heuristic", BEACON.format(round(every / 1000)))
         return Decision("flag", "default", UNKNOWN)
 
 
 engine = Engine()
 
 
-def evaluate(domain: str, device: str, ip: str | None = None) -> Decision:
-    return engine.evaluate(domain, device, ip)
+def evaluate(domain: str, device: str, ip: str | None = None, now_ms: int | None = None) -> Decision:
+    return engine.evaluate(domain, device, ip, now_ms)
