@@ -118,12 +118,12 @@ def parse_verdict(text) -> Verdict | None:
 
 
 def candidates(conn: sqlite3.Connection, now_ms: int, limit: int) -> list[str]:
-    """Recently looked-up unknown domains with no verdict yet, oldest first.
+    """Recently looked-up unknown domains (beaconing ones included) with no verdict yet, oldest first.
 
     Network plumbing (decision.is_plumbing) is skipped: it isn't a company to judge.
     """
     return [d for (d,) in conn.execute(
-        "SELECT domain FROM queries WHERE ts >= ? AND source = 'default'"
+        "SELECT domain FROM queries WHERE ts >= ? AND action = 'flag' AND source IN ('default', 'heuristic')"
         f" AND NOT {PLUMBING_SQL}"
         " AND domain NOT IN (SELECT domain FROM ai_verdicts)"
         " GROUP BY domain ORDER BY MIN(ts) ASC, domain ASC LIMIT ?", (now_ms - LOOKBACK_MS, limit))]

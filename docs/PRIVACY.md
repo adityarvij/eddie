@@ -42,6 +42,7 @@ Owner: [eddie/store.py](../eddie/store.py), written by [eddie/dns_server.py](../
 | `/ws/events` does not check `Origin`, so any web page open on the same machine can read the live feed from `ws://localhost:8000`. | gap |
 | uvicorn's default access log (request paths, client IPs) goes to Docker's container log. No request bodies are logged, so rule patterns aren't; a `DELETE /rules/{id}` path shows only the id. | known behaviour |
 | The feed has no time-based retention; old events only drop out after 20,000 newer ones. | gap |
+| Beacon and idle detection (#24, `eddie/beacons.py`) keeps only lookup times in memory: the last 12 per device and domain (at most 10,000 pairs) and each device's latest streaming lookup (at most 1,000 devices), in the DNS server for unknown domains and in the API for feed events. Nothing new is written to `eddie.db` or disk, and a restart clears it. Each feed event gains `beacon_s` and `idle`, which say when a device runs on a timer or reports while nobody is watching, and anyone who can read the feed sees them. Tested. | implemented |
 
 ## Voice (wake word, speech to text, speech)
 

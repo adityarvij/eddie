@@ -53,10 +53,19 @@ Both are still answered and written to `eddie.db`. So `totals.seen`,
 
 ## Receiving: `WS /ws/events`
 
-The API adds `id`, `company` and `category` (from `eddie/labels.py`) and pushes:
+The API adds `id`, `company` and `category` (from `eddie/labels.py`), plus
+`beacon_s` and `idle` (from `eddie/beacons.py`, #24), and pushes:
 
 - `snapshot`: sent once on connect: `{events, totals, home_mode}`
-- `query`: the event above plus `id`, `company`, `category`
+- `query`: the event above plus `id`, `company`, `category`, `beacon_s`, `idle`
+
+| Added field | Notes |
+|-------------|-------|
+| `beacon_s`  | int or `null`. The interval in seconds when this device has been looking this domain up on a regular timer (last 6 to 12 lookups, gap coefficient of variation ≤ 0.15, 10 s to 1 h); `null` otherwise. Set whatever the action, so blocklisted beacons show too. |
+| `idle`      | `true` when the device had no allowed media (streaming) lookup in the 5 minutes before this one, `false` when it did (or this is one), `null` while the device has never had one. |
+
+Both are computed by the API from the events it has received, keyed by
+`device_mac`, so senders don't send them. They restart with the API.
 - `totals`: `{seen, blocked}`
 - `mode`: `{home_mode: bool}`
 - `rule_change`: a rule was stored or deleted (see Rules below)
@@ -166,7 +175,8 @@ printable characters. Answers with the stored device and its `name`.
 `hours` is 1 to 168. Returns `{hours, facts, text}` where each fact is
 `{fact, evidence, confidence}` computed in `eddie/inferences.py` from the
 in-memory event log (tracking company exposure, active streaming hours,
-after-midnight use, longest streaming gap, idle telemetry). `text` is a
+after-midnight use, longest streaming gap, idle telemetry, and the device
+and domain looked up most on a regular timer). `text` is a
 template over those facts; the local-model phrasing and number check are not
 built yet. Empty traffic returns no facts, never guesses.
 

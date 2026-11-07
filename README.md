@@ -238,7 +238,8 @@ CREATE INDEX q_dev ON queries(device_mac, ts);
 3. **Blocklist:** StevenBlack hosts + a smart-TV list, loaded into a Python set at startup (`blocklists/*.txt`, downloaded once before the event).
 4. **Keyword heuristic:** labels containing `metrics`, `telemetry`, `analytics`, `ads`, `adsystem`, `tracking`, `beacon`, `crashlytics`, `log` → `BLOCK`, source `heuristic`.
 5. **Cached AI verdict:** needed → `ALLOW`; tracker → `FLAG` as a likely tracker; unsure → `FLAG`. The AI never blocks on its own: on real traffic the local model called Google's static files, Apple's update servers and Safe Browsing trackers at 0.8–0.9 confidence. A user rule ("block it"), a list or the keyword heuristic does the blocking.
-6. **Unknown:** `ALLOW` + `FLAG` now, queue for AI.
+6. **Beacon:** an unknown domain the device looks up on a regular timer (gap coefficient of variation ≤ 0.15, see `eddie/beacons.py`) → `FLAG`, source `heuristic`, reason "looked up every 60 s, likely telemetry"; still queued for AI.
+7. **Unknown:** `ALLOW` + `FLAG` now, queue for AI.
 
 ### Classifier prompt contract
 
