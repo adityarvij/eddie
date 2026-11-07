@@ -10,7 +10,8 @@ from dnslib import QTYPE, RCODE, RR, A, DNSRecord
 
 from eddie import decision, dns_server, store
 
-BLOCKED = 'device-metrics-us.amazon.com'
+BLOCKED = 'device-metrics-us.amazon.com'  # blocked by the keyword heuristic
+UNKNOWN = 'unknown, queued for classifier'
 REAL_IP = '93.184.216.34'
 
 
@@ -143,19 +144,11 @@ class DNSServerTests(unittest.IsolatedAsyncioTestCase):
                 rows = c.execute('SELECT device_mac, domain, qtype, action, source, reason FROM queries ORDER BY id').fetchall()
                 ts = [r[0] for r in c.execute('SELECT ts FROM queries')]
         self.assertEqual([
-            ('127.0.0.1', 'google.com', 'A', 'allow', 'default', ''),
-            ('127.0.0.1', BLOCKED, 'AAAA', 'block', 'blocklist', 'stub blocklist'),
-            ('127.0.0.1', 'example.com', 'A', 'allow', 'default', ''),
+            ('127.0.0.1', 'google.com', 'A', 'flag', 'default', UNKNOWN),
+            ('127.0.0.1', BLOCKED, 'AAAA', 'block', 'heuristic', 'keyword "metrics"'),
+            ('127.0.0.1', 'example.com', 'A', 'flag', 'default', UNKNOWN),
         ], rows)
         self.assertTrue(all(abs(t - time.time() * 1000) < 60_000 for t in ts))
-
-
-class DecisionStubTests(unittest.TestCase):
-    def test_blocks_domain_and_subdomains_only(self):
-        self.assertEqual('block', decision.evaluate(BLOCKED, 'tv').action)
-        self.assertEqual('block', decision.evaluate('a.' + BLOCKED.upper() + '.', 'tv').action)
-        self.assertEqual('allow', decision.evaluate('not' + BLOCKED, 'tv').action)
-        self.assertEqual('allow', decision.evaluate('amazon.com', 'tv').action)
 
 
 class UpstreamConfigTests(unittest.TestCase):

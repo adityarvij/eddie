@@ -195,7 +195,7 @@ Hand this section and the ones below to a coding agent (Claude Code etc.). Targe
 
 ### Running the DNS server
 
-`eddie/dns_server.py` implements steps 1, 3 and 4 above (UDP only) and the `queries` half of step 5: every lookup writes one row to `eddie.db` through `eddie/store.py`. The rest is not built yet: the device is the client IP until #14 (so `queries.device_mac` holds the IP for now), nothing is published to the live feed until #16, and `eddie/decision.py` is a stub that blocks only `device-metrics-us.amazon.com` until #10.
+`eddie/dns_server.py` implements steps 1, 3 and 4 above (UDP only) and the `queries` half of step 5: every lookup writes one row to `eddie.db` through `eddie/store.py`. The rest is not built yet: the device is the client IP until #14 (so `queries.device_mac` holds the IP for now), and nothing is published to the live feed until #16. `eddie/decision.py` implements the full decision order below, but it starts empty: the blocklists and allowlist load in #8, rules come from #12, and AI verdicts from #27. Until then only the keyword heuristic blocks, and everything else is flagged and queued for the classifier.
 
 ```bash
 uv run python -m eddie.dns_server                      # Mac: 0.0.0.0:53 binds without sudo on recent macOS
