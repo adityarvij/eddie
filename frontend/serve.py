@@ -1,6 +1,7 @@
 """Local dashboard and offline voice bridge. No microphone audio is persisted."""
 import argparse
 import json
+import os
 import queue
 import re
 import subprocess
@@ -12,12 +13,16 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-MODEL = ROOT.parent / 'voice' / 'models' / 'vosk-model-small-en-us-0.15'
+sys.path.insert(0, str(ROOT.parent / 'voice'))
+from voice_agent import respond
+from voice_runtime import run as run_voice
+stopped = threading.Event()
 listeners = set()
 lock = threading.Lock()
 voice_lock = threading.Lock()
 voice_state = {'status': 'off'}
 voice_thread = None
+start_lock = threading.Lock()
 speaking = threading.Event()
 counts = {'requests': 0, 'blocked': 0}
 
@@ -30,80 +35,51 @@ def emit(event):
                 pass
 
 def answer(text):
-    # Placeholder summaries use only observed traffic; no invented device activity.
-    if re.search(r'\b(block|allow|lock|mode|undo)\b', text.lower()):
-        response = "My rule controls aren't connected yet. I haven't changed any network settings."
-    elif re.search(r'\b(hello|hi|hey)\b', text.lower()):
-        response = "Hey, I'm Eddie. I'm keeping an eye on things. What would you like to know?"
-    else:
+    # Serialize both typed and spoken requests, including the full playback duration.
+    with voice_lock:
+        speaking.set()
         try:
-            with urllib.request.urlopen('http://127.0.0.1:8000/summary', timeout=2) as summary:
-                response = json.load(summary)['text']
-        except Exception:
-            response = f"I've seen {counts['requests']} requests and {counts['blocked']} blocked requests through my local event bridge this session."
-    def speak():
-        with voice_lock:
-            speaking.set()
+            emit({'type': 'voice_state', 'state': 'thinking'})
+            response = respond(text)
+            emit({'type': 'agent_reply', 'text': response})
             emit({'type': 'speaking', 'text': response})
-            try:
-                if sys.platform == 'darwin':
-                    subprocess.run(['/usr/bin/say', response], check=True, timeout=45)
-                elif sys.platform == 'win32':
-                    ps_cmd = 'Add-Type -AssemblyName System.Speech; [System.Speech.Synthesis.SpeechSynthesizer]::new().Speak([Console]::In.ReadToEnd())'
-                    subprocess.run(['powershell', '-NoProfile', '-Command', ps_cmd], input=response, text=True, check=True, timeout=45)
-                else:
-                    raise OSError('Speech not supported on this OS')
-            except (OSError, subprocess.SubprocessError):
-                emit({'type': 'voice_status', 'status': voice_state['status'], 'message': 'Speech output unavailable; Eddie’s response is shown on screen.'})
-            finally:
-                speaking.clear()
-                emit({'type': 'speech_end'})
-    threading.Thread(target=speak, daemon=True).start()
+            piper_model = os.environ.get('EDDIE_PIPER_MODEL')
+            if piper_model:
+                from piper import PiperVoice
+                import numpy as np
+                import sounddevice as sd
+                voice = PiperVoice.load(piper_model)
+                for chunk in voice.synthesize(response):
+                    sd.play(np.frombuffer(chunk.audio_int16_bytes, dtype=np.int16), chunk.sample_rate)
+                    sd.wait()
+            elif sys.platform == 'darwin':
+                subprocess.run(['/usr/bin/say', response], check=True, timeout=45)
+            elif sys.platform == 'win32':
+                ps_cmd = 'Add-Type -AssemblyName System.Speech; [System.Speech.Synthesis.SpeechSynthesizer]::new().Speak([Console]::In.ReadToEnd())'
+                subprocess.run(['powershell', '-NoProfile', '-Command', ps_cmd], input=response, text=True, check=True, timeout=45)
+            else:
+                raise RuntimeError('Configure EDDIE_PIPER_MODEL for local speech output.')
+        except Exception as error:
+            emit({'type': 'voice_status', 'status': voice_state['status'], 'message': f'Voice reply unavailable: {error}'})
+        finally:
+            speaking.clear()
+            emit({'type': 'speech_end'})
+            emit({'type': 'voice_state', 'state': 'idle'})
 
 def microphone():
     try:
-        import sounddevice as sd
-        from vosk import Model, KaldiRecognizer, SetLogLevel
-        SetLogLevel(-1)
-        model = Model(str(MODEL))
-        audio = queue.Queue(maxsize=64)
-        def callback(data, frames, timing, status):
-            try:
-                audio.put_nowait(bytes(data))
-            except queue.Full:
-                pass
-        rate = int(sd.query_devices(None, 'input')['default_samplerate'])
-        recognizer = KaldiRecognizer(model, rate)
-        active_until = 0
-        last_wake = 0
-        with sd.RawInputStream(samplerate=rate, blocksize=4000, dtype='int16', channels=1, callback=callback):
-            voice_state['status'] = 'ready'
-            emit({'type': 'voice_status', 'status': 'ready', 'message': 'Local microphone ready. Say “Hey Eddie,” pause, then ask a question.'})
-            while True:
-                data = audio.get()
-                if speaking.is_set():
-                    recognizer.Reset()
-                    continue
-                final = recognizer.AcceptWaveform(data)
-                result = json.loads(recognizer.Result() if final else recognizer.PartialResult())
-                text = result.get('text' if final else 'partial', '').strip()
-                now = time.monotonic()
-                match = re.search(r'\b(?:hey|hi|okay) (?:eddie|eddy|edie|ed)(?:\b)', text)
-                if match and now - last_wake > 3:
-                    last_wake = now
-                    active_until = now + 12
-                    emit({'type': 'wake'})
-                    if not final:
-                        continue
-                if final and text and now < active_until:
-                    command = re.sub(r'^.*?\b(?:hey|hi|okay) (?:eddie|eddy|edie|ed)\b', '', text).strip() if match else text
-                    if command:
-                        emit({'type': 'transcript', 'text': command})
-                        answer(command)
-                        active_until = 0
+        def publish(event):
+            if event.get('type') == 'voice_status':
+                voice_state.update({key: value for key, value in event.items() if key != 'type'})
+            emit(event)
+        run_voice(publish, answer, speaking, stopped)
     except Exception as error:
         voice_state['status'] = 'error'
-        emit({'type': 'voice_status', 'status': 'error', 'message': f'Microphone unavailable: {error}. Check microphone permissions for the app running this server.'})
+        emit({'type': 'voice_status', 'status': 'error', 'message': f'Voice unavailable: {error}'})
+    finally:
+        if stopped.is_set():
+            voice_state['status'] = 'off'
+            emit({'type': 'voice_status', 'status': 'off'})
 
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
@@ -118,6 +94,8 @@ class Handler(SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
+        if self.path == '/api/voice/status':
+            return self.json_response(200, {'type': 'voice_status', **voice_state})
         if self.path == '/events':
             self.send_response(200)
             self.send_header('Content-Type', 'text/event-stream')
@@ -157,19 +135,22 @@ class Handler(SimpleHTTPRequestHandler):
         except (ValueError, UnicodeDecodeError):
             return self.json_response(400, {'message': 'Expected JSON.'})
         if self.path == '/api/voice/start':
-            if not MODEL.exists():
-                return self.json_response(503, {'message': 'Install the local voice model first; see frontend/README.md.'})
-            if voice_thread and voice_thread.is_alive():
-                return self.json_response(200, {'message': 'Local microphone is already listening.'})
-            voice_state['status'] = 'starting'
-            voice_thread = threading.Thread(target=microphone, daemon=True)
-            voice_thread.start()
+            with start_lock:
+                if voice_thread and voice_thread.is_alive():
+                    return self.json_response(200, {'message': 'Microphone is running or stopping; wait for its status.'})
+                stopped.clear()
+                voice_state['status'] = 'starting'
+                voice_thread = threading.Thread(target=microphone, daemon=True)
+                voice_thread.start()
             return self.json_response(200, {'message': 'Starting the local microphone…'})
+        if self.path == '/api/voice/stop':
+            stopped.set()
+            return self.json_response(200, {'message': 'Stopping local microphone.'})
         if self.path == '/api/voice/ask':
             text = str(body.get('text', '')).strip()[:1000]
             if not text:
                 return self.json_response(400, {'message': 'A question is required.'})
-            answer(text)
+            threading.Thread(target=answer, args=(text,), daemon=True).start()
             return self.json_response(200, {'ok': True})
         if self.path == '/api/events':
             if not isinstance(body, dict) or not body.get('domain'):

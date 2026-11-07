@@ -409,3 +409,10 @@ Break-ins are one category. Eddie's "What they know about you" report groups eve
 ### For the demo
 
 With a Fire Stick you'll mainly see Safety, What's on screen, Identity linking and some Household and Kids signals (if you open a kids' app). Show those live, and show the other categories on the seeded week of demo data, clearly labelled.
+
+
+## Voice implementation update
+
+The offline wake/capture/transcription worker and deterministic summary/home-mode tool router are implemented. Whisper, shared wake features, Vosk and Piper Lessac assets are provisioned on the development Mac. The dedicated Hey Eddie ONNX model still needs training; the explicit offline Vosk prototype is available now via `./scripts/run_voice.sh`. Live-room microphone accuracy remains unverified. General Ollama tool calling, domain rules, lockdown and email are not yet connected. See [voice setup](voice/README.md), [architecture and remaining work](docs/ARCHITECTURE.md), and [contributor instructions](AGENTS.md). The Mac is the development host; final deployment stays portable to Linux.
+
+The voice view now features a larger active Eddie, spoken interaction without a text box, and a bottom-right Open logs drawer for recent network activity.

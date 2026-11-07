@@ -55,3 +55,9 @@ The API adds `id`, `company` and `category` (from `eddie/labels.py`) and pushes:
 `POST /mode {"home_mode": true}`. The decision engine reads `GET /mode` (or
 shares the state in-process later) and, while on, blocks a device's
 non-essential traffic with `source: "home_mode"`.
+
+## Local voice bridge (port 5173)
+
+The dashboard bridge SSE endpoint `/events` emits `voice_status` with `status` (`off`, `starting`, `ready`, `error`), optional `engine` (`vosk` prototype or `openwakeword`) and `message`. `GET /api/voice/status` returns the latest status. Start/stop POST endpoints operate the local microphone. These are separate from the traffic API on port 8000.
+
+Wake lifecycle: `wake`, `voice_state: listening`, `voice_state: thinking`, optional `transcript`, `agent_reply`, `speaking`, `speech_end`, `voice_state: idle`. No transcript is persisted. Capture or inference failure yields `voice_status: error`.
