@@ -22,7 +22,7 @@ from typing import Literal
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, field_validator
 
-from . import devices, inferences, insights, labels, rules, store
+from . import beacons, devices, inferences, insights, labels, rules, store
 from .events import Action, AIVerdictEvent, ModeUpdate, QueryEvent
 
 # In memory for now; SQLite (store.py) replaces this once the DNS side lands.
@@ -31,6 +31,7 @@ totals = {"seen": 0, "blocked": 0}
 state = {"home_mode": False}
 clients: set[WebSocket] = set()
 ai_verdicts: dict[str, dict] = {}
+timing = {"beacons": beacons.Beacons(), "idle": beacons.Idle()}  # beacon_s and idle on each event (#24)
 ids = itertools.count(1)
 db: dict[str, sqlite3.Connection | None] = {"conn": None}
 APPLY_TIMEOUT = 2.0  # seconds to wait for DNS to load a rule change (it polls every 0.2 s)
@@ -53,7 +54,10 @@ async def ingest(body: QueryEvent | list[QueryEvent]):
     events = body if isinstance(body, list) else [body]
     for ev in events:
         company, category = labels.lookup(ev.domain)
-        row = {**ev.model_dump(), "id": next(ids), "company": company, "category": category}
+        every = timing["beacons"].observe(ev.device_mac, ev.domain, ev.ts)
+        idle = timing["idle"].observe(ev.device_mac, ev.ts, ev.action == "allow" and category in labels.HUMAN)
+        row = {**ev.model_dump(), "id": next(ids), "company": company, "category": category,
+               "beacon_s": every and round(every / 1000), "idle": idle}
         recent.append(row)
         totals["seen"] += 1
         totals["blocked"] += ev.action == "block"

@@ -5,7 +5,7 @@ from the event log; nothing here is invented. Each fact is
 {fact, evidence, confidence} so a local model can later phrase them.
 
 Built: company exposure, active hours, late-night use, idle telemetry,
-longest quiet stretch. Not built yet: sessions by category and weekday,
+beacons (a domain looked up on a timer), longest quiet stretch. Not built yet: sessions by category and weekday,
 camera/doorbell occupancy signals, the Ollama phrasing step and the
 number check that drops any model line whose numbers aren't in the facts.
 """
@@ -13,6 +13,7 @@ import time
 from collections import Counter
 from datetime import datetime
 
+from .beacons import Beacons
 from .insights import plural
 from .labels import HUMAN, TRACKING
 
@@ -82,7 +83,30 @@ def compute_facts(events: list[dict], hours: int = 24, now_ms: int | None = None
             f"{plural(n, 'tracking request')} with no streaming in the 5 minutes before",
             0.8,
         ))
+    if beacon := beacon_fact(window, hours):
+        facts.append(beacon)
     return facts
+
+
+def beacon_fact(window: list[dict], hours: int) -> dict | None:
+    """The device and domain looked up most often on a regular timer (beacons.py), listed or not."""
+    tracker, timed = Beacons(), Counter()
+    every: dict[tuple[str, str], int] = {}
+    for e in window:
+        key = (e["device"], e["domain"])
+        if interval := tracker.observe(*key, e["ts"]):
+            timed[key] += 1
+            every[key] = interval
+    if not timed:
+        return None
+    (device, domain), n = timed.most_common(1)[0]
+    seconds = round(every[(device, domain)] / 1000)
+    gap = plural(round(seconds / 60), "minute") if seconds >= 120 else plural(seconds, "second")
+    return fact(
+        f"The {device} checks in with {domain} on a timer",
+        f"{plural(n, 'lookup')} about every {gap} in {hours}h",
+        0.7,
+    )
 
 
 def spoken_text(facts: list[dict], hours: int) -> str:
