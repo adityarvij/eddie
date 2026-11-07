@@ -67,7 +67,7 @@ Both are still answered and written to `eddie.db`. So `totals.seen`,
 The API adds `id`, `company` and `category` (from `eddie/labels.py`), plus
 `beacon_s` and `idle` (from `eddie/beacons.py`, #24), and pushes:
 
-- `snapshot`: sent once on connect: `{events, totals, home_mode}`
+- `snapshot`: sent once on connect: `{events, ai_verdicts, bypass, totals, home_mode}`
 - `query`: the event above plus `id`, `company`, `category`, `beacon_s`, `idle`
 
 | Added field | Notes |
@@ -81,6 +81,32 @@ Both are computed by the API from the events it has received, keyed by
 - `mode`: `{home_mode: bool}`
 - `offline_mode`: `{offline: bool, applied: bool}` after every `POST /offline-mode`
 - `rule_change`: a rule was stored or deleted (see Rules below)
+- `bypass_suspected`: a device looked up an encrypted DNS resolver (see Bypass detection below)
+
+## Bypass detection: `bypass_suspected` (#97)
+
+For each query event whose `domain` is, or is under, a name in
+`eddie/bypass.py` `RESOLVERS` (`dns.google`, `cloudflare-dns.com`,
+`dns.quad9.net`, `dns.nextdns.io`, …; sources listed in the module), the API
+pushes, right after the query:
+
+```json
+{"type": "bypass_suspected", "ts": 1762531200123, "device_mac": "f0:4f:7c:11:22:33", "device": "Fire Stick",
+ "domain": "dns.google", "resolver": "Google Public DNS", "blocked": false,
+ "reason": "Fire Stick looked up dns.google (Google Public DNS), an encrypted DNS resolver. It may be sending some lookups there, where Eddie can't see or block them."}
+```
+
+- At most once per `device_mac` and resolver name every 10 minutes.
+- `blocked` is the query's own `action == "block"`, i.e. the DNS server's
+  decision for that lookup (with `EDDIE_BLOCK_DOH=on`, or a rule or list).
+  Its `reason` then adds that blocking the name only stops encrypted DNS set
+  up by name, not an app that has the resolver's IP.
+- It's a suspicion: a browser may check a resolver and not use it, and a
+  device with hard-coded resolver IPs never asks Eddie, so no event (or
+  absence of one) means a device is fully covered by Eddie.
+- Not a lookup: it doesn't change `totals`. The last 50 are kept in memory
+  and sent as `bypass` in the `snapshot`; a restart clears them.
+- The dashboard shows it as a `[bypass?]` feed row and a toast with `reason`.
 
 ## Home mode: `GET/POST /mode`
 

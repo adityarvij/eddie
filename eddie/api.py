@@ -1,7 +1,8 @@
 """Traffic feed: takes events in on /ingest and pushes them out on /ws/events.
 
 The fake generator (scripts/fake_traffic.py) and the DNS server (eddie/feed.py)
-both POST here; Codex's frontend listens on the WebSocket.
+both POST here; Codex's frontend listens on the WebSocket. A lookup of an
+encrypted DNS resolver's name also pushes a bypass_suspected event (bypass.py).
 
 /rules writes user rules to eddie.db (EDDIE_DB, the DNS server's database) and
 waits for the DNS server to load them before answering; see docs/EVENTS.md.
@@ -32,7 +33,7 @@ from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocket
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 
-from . import beacons, demo_week, devices, inferences, insights, labels, offline, rules, store
+from . import beacons, bypass, demo_week, devices, inferences, insights, labels, offline, rules, store
 from .events import Action, AIVerdictEvent, ModeUpdate, OfflineUpdate, QueryEvent
 
 # In memory for now; SQLite (store.py) replaces this once the DNS side lands.
@@ -44,6 +45,8 @@ state = {"home_mode": False}
 clients: set[WebSocket] = set()
 ai_verdicts: dict[str, dict] = {}
 timing = {"beacons": beacons.Beacons(), "idle": beacons.Idle()}  # beacon_s and idle on each event (#24)
+suspicions = bypass.Suspicions()  # bypass_suspected events (#97)
+bypass_recent: deque[dict] = deque(maxlen=50)
 ids = itertools.count(1)
 db: dict[str, sqlite3.Connection | None] = {"conn": None}
 APPLY_TIMEOUT = 2.0  # seconds to wait for DNS to load a rule or offline change (it polls every 0.2 s)
@@ -140,6 +143,9 @@ async def ingest(body: QueryEvent | list[QueryEvent]):
         totals["seen"] += 1
         totals["blocked"] += ev.action == "block"
         await broadcast(row)
+        if suspect := suspicions.observe(row):
+            bypass_recent.append(suspect)
+            await broadcast(suspect)
     await broadcast({"type": "totals", **totals})
     return {"ok": True, "count": len(events)}
 
@@ -346,6 +352,7 @@ async def ws_events(ws: WebSocket):
         "type": "snapshot",
         "events": list(feed())[-60:],
         "ai_verdicts": list(ai_verdicts.values()),
+        "bypass": list(bypass_recent),
         "totals": totals,
         "home_mode": state["home_mode"],
     }))

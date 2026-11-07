@@ -21,6 +21,7 @@ worker thread, and records the devices seen in eddie.db (#14).
 Offline mode (#26, offline.py) is loaded the same way: while it's on, nothing
 is forwarded and allowed lookups get the answer kept from the last time they
 were forwarded, or SERVFAIL.
+EDDIE_BLOCK_DOH=on blocks the encrypted DNS resolver names in bypass.py (#97).
 Each decision is also sent to the live feed (POST /ingest on the local API)
 by feed.FeedPublisher, off the reply path; EDDIE_FEED=off turns that off.
 
@@ -269,12 +270,14 @@ def main() -> None:
     except OSError as exc:
         raise SystemExit(f"Can't load the allowlist or blocklists ({exc}). Blocking without the allowlist can break devices.")
     decision.engine.set_lists(allowlist, blocklist)
+    decision.engine.block_doh = os.environ.get("EDDIE_BLOCK_DOH", "off") == "on"
     try:
         spoof["ip"] = spoof_ip_from_env()
     except ValueError as exc:
         raise SystemExit(f"EDDIE_SPOOF_IP refused: {exc}.")
-    log.info("loaded %d blocklist and %d allowlist entries in %.2fs",
-             len(blocklist), len(allowlist), time.monotonic() - started)
+    log.info("loaded %d blocklist and %d allowlist entries in %.2fs%s",
+             len(blocklist), len(allowlist), time.monotonic() - started,
+             ", blocking encrypted DNS resolver names" if decision.engine.block_doh else "")
     try:
         feed = feed_from_env()
     except ValueError as exc:
