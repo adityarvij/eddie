@@ -11,6 +11,7 @@ Stdlib only, so it also runs on the Pi as-is.
 """
 import argparse
 import json
+import os
 import random
 import sys
 import time
@@ -77,11 +78,16 @@ def decide(s: Stream, home_mode: bool, ai_cache=None) -> tuple[str, str, str]:
     return s.action, s.source, s.reason
 
 
+HEADERS = {"Content-Type": "application/json"}
+if os.environ.get("EDDIE_API_TOKEN"):  # the API only takes writes from other hosts with it (#96)
+    HEADERS["Authorization"] = "Bearer " + os.environ["EDDIE_API_TOKEN"]
+
+
 def post(url: str, path: str, body=None):
     req = urllib.request.Request(
         url + path,
         data=None if body is None else json.dumps(body).encode(),
-        headers={"Content-Type": "application/json"},
+        headers=HEADERS,
         method="GET" if body is None else "POST",
     )
     with urllib.request.urlopen(req, timeout=2) as r:
