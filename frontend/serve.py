@@ -184,6 +184,15 @@ if __name__ == '__main__':
     # 0.0.0.0 lets the iPad view the dashboard; mic and other controls stay localhost-only.
     parser.add_argument('--host', default=os.environ.get('EDDIE_DASHBOARD_HOST', '127.0.0.1'))
     args = parser.parse_args()
+    if os.environ.get('EDDIE_AGENT', 'ollama') != 'off':
+        import ollama_agent
+        import voice_agent
+        try:
+            agent = ollama_agent.Agent()
+            voice_agent.ask_model = lambda text: ollama_agent.answer(agent, text)
+            print(f'Local agent: {agent.model} at {agent.url} (keyword router if it is unavailable).', flush=True)
+        except ValueError as error:
+            print(f'Local agent off: EDDIE_OLLAMA_URL refused: {error}.', flush=True)
     print(f'Eddie dashboard: http://localhost:{args.port}', flush=True)
     if not is_local(args.host):
         print(f'Viewable from the network on port {args.port}; controls only work on this computer.', flush=True)

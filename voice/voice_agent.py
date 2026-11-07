@@ -131,9 +131,13 @@ class Confirmation:
 
 
 confirmation = Confirmation()
+# Optional local model for read-only questions: callable(raw text) -> reply, or
+# None when the model is unavailable. Set by frontend/serve.py (ollama_agent).
+ask_model = None
 
 
 def respond(text):
+    raw = text.strip()
     text = re.sub(r'[^a-z0-9\s]', '', text.lower()).strip()
     text = re.sub(r'\s+', ' ', text)
     # A new risky command replaces any pending one; otherwise a pending action
@@ -167,6 +171,10 @@ def respond(text):
             return "I can't reach Eddie’s traffic backend, so I can't say what they know right now."
     if text in ('hello', 'hi', 'hey', 'hey eddie'):
         return "Hey, I'm Eddie. Ask me what's been going on, or tell me to turn home mode on or off."
+    if ask_model is not None:
+        reply = ask_model(raw)
+        if reply is not None:
+            return reply
     if re.search(r'\b(summary|update|happening|going|requests|blocked|doing|activity)\b', text):
         try:
             return str(request('/summary')['text'])

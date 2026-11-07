@@ -268,13 +268,13 @@ Use Ollama `format: json`, temperature 0. Never send anything but the domain and
 
 | Tool | Args | Effect |
 |---|---|---|
-| `get_summary` | window, device? | Reads `/summary` |
-| `get_recent_blocks` | device?, limit | Last blocked domains with reasons |
+| `get_summary` | window, device? | Reads `/summary?window=` per-device counts (implemented in `voice/ollama_agent.py`) |
+| `get_recent_blocks` | device?, limit | Last blocked domains with reasons (implemented) |
 | `what_they_know` | hours? | Reads `/what-they-know` (implemented in `voice/voice_agent.py`) |
 | `block` | pattern, device? | Adds BLOCK rule |
 | `allow` | pattern, device? | Adds ALLOW rule |
 | `lockdown_device` | device, keep (list) | Blocks everything for that device except keep patterns |
-| `explain_domain` | domain | Returns stored verdict and reason |
+| `explain_domain` | domain | Returns stored verdict and reason (implemented) |
 | `draft_email` | to, subject, body | Prepares email, asks for spoken yes |
 | `send_email` | draft_id | Sends via Gmail only after confirmation |
 
@@ -475,7 +475,7 @@ With a Fire Stick you'll mainly see Safety, What's on screen, Identity linking a
 
 ## Voice implementation update
 
-The offline wake/capture/transcription worker and deterministic summary/home-mode tool router are implemented. Whisper, shared wake features, Vosk and Piper Lessac assets are provisioned on the development Mac. The dedicated Hey Eddie ONNX model still needs training; the explicit offline Vosk prototype is available now via `./scripts/run_voice.sh`. Live-room microphone accuracy remains unverified. General Ollama tool calling, domain rules, lockdown and email are not yet connected; the one-pending-action confirmation step they will require (yes/no, 15 s expiry, discarded on dismissal) is implemented and unit tested. See [voice setup](voice/README.md), [architecture and remaining work](docs/ARCHITECTURE.md), and [contributor instructions](AGENTS.md). The Mac is the development host; final deployment stays portable to Linux.
+The offline wake/capture/transcription worker and deterministic summary/home-mode tool router are implemented. Whisper, shared wake features, Vosk and Piper Lessac assets are provisioned on the development Mac. The dedicated Hey Eddie ONNX model still needs training; the explicit offline Vosk prototype is available now via `./scripts/run_voice.sh`. Live-room microphone accuracy remains unverified. Read-only Ollama tool calling (#29: `get_summary`, `get_recent_blocks`, `explain_domain`, `what_they_know`) answers questions, with every spoken number checked against tool results; domain rules, lockdown and email are not yet connected to it; the one-pending-action confirmation step they will require (yes/no, 15 s expiry, discarded on dismissal) is implemented and unit tested. See [voice setup](voice/README.md), [architecture and remaining work](docs/ARCHITECTURE.md), and [contributor instructions](AGENTS.md). The Mac is the development host; final deployment stays portable to Linux.
 
 The voice view now features a larger active Eddie, spoken interaction without a text box, and an Open logs control beneath Eddie that opens a drawer for recent network activity.
 

@@ -15,11 +15,12 @@ import os
 import sqlite3
 import time
 from collections import deque
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 
 from . import inferences, insights, labels, rules, store
-from .events import AIVerdictEvent, ModeUpdate, QueryEvent
+from .events import Action, AIVerdictEvent, ModeUpdate, QueryEvent
 
 # In memory for now; SQLite (store.py) replaces this once the DNS side lands.
 recent: deque[dict] = deque(maxlen=20000)
@@ -75,15 +76,19 @@ def cached_ai_verdicts():
 
 
 @app.get("/events")
-def events(since: int = 0, device: str | None = None, limit: int = 200):
-    rows = [e for e in recent if e["ts"] > since and (device is None or e["device"] == device)]
+def events(since: int = 0, device: str | None = None, limit: int = 200,
+           action: Action | None = None, domain: str | None = None):
+    rows = [e for e in recent if e["ts"] > since and (device is None or e["device"] == device)
+            and (action is None or e["action"] == action) and (domain is None or e["domain"] == domain)]
     return rows[-limit:]
 
 
 @app.get("/summary")
-def summary():
+def summary(window: Literal["15m", "1h", "24h"] = "1h"):
+    # text and companies cover the last hour; devices covers the requested window.
     return {**totals, "home_mode": state["home_mode"], "text": insights.summary_text(list(recent)),
-            "companies": insights.company_counts(list(recent)), "company_window_seconds": 3600}
+            "companies": insights.company_counts(list(recent)), "company_window_seconds": 3600,
+            "window": window, "devices": insights.device_counts(list(recent), insights.WINDOWS_MS[window])}
 
 
 @app.get("/what-they-know")
