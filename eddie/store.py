@@ -63,11 +63,17 @@ def connect(path: str) -> sqlite3.Connection:
 
 
 def prune(conn: sqlite3.Connection, retention_days: float, now_ms: int | None = None) -> int:
-    """Delete queries rows older than the retention window. Returns rows deleted."""
+    """Delete queries rows and AI verdicts older than the retention window.
+
+    Verdicts go too: the list of domains the household looked up is history
+    even without times. A domain seen again is simply classified again.
+    Returns rows deleted.
+    """
     now_ms = int(time.time() * 1000) if now_ms is None else now_ms
     cutoff = now_ms - int(retention_days * 86_400_000)
     with conn:
         deleted = conn.execute("DELETE FROM queries WHERE ts < ?", (cutoff,)).rowcount
+        deleted += conn.execute("DELETE FROM ai_verdicts WHERE ts < ?", (cutoff,)).rowcount
     if deleted:
         conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")  # don't leave old pages in the WAL
     return deleted

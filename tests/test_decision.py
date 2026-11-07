@@ -4,11 +4,10 @@ import time
 import unittest
 
 from eddie import store
-from eddie.decision import Engine, Rule, Verdict
+from eddie.decision import UNKNOWN, Engine, Rule, Verdict
 
 TV = 'aa:bb:cc:dd:ee:01'
 PHONE = 'aa:bb:cc:dd:ee:02'
-UNKNOWN = 'unknown, queued for classifier'
 
 
 def decide(engine, domain, device=TV):
@@ -58,25 +57,12 @@ class DecisionOrderTests(unittest.TestCase):
         self.assertEqual(('block', 'ai', 'ad pixel'), decide(self.e, 'pixel.example'))
         self.assertEqual(('flag', 'ai', 'weak guess'), decide(self.e, 'maybe.example'))
         self.assertEqual(('flag', 'ai', 'no idea'), decide(self.e, 'odd.example'))
-        self.assertIsNone(self.e.next_unknown())
 
-    def test_unknown_flags_and_queues_once(self):
+    def test_unknown_is_flagged_for_the_classifier(self):
         self.assertEqual(('flag', 'default', UNKNOWN), decide(self.e, 'New.Example.'))
-        decide(self.e, 'new.example')
-        decide(self.e, 'other.example')
-        self.assertEqual('new.example', self.e.next_unknown())
-        self.assertEqual('other.example', self.e.next_unknown())
-        self.assertIsNone(self.e.next_unknown())
 
-    def test_unknown_queue_is_bounded(self):
-        from eddie import decision
-        for i in range(decision.MAX_UNKNOWN + 5):
-            self.assertEqual('flag', self.e.evaluate(f'host{i}.example', TV).action)
-        self.assertEqual(decision.MAX_UNKNOWN, len(self.e.unknown))
-
-    def test_root_query_is_allowed_and_not_queued(self):
+    def test_root_query_is_allowed(self):
         self.assertEqual('allow', self.e.evaluate('.', TV).action)
-        self.assertIsNone(self.e.next_unknown())
 
 
 class RulePatternTests(unittest.TestCase):

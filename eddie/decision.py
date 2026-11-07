@@ -7,8 +7,8 @@ First match wins:
 4. Keyword heuristic on the domain's labels.
 5. Cached AI verdict: tracker at confidence >= 0.7 blocks, needed allows,
    anything else flags.
-6. Unknown: flag (the lookup is still forwarded) and queue the domain for the
-   classifier.
+6. Unknown: flag (the lookup is still forwarded). The flagged queries row in
+   eddie.db is the classifier's queue (classifier.py); nothing else is kept.
 
 This runs on the DNS hot path: no model calls, no network, no disk. Everything
 it reads is in memory. Writers (rules API #12, list loader #8, classifier #27)
@@ -23,8 +23,6 @@ Matching:
 """
 import re
 import sqlite3
-import threading
-from collections import deque
 from dataclasses import dataclass
 
 from .events import Action, Source
@@ -34,7 +32,7 @@ KEYWORDS = ("metrics", "telemetry", "analytics", "adsystem", "tracking", "beacon
 # whole word: a label split on anything that isn't a letter.
 WHOLE_WORDS = {"ads": "ads", "log": "log", "logs": "log"}
 TRACKER_CONFIDENCE = 0.7
-MAX_UNKNOWN = 1000  # domains waiting for the classifier before new ones are skipped
+UNKNOWN = "unknown, waiting for classifier"
 
 _WORD_SPLIT = re.compile(r"[^a-z]+")
 
@@ -120,9 +118,6 @@ class Engine:
         self.allowlist: frozenset[str] = frozenset()
         self.blocklist: frozenset[str] = frozenset()
         self.verdicts: dict[str, Verdict] = {}
-        self.unknown: deque[str] = deque()
-        self.queued: set[str] = set()
-        self.lock = threading.Lock()
 
     def set_rules(self, rules) -> None:
         self.rules = RuleIndex(rules)
@@ -160,23 +155,7 @@ class Engine:
             if verdict.label == "needed":
                 return Decision("allow", "ai", verdict.reason)
             return Decision("flag", "ai", verdict.reason)
-        self.queue_unknown(domain)
-        return Decision("flag", "default", "unknown, queued for classifier")
-
-    def queue_unknown(self, domain: str) -> None:
-        with self.lock:
-            if domain not in self.queued and len(self.unknown) < MAX_UNKNOWN:
-                self.queued.add(domain)
-                self.unknown.append(domain)
-
-    def next_unknown(self) -> str | None:
-        """The oldest domain waiting for the classifier, or None."""
-        with self.lock:
-            if not self.unknown:
-                return None
-            domain = self.unknown.popleft()
-            self.queued.discard(domain)
-            return domain
+        return Decision("flag", "default", UNKNOWN)
 
 
 engine = Engine()
