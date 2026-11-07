@@ -12,11 +12,9 @@ Open http://localhost:5173. Click **Wake Eddie** or press **Space** to preview t
 
 ## Local “Hey Eddie”
 
-Download https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip once and unpack it into `voice/models/`. The model folder should be `voice/models/vosk-model-small-en-us-0.15/`.
+The voice pipeline now uses openWakeWord and faster-whisper. Follow [offline model provisioning and voice setup](../voice/README.md) before enabling the microphone. Custom models are not bundled. Piper supplies portable speech; installed macOS speech remains a development fallback.
 
-Click **Enable “Hey Eddie”**, grant microphone access to the application running Python in macOS System Settings → Privacy & Security → Microphone, and say “Hey Eddie.” Pause, then ask a question. Audio is processed in memory locally and is not recorded. This first pass uses offline Vosk transcription to detect the phrase; it is not a trained dedicated wake-word model. Real-room accuracy must be tuned on the demo microphone.
-
-The voice replies are intentionally limited: observed traffic totals and an explicit message that rule controls are not connected. Connect the real local agent before claiming command execution.
+Supported tools: factual backend summaries and explicit home-mode on/off. Domain rules, lockdown, email and general agent conversation remain pending.
 
 ## Traffic contract for Claude
 
@@ -40,3 +38,9 @@ Voice lifecycle events may also arrive on the traffic WebSocket:
 For a separate agent use the WebSocket events above to control the overlay, or call `window.eddie.wake()`, `window.eddie.pushEvent(event)`, and `window.eddie.voiceEvent(event)` in the page.
 
 The server binds only to localhost for the laptop demo. External fonts, analytics, and cloud audio are not used.
+
+## Voice view
+
+Calling Eddie opens a larger animated character with listening, thinking and speaking states. The view stays open after a reply and prompts “Say Hey Eddie to ask again”; this means the wake detector is ready, not continuous command capture. There is no typed input. Transcripts and replies are not displayed beneath Eddie; speech is the primary response.
+
+**Open logs** at the bottom right opens a live drawer of the same recent network activity shown by the main feed. Closing the drawer leaves Eddie open. Escape or the top close control dismisses Eddie. This drawer does not persist microphone audio or speech transcripts.

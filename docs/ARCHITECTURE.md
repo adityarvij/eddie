@@ -1,0 +1,33 @@
+# Eddie architecture: voice implementation status
+
+The backend API and DNS enforcement are independent of the voice worker. Development currently uses the Mac microphone and a localhost dashboard; production should run the same offline worker on the final box after ARM64 performance checks.
+
+Audio → openWakeWord custom ONNX → bounded in-memory capture → faster-whisper local model → deterministic tool router → local REST API → Piper → audio output.
+
+The dashboard bridge publishes `voice_status`, `wake`, `voice_state`, `transcript`, `agent_reply`, `speaking`, and `speech_end` events through its existing SSE connection. It accepts start, stop and typed ask requests. Speech and typed responses share a serialized lock. Recognition discards input during replies and resets detector history before rearming.
+
+Implemented tools are backend summary reads and home-mode writes. Home mode is backend state, not evidence of DNS enforcement. Missing tools explicitly report that no change occurred. The model does not fabricate counts. Ollama tool calling is a future layer over the same tool boundary; use structured validated arguments, bounded iterations and confirmation state for lockdown/email.
+
+## Remaining work
+
+- Train and evaluate the actual Hey Eddie model; record provenance, license, threshold and false-wake metrics.
+- Provision and hash all local assets; add a repeatable offline installer and hardware compatibility checks.
+- Integrate Will's rule endpoints only after their request/response contract exists; add read-back, expiry and undo semantics.
+- Add authenticated local control before exposing the dashboard bridge off localhost. Do not expose microphone controls publicly.
+- Add calibrated VAD for noisy rooms; RMS endpointing is the first implementation. Consider an in-memory pre-roll for commands spoken without a pause.
+- Add an audible ready cue without contaminating captured commands; currently the visual listening overlay is the cue.
+- Add bounded request admission, cancellation, streaming replies, device reconnect and model caching for Piper.
+- Add a visible persistent microphone indicator and shutdown path for deployment.
+- Keep models/audio out of git. Never retain raw microphone audio or log transcriptions by default.
+
+## Explicit prototype engine
+
+`EDDIE_WAKE_ENGINE=vosk` selects local phrase recognition for immediate Mac testing; the normal default remains `openwakeword`. `wake_detector.py` isolates prototype phrase detection from bounded capture, Whisper, tools and Piper. The prototype uses an unrestricted decoder (no forced wake grammar), requires an anchored wake phrase, and advertises its engine through voice status. A generated training notebook is preparation only; no dedicated model is claimed.
+
+The development launcher uses provisioned Piper Lessac rather than macOS speech. Existing backend traffic is preserved across dashboard restarts. `/api/voice/status` supports readiness checks without storing audio or transcriptions.
+
+## Voice-first presentation
+
+The assistant view has no text-entry UI. Its larger character stays animated while open, with distinct listening, thinking and speaking states. A runtime idle event displays a wake-ready prompt without dismissing Eddie; a new wake phrase is still required for the next command. Open logs toggles a live recent-network-activity drawer inside the assistant view, using the existing feed rather than a new log store.
+
+The assistant copy beneath the character is hidden in the voice view; state remains above Eddie and Open logs remains available. Speech events still drive the character animation.
