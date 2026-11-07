@@ -2,7 +2,8 @@
 
 The schema is the one in README "SQLite schema" and is created on first open,
 plus engine_state: the rules revision written and the one DNS has loaded
-(rules.py).
+(rules.py), and traffic: per-device byte counts from the optional traffic
+monitor (traffic.py).
 QueryLog keeps disk off the DNS hot path: log() only drops a row on an
 in-memory queue, and one writer thread batches rows into SQLite. If the
 queue is full (disk stalled), rows are dropped and counted, never waited on.
@@ -29,8 +30,10 @@ CREATE TABLE IF NOT EXISTS queries (id INTEGER PRIMARY KEY, ts INTEGER, device_m
 CREATE TABLE IF NOT EXISTS rules (id INTEGER PRIMARY KEY, scope TEXT, device_mac TEXT, pattern TEXT, action TEXT, created_by TEXT, ts INTEGER);
 CREATE TABLE IF NOT EXISTS ai_verdicts (domain TEXT PRIMARY KEY, label TEXT, confidence REAL, reason TEXT, ts INTEGER);
 CREATE TABLE IF NOT EXISTS engine_state (key TEXT PRIMARY KEY, value INTEGER);
+CREATE TABLE IF NOT EXISTS traffic (id INTEGER PRIMARY KEY, first_ts INTEGER, last_ts INTEGER, device_mac TEXT, ip TEXT, port INTEGER, proto TEXT, bytes_out INTEGER, bytes_in INTEGER, packets_out INTEGER, packets_in INTEGER);
 CREATE INDEX IF NOT EXISTS q_ts ON queries(ts);
 CREATE INDEX IF NOT EXISTS q_dev ON queries(device_mac, ts);
+CREATE INDEX IF NOT EXISTS t_dev ON traffic(device_mac, last_ts);
 """
 
 QUERY_COLUMNS = ("ts", "device_mac", "domain", "qtype", "action", "source", "reason")
@@ -66,7 +69,7 @@ def connect(path: str) -> sqlite3.Connection:
 
 
 def prune(conn: sqlite3.Connection, retention_days: float, now_ms: int | None = None) -> int:
-    """Delete queries rows, AI verdicts and unlabeled devices older than the retention window.
+    """Delete queries and traffic rows, AI verdicts and unlabeled devices older than the retention window.
 
     Verdicts go too: the list of domains the household looked up is history
     even without times. A domain seen again is simply classified again.
@@ -77,6 +80,7 @@ def prune(conn: sqlite3.Connection, retention_days: float, now_ms: int | None = 
     cutoff = now_ms - int(retention_days * 86_400_000)
     with conn:
         deleted = conn.execute("DELETE FROM queries WHERE ts < ?", (cutoff,)).rowcount
+        deleted += conn.execute("DELETE FROM traffic WHERE last_ts < ?", (cutoff,)).rowcount
         deleted += conn.execute("DELETE FROM ai_verdicts WHERE ts < ?", (cutoff,)).rowcount
         deleted += conn.execute("DELETE FROM devices WHERE label IS NULL AND ifnull(last_seen, 0) < ?",
                                 (cutoff,)).rowcount

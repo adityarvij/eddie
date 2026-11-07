@@ -23,7 +23,7 @@ Dashboard at http://localhost:5173, API at http://localhost:8000. The traffic AP
 
 ## Stack (hackathon version)
 
-- **Network core:** Python + dnslib (DNS server) on the Raspberry Pi; devices point their DNS at it; optional scapy for non-DNS traffic
+- **Network core:** Python + dnslib (DNS server) on the Raspberry Pi; devices point their DNS at it; optional traffic monitor for non-DNS traffic (`eddie/traffic.py`, header counts only, router mode)
 - **Rules/data:** SQLite; public blocklists (StevenBlack, Pi-hole lists)
 - **AI brain:** Ollama + Llama 3.2 3B or Qwen, using tool calling (read logs, block/allow, send email)
 - **Voice:** openWakeWord ("Hey Eddie"), faster-whisper (speech to text), Piper (voice) — all offline
@@ -175,7 +175,8 @@ Hand this section and the ones below to a coding agent (Claude Code etc.). Targe
 | decision | Python | Ordered rules: user rules → allowlist → blocklist + keyword heuristics → cache → AI classifier → default allow + flag |
 | classifier | Ollama HTTP API on the Mac (port 11434), Llama 3.2 3B or Qwen 2.5 3B | Labels unknown domains tracker / needed / unsure with a reason and confidence; runs async so DNS never waits on it |
 | devices | Python, reads the Pi's ARP table (`ip neigh`) | Maps client IP → MAC → friendly name ("Fire Stick") via hostname, MAC vendor prefix (OUI) and user labels |
-| store | SQLite (`eddie.db`) | Queries log, decisions, rules, devices, AI verdict cache |
+| store | SQLite (`eddie.db`) | Queries log, decisions, rules, devices, AI verdict cache, traffic counts |
+| traffic | Python, Linux raw socket (optional, off by default) | Counts bytes and packets per device, remote IP, port and protocol from packet headers on the LAN interface, so upload volume, hard-coded IPs and long streams show up. Only useful when Eddie is the router (#22) |
 | api | FastAPI + uvicorn, WebSocket | REST for dashboard and agent tools; `/ws/events` pushes each decision live |
 | dashboard | Plain HTML/JS or React, kiosk full-screen | Black, minimal live feed; counters; per-device view; listening animation |
 | voice | openWakeWord, faster-whisper (base.en), Piper TTS, sounddevice | Wake word "Hey Eddie" → record until silence → transcribe → agent → speak reply |
@@ -225,11 +226,13 @@ CREATE TABLE queries (id INTEGER PRIMARY KEY, ts INTEGER, device_mac TEXT, domai
 CREATE TABLE rules (id INTEGER PRIMARY KEY, scope TEXT, device_mac TEXT, pattern TEXT, action TEXT, created_by TEXT, ts INTEGER);
 CREATE TABLE ai_verdicts (domain TEXT PRIMARY KEY, label TEXT, confidence REAL, reason TEXT, ts INTEGER);
 CREATE TABLE engine_state (key TEXT PRIMARY KEY, value INTEGER);
+CREATE TABLE traffic (id INTEGER PRIMARY KEY, first_ts INTEGER, last_ts INTEGER, device_mac TEXT, ip TEXT, port INTEGER, proto TEXT, bytes_out INTEGER, bytes_in INTEGER, packets_out INTEGER, packets_in INTEGER);
 CREATE INDEX q_ts ON queries(ts);
 CREATE INDEX q_dev ON queries(device_mac, ts);
+CREATE INDEX t_dev ON traffic(device_mac, last_ts);
 ```
 
-`rules.pattern` matches exact domain or suffix (`*.amazon-adsystem.com`). `scope` = `global` or `device`. `created_by` = `user` (default) / `voice` / `agent`. `engine_state` holds `rules_rev` (bumped by every rule write) and `rules_loaded` (the revision the DNS engine last loaded), which `/rules` uses to acknowledge a change.
+`rules.pattern` matches exact domain or suffix (`*.amazon-adsystem.com`). `scope` = `global` or `device`. `created_by` = `user` (default) / `voice` / `agent`. `traffic` rows are written by the optional traffic monitor: one per device, remote IP, remote port and protocol per minute it saw packets (`port` is 0 for ICMP), with bytes and packets each way. `engine_state` holds `rules_rev` (bumped by every rule write) and `rules_loaded` (the revision the DNS engine last loaded), which `/rules` uses to acknowledge a change.
 
 ### Decision order (first match wins)
 
