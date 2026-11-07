@@ -30,7 +30,7 @@ Body is one event or a list of events.
 | `device`     | string | friendly label (`"Fire Stick"`); fall back to the IP |
 | `domain`     | string | lowercase, no trailing dot |
 | `qtype`      | string | `A`, `AAAA`, `HTTPS`, ... |
-| `action`     | string | `allow` \| `block` \| `flag` |
+| `action`     | string | `allow` \| `block` \| `flag` \| `spoof` (answered with Eddie's IP, #99) |
 | `source`     | string | `rule` \| `allowlist` \| `blocklist` \| `heuristic` \| `ai` \| `home_mode` \| `default` |
 | `reason`     | string | one short human line, shown on screen |
 
@@ -42,6 +42,17 @@ accept in time are dropped, not retried. Real events carry the device's MAC
 and name (see Devices below); a client whose MAC isn't known yet is
 `device_mac: "ip:<client IP>"` and `device: "<client IP>"`. A new label shows
 in the feed within 30 s.
+
+### Access (#96)
+
+Writes (`POST`, `PUT`, `DELETE`) from loopback need nothing. From any other
+address they need `Authorization: Bearer <EDDIE_API_TOKEN>`; a missing or wrong
+token, or no token configured on the API, gets 401 `{detail}`. Every client
+here (`eddie/feed.py`, the classifier, `voice/voice_agent.py`, the dashboard
+bridge, `scripts/fake_traffic.py`) sends it when `EDDIE_API_TOKEN` is set. A
+write whose `Origin` isn't a loopback page or a page on the same IP or `.local`
+host gets 403. `GET`s are open. `/ws/events` refuses the handshake (403) for
+the same foreign origins; non-browser clients send no `Origin` and connect.
 
 The DNS server doesn't send every lookup. Network plumbing (reverse lookups
 under `.arpa`, service-discovery names with a `_` label such as
@@ -137,7 +148,7 @@ before every list: device rule, then the device's lockdown rule, then global rul
 | Field        | Notes |
 |--------------|-------|
 | `pattern`    | `a.com` matches only a.com; `*.a.com` matches a.com and every subdomain. Lowercased, trailing dot dropped. At least two labels: empty, `com` and `*.com` are refused. The one exception is `*` with `action: block` and a `device_mac`: lockdown (#17), which blocks every domain for that device except its own device rules and the allowlist. `*` without a device or as an allow is refused. IP addresses are refused (`192.168.1.10`, `*.10.0.0.1`, `::1`): a name whose last label is all digits isn't a domain. |
-| `action`     | `block` \| `allow` |
+| `action`     | `block` \| `allow` \| `spoof`. `spoof` (#99) answers the domain with Eddie's IP (`EDDIE_SPOOF_IP`) so the stub server (`eddie/spoof_server.py`) returns 200 OK with an empty body over plain HTTP; without `EDDIE_SPOOF_IP` DNS blocks it instead. `spoof` is a normal rule, not a lockdown: `*` takes only `block`. |
 | `device_mac` | optional; omit for every device. Use the device's `mac` from `GET /devices` (its MAC, or its client IP while the MAC is unknown). A rule made with a client IP also matches the device after its MAC becomes known. |
 | `created_by` | optional, default `"user"`; exactly `user` \| `voice` \| `agent` |
 
@@ -299,7 +310,7 @@ Confirmation: after Eddie reads back a risky action, the bridge emits `voice_sta
 
 ## Classifier verdicts (#27)
 
-`POST /ai/verdict` takes `{domain, label, confidence, reason, ts}`. Label is `tracker|needed|unsure`, confidence is a finite number in [0,1], reason is printable, at most 14 words and 120 characters, and ts is epoch milliseconds. Unknown fields and invalid values get 422. A successful response is `{ok: true}` and broadcasts `{type: "ai_verdict", ...payload}` to `/ws/events`. This event does not change historical queries, counters, or rules; later DNS decisions use the cached verdict. Like `/ingest`, this existing local API has no authentication and should stay loopback-only. The classifier refuses external API URLs and redirects. The outbox is bounded to 1,000 in-memory events, retried without repeating inference; it is not a durable notification log.
+`POST /ai/verdict` takes `{domain, label, confidence, reason, ts}`. Label is `tracker|needed|unsure`, confidence is a finite number in [0,1], reason is printable, at most 14 words and 120 characters, and ts is epoch milliseconds. Unknown fields and invalid values get 422. A successful response is `{ok: true}` and broadcasts `{type: "ai_verdict", ...payload}` to `/ws/events`. This event does not change historical queries, counters, or rules; later DNS decisions use the cached verdict. Like every write, it needs the API token from anywhere but loopback (see Access below). The classifier refuses external API URLs and redirects. The outbox is bounded to 1,000 in-memory events, retried without repeating inference; it is not a durable notification log.
 
 
 ## Real AI on the scripted demo feed

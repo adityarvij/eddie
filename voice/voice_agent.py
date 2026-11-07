@@ -12,8 +12,10 @@ from pathlib import Path
 def request(path, body=None, timeout=3, method=None):
     base = os.environ.get('EDDIE_API_URL', 'http://127.0.0.1:8000').rstrip('/')
     data = None if body is None else json.dumps(body).encode()
-    req = urllib.request.Request(base + path, data=data, headers={'Content-Type': 'application/json'},
-                                 method=method)
+    headers = {'Content-Type': 'application/json'}
+    if os.environ.get('EDDIE_API_TOKEN'):  # needed when the API isn't on this machine's loopback (#96)
+        headers['Authorization'] = 'Bearer ' + os.environ['EDDIE_API_TOKEN']
+    req = urllib.request.Request(base + path, data=data, headers=headers, method=method)
     with urllib.request.urlopen(req, timeout=timeout) as response:
         return json.load(response)
 

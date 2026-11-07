@@ -51,7 +51,7 @@ class DeviceCounts(unittest.TestCase):
         events = [{'ts': now - 1000, 'device': 'TV', 'domain': 'a.example', 'action': 'block', 'company': 'example', 'category': 'unknown'},
                   {'ts': now - 2 * 3_600_000, 'device': 'TV', 'domain': 'b.example', 'action': 'allow', 'company': 'example', 'category': 'unknown'}]
         with patch.object(api, 'recent', events):
-            client = TestClient(api.app)
+            client = TestClient(api.app, client=('127.0.0.1', 50000))
             self.assertEqual(client.get('/summary').json()['devices'][0]['requests'], 1)
             self.assertEqual(client.get('/summary?window=24h').json()['devices'][0]['requests'], 2)
             self.assertEqual(client.get('/summary?window=1y').status_code, 422)

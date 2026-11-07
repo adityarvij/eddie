@@ -205,12 +205,18 @@ class Classifier:
         return stored
 
 
+def auth_headers() -> dict:
+    """The API's bearer token (EDDIE_API_TOKEN), needed when it isn't on this machine's loopback (#96)."""
+    token = os.environ.get('EDDIE_API_TOKEN')
+    return {'Authorization': f'Bearer {token}'} if token else {}
+
+
 def publish_verdict(event: dict) -> None:
     """Publish metadata to the local API, never to an external service."""
     base = os.environ.get('EDDIE_API_URL', 'http://127.0.0.1:8000').rstrip('/')
     check_local(base)
     req = urllib.request.Request(base + '/ai/verdict', data=json.dumps(event).encode(),
-                                 headers={'Content-Type': 'application/json'})
+                                 headers={'Content-Type': 'application/json', **auth_headers()})
     with _OPENER.open(req, timeout=1) as response:
         if json.load(response).get('ok') is not True:
             raise OSError('Verdict event was not acknowledged')

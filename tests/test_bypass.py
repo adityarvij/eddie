@@ -100,7 +100,7 @@ class IngestTests(unittest.TestCase):
         with patch.object(api, 'recent', []), patch.object(api, 'totals', {'seen': 0, 'blocked': 0}), \
                 patch.object(api, 'suspicions', Suspicions()), patch.object(api, 'bypass_recent', []) as kept, \
                 patch.object(api, 'broadcast', broadcast):
-            client = TestClient(api.app)
+            client = TestClient(api.app, client=('127.0.0.1', 50000))
             client.post('/ingest', json=body)
             with client.websocket_connect('/ws/events') as ws:
                 snapshot = json.loads(ws.receive_text())

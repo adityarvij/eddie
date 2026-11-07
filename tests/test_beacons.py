@@ -173,7 +173,7 @@ class IngestTests(unittest.TestCase):
         fresh = {'beacons': Beacons(), 'idle': Idle()}
         with patch.object(api, 'recent', []) as recent, patch.object(api, 'timing', fresh), \
                 patch.object(api, 'totals', {'seen': 0, 'blocked': 0}):
-            TestClient(api.app).post('/ingest', json=body)
+            TestClient(api.app, client=('127.0.0.1', 50000)).post('/ingest', json=body)
         self.assertEqual(False, recent[0]['idle'])
         self.assertEqual(None, recent[0]['beacon_s'])
         self.assertEqual([False] * 5 + [True] * 3, [e['idle'] for e in recent[1:]])  # 5 min after the stream

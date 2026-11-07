@@ -3,7 +3,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-Action = Literal["allow", "block", "flag"]
+# spoof (#99): answered with Eddie's own IP so the stub server (spoof_server.py) replies.
+Action = Literal["allow", "block", "flag", "spoof"]
 Source = Literal["rule", "allowlist", "blocklist", "heuristic", "ai", "home_mode", "default"]
 
 

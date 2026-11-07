@@ -38,6 +38,9 @@ assert.equal(get('feed').children.at(-1).children[0].textContent,new Date(verdic
 socket.onmessage({data:JSON.stringify({domain:'ads.example',device:'TV',action:'block',reason:'On a list',ts:Date.now()})});
 assert.match(get('feed').children.at(-1).textContent,/\[blocked\] TV → ads\.example — On a list$/);
 assert.equal(tag(get('feed').children.at(-1)).className,'tag tag-block');
+socket.onmessage({data:JSON.stringify({domain:'t.example',device:'TV',action:'spoof',reason:'global rule t.example',ts:Date.now()})});
+assert.match(get('feed').children.at(-1).textContent,/\[spoofed\] TV → t\.example — global rule t\.example$/);
+assert.equal(tag(get('feed').children.at(-1)).className,'tag tag-spoof');
 socket.onmessage({data:JSON.stringify({domain:'new.example',device:'TV',action:'flag',ts:Date.now()})});
 assert.match(get('feed').children.at(-1).textContent,/\[flagged\] TV → new\.example$/);
 assert.match(get('feed').children[0].textContent,/\[approved\] TV → example\.org$/);
@@ -50,7 +53,7 @@ assert.equal(tag(get('feed').children.at(-1)).className,'tag tag-rule');
 assert.equal(get('notice').textContent,'Rule added: block device-metrics-us.amazon.com · Fire Stick · by voice');
 socket.onmessage({data:JSON.stringify({type:'rule_change',change:'removed',id:8,pattern:'a.example',action:'allow',device_mac:null,device:null,created_by:'api'})});
 assert.equal(get('notice').textContent,'Rule removed: allow a.example · all devices · by api');
-assert.equal(get('requests').textContent,'3','rule changes are not DNS requests');
+assert.equal(get('requests').textContent,'4','rule changes are not DNS requests');
 
 // Bypass suspicions: a [bypass?] row and a toast with the API's reason; not a DNS request.
 const bypassReason='TV looked up dns.google (Google Public DNS), an encrypted DNS resolver. It may be sending some lookups there.';
@@ -58,7 +61,7 @@ socket.onmessage({data:JSON.stringify({type:'bypass_suspected',ts:Date.now(),dev
 assert.equal(tag(get('feed').children.at(-1)).parent.textContent,`[bypass?] ${bypassReason}`);
 assert.equal(tag(get('feed').children.at(-1)).className,'tag tag-bypass');
 assert.equal(get('notice').textContent,bypassReason);
-assert.equal(get('requests').textContent,'3','bypass suspicions are not DNS requests');
+assert.equal(get('requests').textContent,'4','bypass suspicions are not DNS requests');
 
 // Confirming shows the pending read-back, and clears on expiry and on dismissal.
 const confirm=()=>socket.onmessage({data:JSON.stringify({type:'voice_state',state:'confirming',kind:'lockdown',prompt:'Lock down the TV?',expires_in_ms:15000})});
@@ -118,6 +121,15 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   await answer('/api/mode', 200, {home_mode:false, offline:false, offline_applied:true});
   assert.equal(get('home-mode').attrs['aria-label'], 'home mode: off');
   assert.equal(get('home-mode').disabled, false);
+  // A stored spoof rule (#99) turns the house into Pinocchio; the button still toggles home mode.
+  assert.equal(get('home-mode').attrs['data-spoofing'], 'false');
+  await answer('/api/rules', 200, [{id:1, pattern:'*.tracker.example', action:'spoof', device:null, created_by:'user'},
+                                   {id:2, pattern:'a.example', action:'block', device:null, created_by:'user'}]);
+  assert.equal(get('home-mode').attrs['data-spoofing'], 'true');
+  assert.equal(get('home-mode').attrs['aria-label'], 'home mode: off · spoofing 1 rule');
+  context.renderRules([]);
+  assert.equal(get('home-mode').attrs['data-spoofing'], 'false');
+  assert.equal(get('home-mode').attrs['aria-label'], 'home mode: off');
   assert.equal(get('offline-mode').textContent, 'offline mode: off');
   assert.equal(get('mic').textContent, 'start mic');
   socket.onmessage({data:JSON.stringify({type:'voice_status',status:'ready',engine:'vosk'})});
