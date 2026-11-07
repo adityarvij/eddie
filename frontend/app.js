@@ -1,5 +1,6 @@
 const $ = id => document.getElementById(id);
 let paused = false, total = 0, blocked = 0, deviceSet = new Set(), queued = [], voiceReady = false, speaking = false, closeTimer;
+let is_eddie_active = false, exitTimer;
 const dialog = $('assistant');
 function updateCounts() { $('allowed').textContent = allowedCount.toLocaleString(); $('blocked-count').textContent = blocked.toLocaleString(); }
 let allowedCount = 0;
@@ -32,9 +33,21 @@ function setAssistantState(state) {
   $('character').classList.toggle('talking', state === 'speaking');
   $('assistant-state').textContent = display === 'ready' ? 'WAITING FOR YOUR NEXT QUESTION' : 'EDDIE IS ' + display.toUpperCase();
 }
-function wake() { clearTimeout(closeTimer); if (!voiceReady) closeTimer = setTimeout(dismiss, 4000); if (!dialog.open) dialog.showModal(); $('assistant-title').textContent = "Hey, what's up?"; $('assistant-description').textContent = 'Ask me what your devices have been up to.'; setAssistantState('listening'); }
+function wake(preview = false) { clearTimeout(exitTimer); dialog.classList.remove('closing'); is_eddie_active = true; clearTimeout(closeTimer); if (preview || !voiceReady) closeTimer = setTimeout(dismiss, 4000); if (!dialog.open) dialog.showModal(); $('assistant-title').textContent = "Hey, what's up?"; $('assistant-description').textContent = 'Ask me what your devices have been up to.'; setAssistantState('listening'); }
 // Closing Eddie returns to the live feed, scrolled to the newest activity.
-function dismiss() { clearTimeout(closeTimer); dialog.close(); toggleLogs(false); $('feed').scrollTop = $('feed').scrollHeight; }
+function dismiss() {
+  is_eddie_active = false;
+  clearTimeout(closeTimer);
+  if (!dialog.open || dialog.classList.contains('closing')) return;
+  dialog.classList.add('closing');
+  const duration = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 320;
+  exitTimer = setTimeout(() => {
+    dialog.close();
+    dialog.classList.remove('closing');
+    toggleLogs(false);
+    $('feed').scrollTop = $('feed').scrollHeight;
+  }, duration);
+}
 function toggleLogs(open) {
   $('assistant-logs').hidden = !open;
   $('open-logs').setAttribute('aria-expanded', String(open));
@@ -42,7 +55,7 @@ function toggleLogs(open) {
   if (open) { $('voice-logs').replaceChildren(...Array.from($('feed').children, row => row.cloneNode(true))); $('voice-logs').scrollTop = $('voice-logs').scrollHeight; $('close-logs').focus(); }
 }
 function voiceEvent(event) {
-  if (event.type === 'voice_state') { if (event.state === 'dismissed') return dismiss(); if (event.state === 'listening' && !dialog.open) wake(); setAssistantState(event.state); }
+  if (event.type === 'voice_state') { if (typeof event.is_eddie_active === 'boolean') is_eddie_active = event.is_eddie_active; if (event.state === 'dismissed') return dismiss(); if (['thinking','speaking','listening'].includes(event.state)) clearTimeout(closeTimer); if (event.state === 'listening' && (!dialog.open || dialog.classList.contains('closing'))) wake(); setAssistantState(event.state); }
   if (event.type === 'agent_reply') { if (!dialog.open) wake(); $('assistant-description').textContent = event.text; }
   if (event.type === 'voice_status') { if (['off','error'].includes(event.status)) { $('character').classList.remove('talking'); if(dialog.open) dismiss(); } voiceReady = event.status === 'ready'; $('mic').textContent = voiceReady ? (event.engine === 'vosk' ? 'Stop mic · offline prototype ●' : 'Stop microphone ●') : 'Enable “Hey Eddie” ○'; if (event.message) notice(event.message); }
   if (event.type === 'wake') wake();
@@ -53,10 +66,11 @@ function voiceEvent(event) {
 window.eddie = { pushEvent: addEvent, wake, voiceEvent };
 $('open-logs').onclick = () => toggleLogs($('assistant-logs').hidden);
 $('close-logs').onclick = () => { toggleLogs(false); $('open-logs').focus(); };
-dialog.addEventListener('close', () => toggleLogs(false));
-$('wake').onclick = wake; $('close').onclick = dismiss;
+dialog.addEventListener('cancel', event => { event.preventDefault(); dismiss(); });
+dialog.addEventListener('close', () => { clearTimeout(exitTimer); dialog.classList.remove('closing'); toggleLogs(false); });
+$('wake').onclick = () => wake(true); $('close').onclick = dismiss;
 dialog.addEventListener('click', e => { if (e.target === dialog) { const r=dialog.getBoundingClientRect(); if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom) dismiss(); } });
-document.addEventListener('keydown', e => { if (e.code === 'Space' && !['INPUT','TEXTAREA','BUTTON'].includes(document.activeElement.tagName)) { e.preventDefault(); wake(); } });
+document.addEventListener('keydown', e => { if (e.code === 'Space' && !['INPUT','TEXTAREA','BUTTON'].includes(document.activeElement.tagName)) { e.preventDefault(); wake(true); } });
 $('pause').onclick = () => { paused = !paused; $('pause').textContent = paused ? 'resume' : 'pause'; if (!paused) { queued.forEach(e=>renderEvent(e)); queued=[]; } };
 $('mic').onclick = async () => { try { const r = await fetch(voiceReady ? '/api/voice/stop' : '/api/voice/start',{method:'POST'}); const data=await r.json(); if (!r.ok) throw Error(data.message || 'Could not start microphone.'); notice(data.message); } catch(e) { notice(e.message); } };
 const stream = new EventSource('/events'); stream.onopen = () => { $('feed-status').textContent='Connected to local event bridge'; }; stream.onerror=()=>{ $('feed-status').textContent='Reconnecting to local event bridge…'; if(dialog.open) dismiss(); }; stream.onmessage=e=>{ try { const event=JSON.parse(e.data); if(event.type==='traffic_status'){ $('connection').firstChild.textContent=event.connected?'Connected':'Waiting'; $('source-label').textContent=event.connected?'LIVE TRAFFIC':'WAITING FOR TRAFFIC'; } else if(event.domain) addEvent(event); else voiceEvent(event); } catch {} };

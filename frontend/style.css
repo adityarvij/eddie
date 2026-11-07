@@ -21,9 +21,15 @@
 /* Keep the voice view focused on Eddie, without captions beneath him. */
 .assistant-copy{display:none}
 
-/* Ambient light: yellow while listening/waiting, blue while speaking. */
-.character{position:relative;isolation:isolate}
-.character::before{content:"";position:absolute;inset:-14% -32%;z-index:-1;pointer-events:none;border-radius:50%;background:radial-gradient(ellipse,rgba(45,113,255,.48) 0%,rgba(28,81,223,.25) 34%,rgba(12,40,123,.08) 57%,transparent 72%);filter:blur(45px);opacity:0;transform:scale(.88);transition:opacity .65s ease,transform .9s ease}
-.character:is([data-state="listening"],[data-state="ready"],[data-state="thinking"])::before{background:radial-gradient(ellipse,rgba(255,210,55,.42) 0%,rgba(222,168,22,.23) 34%,rgba(123,86,12,.08) 57%,transparent 72%);opacity:1;transform:scale(1)}
-.character[data-state="speaking"]::before{opacity:1;transform:scale(1)}
-@media(prefers-reduced-motion:reduce){.character::before{transition:none}}
+/* Ambient light stays at the screen edges, leaving Eddie and the center black. */
+#assistant{isolation:isolate}
+#assistant::before{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;--edge:255,210,55;background:linear-gradient(to right,rgba(var(--edge),.24),transparent 13%,transparent 87%,rgba(var(--edge),.24)),linear-gradient(to bottom,rgba(var(--edge),.24),transparent 16%,transparent 84%,rgba(var(--edge),.24));filter:blur(24px);opacity:0;transition:opacity .65s ease}
+#assistant:has(.character:is([data-state="listening"],[data-state="ready"],[data-state="thinking"]))::before{opacity:1}
+#assistant:has(.character[data-state="speaking"])::before{--edge:45,113,255;opacity:1}
+@media(prefers-reduced-motion:reduce){#assistant::before{transition:none}}
+
+/* Keep the dialog mounted through its exit so dismissal never snaps shut. */
+#assistant[open].closing{animation:eddie-exit 320ms cubic-bezier(.4,0,.2,1) both;pointer-events:none}
+#assistant.closing::backdrop{animation:eddie-backdrop-exit 320ms ease both}
+@keyframes eddie-exit{from{opacity:1;transform:translateY(0) scale(1)}to{opacity:0;transform:translateY(14px) scale(.98)}}
+@keyframes eddie-backdrop-exit{from{opacity:1}to{opacity:0}}

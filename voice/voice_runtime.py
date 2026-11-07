@@ -105,12 +105,12 @@ def run(emit, answer, speaking, stopped):
         emit({'type': 'voice_status', 'status': 'ready', 'message': ready_message, 'engine': engine})
         capture = None
         hits = 0
-        followup = False
+        is_eddie_active = False
         while not stopped.is_set():
             if speaking.is_set():
                 stopped.wait(0.1)
                 drain()
-                capture = None
+                capture = Capture(rms) if is_eddie_active else None
                 continue
             try:
                 frame = audio.get(timeout=0.2)
@@ -123,34 +123,27 @@ def run(emit, answer, speaking, stopped):
                 if capture is not None:
                     capture = Capture(rms)
                 continue
-            if capture is None:
+            if not is_eddie_active:
                 score = max(detector.predict(frame).values(), default=0)
                 hits = hits + 1 if score >= threshold else 0
                 if hits >= 2:
                     hits = 0
                     capture = Capture(rms)
-                    followup = False
+                    is_eddie_active = True
                     emit({'type': 'wake'})
-                    emit({'type': 'voice_state', 'state': 'listening'})
+                    emit({'type': 'voice_state', 'state': 'listening', 'is_eddie_active': True})
                 continue
             if not capture.push(frame):
                 continue
             if not capture.heard:
-                if not followup:
-                    answer('')
-                    followup = True
-                    drain()
-                    capture = Capture(rms)
-                    emit({'type': 'voice_state', 'state': 'listening'})
-                    continue
+                is_eddie_active = False
                 capture = None
                 drain()
-                emit({'type': 'voice_state', 'state': 'dismissed'})
+                emit({'type': 'voice_state', 'state': 'dismissed', 'is_eddie_active': False})
                 continue
             samples = np.concatenate(capture.frames).astype(np.float32) / 32768
             transcribe_command(samples, transcriber, emit, answer)
-            followup = True
             # Keep listening for a follow-up without requiring the wake phrase again.
             drain()
             capture = Capture(rms)
-            emit({'type': 'voice_state', 'state': 'listening'})
+            emit({'type': 'voice_state', 'state': 'listening', 'is_eddie_active': True})
