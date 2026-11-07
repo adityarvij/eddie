@@ -9,7 +9,8 @@ Every lookup is written to the queries table in eddie.db (EDDIE_DB) through
 store.QueryLog, which queues the row and writes it off the event loop.
 EDDIE_DB=off logs nothing; EDDIE_RETENTION_DAYS (default 7) bounds history.
 Rules and AI verdicts written to eddie.db by other processes (rules API,
-classifier) are reloaded into the decision engine within about a second.
+classifier) are reloaded into the decision engine within RELOAD_EVERY, and
+the rules revision loaded is written back so the rules API can acknowledge it.
 
 Run (port 53):            sudo .venv/bin/python -m eddie.dns_server
 Development (no sudo):    EDDIE_DNS_PORT=8053 uv run python -m eddie.dns_server
@@ -24,13 +25,13 @@ import time
 
 from dnslib import AAAA, QTYPE, RCODE, RR, A, DNSRecord
 
-from . import decision
+from . import decision, rules
 from . import store
 from .store import QueryLog, query_log_from_env
 
 BLOCK_TTL = 60
 UPSTREAM_TIMEOUT = 2.0  # seconds per upstream before trying the next one
-RELOAD_EVERY = 1.0  # seconds between checks of eddie.db for new rules or verdicts
+RELOAD_EVERY = 0.2  # seconds between checks of eddie.db for new rules or verdicts
 MAX_IN_FLIGHT = 512  # lookups being answered at once; extra packets are dropped
 
 log = logging.getLogger("eddie.dns")
@@ -154,7 +155,11 @@ async def serve(host: str, port: int, upstreams: list[tuple[str, int]],
 
 
 class StoreWatcher:
-    """Reloads rules and AI verdicts into the decision engine when they change."""
+    """Reloads rules and AI verdicts into the decision engine when they change.
+
+    After a reload it records the rules revision it loaded (rules.mark_loaded):
+    the rules API's proof that DNS is enforcing a change.
+    """
 
     def __init__(self, path: str, engine: decision.Engine = decision.engine):
         self.conn = store.connect(path)
@@ -165,10 +170,14 @@ class StoreWatcher:
         """Reload if rules or verdicts changed since the last poll. True if it did."""
         changed = self.conn.execute(
             "SELECT (SELECT count(*) || ':' || ifnull(max(id), 0) || ':' || ifnull(max(ts), 0) FROM rules),"
-            " (SELECT count(*) || ':' || ifnull(max(ts), 0) FROM ai_verdicts)").fetchone()
+            " (SELECT count(*) || ':' || ifnull(max(ts), 0) FROM ai_verdicts),"
+            " (SELECT ifnull(max(value), 0) FROM engine_state WHERE key = 'rules_rev')").fetchone()
         if changed == self.seen:
             return False
         self.engine.load_from_store(self.conn)
+        # The revision read before the load: a write that lands in between is
+        # already loaded, and the next poll records it.
+        rules.mark_loaded(self.conn, changed[2])
         self.seen = changed
         return True
 

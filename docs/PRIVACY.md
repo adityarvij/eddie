@@ -22,7 +22,8 @@ Owner: [eddie/store.py](../eddie/store.py), written by [eddie/dns_server.py](../
 | The file is not encrypted at rest. Anyone with root, or the SD card, can read up to 7 days of history. | gap |
 | A hard kill (`kill -9`, power loss) loses queued rows. That's safe for privacy but leaves a hole in the history. Ctrl-C and SIGTERM flush first. | known behaviour |
 | **Forget timer:** health, beliefs and kids categories would be summarised and their raw rows deleted after 24 hours ("never stored beyond the day"). Needs category labels on stored rows first. | planned |
-| The `devices` and `rules` tables exist but nothing writes to them yet. | planned |
+| The `devices` table exists but nothing writes to it yet. | planned |
+| `rules` holds only pattern, action, device (client IP until #14), scope, who created it and when. A deleted rule is deleted, not kept as history. Rules are user settings, so they are not pruned by `EDDIE_RETENTION_DAYS`. `engine_state` holds two counters (rules revision written and loaded) and nothing else. | implemented |
 | `ai_verdicts` holds one row per domain (label, confidence, reason, time): no device, IP or count. It is pruned with the query log after `EDDIE_RETENTION_DAYS`, because the list of domains a household looked up is history even without times. A domain seen again is classified again. Tested. | implemented |
 | **No new store for the classifier's queue.** It reads the flagged rows already in `queries`, so classification keeps nothing beyond the query log, and with `EDDIE_DB=off` nothing is classified at all. | implemented |
 
@@ -30,11 +31,12 @@ Owner: [eddie/store.py](../eddie/store.py), written by [eddie/dns_server.py](../
 
 | Decision | Status |
 | --- | --- |
-| The API keeps recent events in memory only (at most 20,000), so a restart wipes them. It does not read `eddie.db` yet. | implemented |
+| The API keeps recent events in memory only (at most 20,000), so a restart wipes them. It does not read the `queries` table. | implemented |
 | Docker publishes the API on `127.0.0.1` only. `EDDIE_BIND=0.0.0.0` is an explicit opt-in to reach it from the iPad. | implemented |
-| No authentication. With `EDDIE_BIND=0.0.0.0`, anyone on the network can read the feed, post fake events to `/ingest` and toggle `/mode`. | gap |
+| No authentication. With `EDDIE_BIND=0.0.0.0`, anyone on the network can read the feed, post fake events to `/ingest`, toggle `/mode`, and list, add or delete rules (`/rules`), including allowing a tracker or blocking a device's traffic. | gap |
+| `/rules` reads and writes `eddie.db` (`EDDIE_DB`); it never reads the query log. With `EDDIE_DB=off` it answers 503 and stores nothing. In Docker the API uses a database inside the container, which is lost on rebuild and not shared with a DNS server on the host. | implemented |
 | `/ws/events` does not check `Origin`, so any web page open on the same machine can read the live feed from `ws://localhost:8000`. | gap |
-| uvicorn's default access log (request paths, client IPs) goes to Docker's container log. No request bodies are logged. | known behaviour |
+| uvicorn's default access log (request paths, client IPs) goes to Docker's container log. No request bodies are logged, so rule patterns aren't; a `DELETE /rules/{id}` path shows only the id. | known behaviour |
 | The feed has no time-based retention; old events only drop out after 20,000 newer ones. | gap |
 
 ## Voice (wake word, speech to text, speech)
