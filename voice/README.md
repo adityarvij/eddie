@@ -32,7 +32,7 @@ Say “Hey Eddie,” then ask your question. The detector uses 16 kHz mono audio
 
 Questions go to the local Ollama agent (`voice/ollama_agent.py`, #29) when it's reachable: “What's the TV doing?”, “What got blocked recently?”, “Why was device-metrics-us.amazon.com blocked?”. It only reads traffic through four tools, every number it says must come from those tools, and if Ollama is down the keyword router below answers instead. `EDDIE_AGENT=off` disables it; `EDDIE_OLLAMA_URL` and `EDDIE_AGENT_MODEL` (default `llama3.2:3b`, provisioned with `ollama pull`) configure it. Try it typed with `EDDIE_API_URL=http://127.0.0.1:8000 python voice/ollama_agent.py "What's the TV doing?"`. See [architecture](../docs/ARCHITECTURE.md#local-tool-calling-agent-29).
 
-Keyword commands: “What's been going on?” (backend facts), “What do they know about me?” / “What do companies know about me?” (reads `GET /what-they-know`; facts computed by the backend, no model phrasing yet), “turn on home mode”, “turn off home mode”. Home mode updates backend state; actual network enforcement still depends on Will's decision engine. Domain rules, lockdown and email are pending; the confirmation step they will use is built (see below). Typed questions use the same router. Do not claim these pending tools work.
+Keyword commands: “What's been going on?” (backend facts), “What do they know about me?” / “What do companies know about me?” (reads `GET /what-they-know`; facts computed by the backend, no model phrasing yet), “turn on home mode”, “turn off home mode”, “block it” / “block device-metrics-us.amazon.com” (below). Home mode updates backend state; actual network enforcement still depends on Will's decision engine. Allow, undo, lockdown and email are pending; the confirmation step they will use is built (see below). Typed questions use the same router. Do not claim these pending tools work.
 
 ## Verification before demo
 
@@ -59,6 +59,19 @@ Checks performed: ten unit tests; synthetic Piper “Hey Eddie” recognized twi
 Voice recovery: after an empty/failed transcription, Eddie says “Didn’t catch that. Try again.” and listens again, once; a second empty transcription in a row (usually background noise) ends the conversation silently. Four seconds of silence after the initial wake or during a follow-up dismisses Eddie back to the newest feed activity. Closing the overlay (×, Escape or a click outside) also ends the conversation in the voice worker (`POST /api/voice/dismiss`, localhost only), so the next request needs the wake phrase; a reply already being spoken finishes, but the overlay stays closed. Speech inference errors recover without disabling wake detection; microphone errors and bridge disconnects close the overlay. Listening/waiting uses a yellow ambient glow, speaking uses blue. Automated voice checks pass; live microphone/noisy-room accuracy still needs rehearsal.
 
 Conversation activity is explicit (`is_eddie_active`): wake activates it, each spoken reply starts a fresh four-second wait, and silence dismisses it. The initial wait has no retry prompt or extra four-second grace period. Speaking and transcription do not count toward the user response window.
+
+## Block it / block a domain (#11)
+
+“Block it”, “block that”, “can you block that tracker?” or “block device-metrics-us dot amazon dot com” adds a block rule for every device through `POST /rules` (`created_by: voice`). “It” is the last domain Eddie named in a reply this conversation, otherwise the newest flagged or allowed tracker in the last 15 minutes of traffic. The whole utterance must be the command, so “don't block it” and “block it and email Will” change nothing.
+
+| Situation | Eddie says |
+|---|---|
+| Backend stored the rule and DNS loaded it (`applied: true`) | “Blocked <domain> on every device. The rule is saved and Eddie's DNS has loaded it.” |
+| Stored, DNS didn't load it within 2 s (`applied: false`) | “I saved a rule to block <domain>, but Eddie's DNS hasn't loaded it yet, so it may still get through.” |
+| “It” can't be resolved, or the target isn't a domain (“block Netflix”) | “Which domain should I block? Say block, then the full domain name. Nothing changed.” |
+| Backend error, timeout or a reply that doesn't echo the rule | “I couldn't add that rule. Nothing changed.” |
+
+Devices may keep using a cached answer for its TTL after a block loads. A timeout after the API already stored the rule is still reported as nothing changed; check `GET /rules`. Per-device blocks and voice undo are not built.
 
 ## Confirmation for risky actions
 

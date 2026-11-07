@@ -15,7 +15,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT.parent / 'voice'))
-from voice_agent import confirmation, respond
+from voice_agent import confirmation, forget_conversation, respond
 from voice_runtime import run as run_voice
 stopped = threading.Event()
 dismissed = threading.Event()  # the close button: end the voice conversation
@@ -81,6 +81,7 @@ def microphone():
         def publish(event):
             if event.get('type') == 'voice_state' and event.get('state') == 'dismissed':
                 confirmation.cancel()
+                forget_conversation()
             if event.get('type') == 'voice_status':
                 voice_state.update({key: value for key, value in event.items() if key != 'type'})
             emit(event)
@@ -89,8 +90,9 @@ def microphone():
         voice_state['status'] = 'error'
         emit({'type': 'voice_status', 'status': 'error', 'message': f'Voice unavailable: {error}'})
     finally:
-        # A pending risky action never outlives the microphone session.
+        # A pending risky action or remembered domain never outlives the microphone session.
         confirmation.cancel()
+        forget_conversation()
         if stopped.is_set():
             voice_state['status'] = 'off'
             emit({'type': 'voice_status', 'status': 'off'})
@@ -168,6 +170,7 @@ class Handler(SimpleHTTPRequestHandler):
         if self.path == '/api/voice/dismiss':
             # Closing the overlay ends the conversation; the next request needs the wake phrase.
             confirmation.cancel()
+            forget_conversation()
             if voice_thread and voice_thread.is_alive():
                 dismissed.set()
             return self.json_response(200, {'ok': True})
