@@ -37,7 +37,7 @@
 /* Keep the logs control beneath Eddie, clear of the ambient edge glow. */
 #assistant .open-logs{position:static;right:auto;bottom:auto;flex-shrink:0;margin:12px auto 0;padding:10px 16px;background:transparent;border:1px solid #444;border-radius:20px;color:#bbb}
 #assistant .open-logs:hover{color:#fff;border-color:#888}
-.tag{font-weight:700}.tag-allow{color:#4ade80}.tag-block{color:#f87171}.tag-flag{color:#fbbf24}.tag-rule{color:#c4b5fd}
+.tag{font-weight:700}.tag-allow{color:#4ade80}.tag-block{color:#f87171}.tag-flag{color:#fbbf24}.tag-rule{color:#c4b5fd}.tag-spoof{color:#f0abfc}
 /* Pending risky action: the read-back Eddie is waiting on a yes or no for. */
 .assistant-copy .assistant-pending{font-size:16px;color:#fff;margin:12px 0 0}
 
@@ -62,3 +62,6 @@
 .home-toggle[aria-pressed="true"] svg{fill:currentColor}
 .home-toggle[aria-busy="true"] svg{stroke-dasharray:2 2;opacity:.6}
 .home-toggle:disabled{cursor:default;opacity:.4}.home-toggle[aria-busy="true"]:disabled{opacity:1}
+/* While a spoof rule is active (#99) the house turns into Pinocchio: Eddie is telling trackers a fib. */
+.home-toggle .pinocchio,.home-toggle[data-spoofing="true"] .house{display:none}.home-toggle[data-spoofing="true"] .pinocchio{display:block}
+.home-toggle .eye{fill:currentColor;stroke:none}.home-toggle[aria-pressed="true"] .eye{fill:#000}

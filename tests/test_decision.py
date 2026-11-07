@@ -42,6 +42,12 @@ class DecisionOrderTests(unittest.TestCase):
         self.assertEqual(('allow', 'rule', 'global rule news.example'), decide(self.e, 'news.example', PHONE))
         self.assertEqual('allow', self.e.evaluate('cdn.example', PHONE).action)
 
+    def test_spoof_rule_passes_its_action_through(self):
+        self.e.set_rules([Rule(1, '*.tracker.example', 'spoof'), Rule(2, 'netflix.com', 'spoof', TV)])
+        self.assertEqual(('spoof', 'rule', 'global rule *.tracker.example'), decide(self.e, 'up.tracker.example'))
+        self.assertEqual(('spoof', 'rule', 'device rule netflix.com'), decide(self.e, 'netflix.com'))
+        self.assertEqual(('allow', 'allowlist', 'netflix.com'), decide(self.e, 'netflix.com', PHONE))
+
     def test_global_rule_beats_allowlist(self):
         self.e.set_rules([Rule(1, 'netflix.com', 'block')])
         self.assertEqual(('block', 'rule', 'global rule netflix.com'), decide(self.e, 'netflix.com'))
