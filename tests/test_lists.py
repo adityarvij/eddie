@@ -91,6 +91,24 @@ class ShippedListTests(unittest.TestCase):
             'connectivitycheck.gstatic.com': ('allow', 'allowlist'),
             'fireoscaptiveportal.com': ('allow', 'allowlist'),
             'time.apple.com': ('allow', 'allowlist'),
+            # Shared infrastructure the local model once called trackers.
+            'www.gstatic.com': ('allow', 'allowlist'),
+            'encrypted-tbn0.gstatic.com': ('allow', 'allowlist'),
+            'lh3.googleusercontent.com': ('allow', 'allowlist'),
+            'mesu.g.aaplimg.com': ('allow', 'allowlist'),
+            'google-ohttp-relay-safebrowsing.fastly-edge.com': ('allow', 'allowlist'),
+            # Their tracking neighbours stay blocked.
+            'csi.gstatic.com': ('block', 'blocklist'),
+            'displayads-formats.googleusercontent.com': ('block', 'blocklist'),
+            # Eddie's extra list (blocklists/eddie-extra.txt).
+            'collector.github.com': ('block', 'blocklist'),
+            'ab.chatgpt.com': ('block', 'blocklist'),
+            'ep1.adtrafficquality.google': ('block', 'blocklist'),
+            'http-inputs-notion.splunkcloud.com': ('block', 'blocklist'),
+            'a.nel.cloudflare.com': ('block', 'blocklist'),
+            # Their apps stay reachable.
+            'github.com': ('flag', 'default'),
+            'chatgpt.com': ('flag', 'default'),
         }
         for domain, expected in cases.items():
             d = self.engine.evaluate(domain, 'tv')

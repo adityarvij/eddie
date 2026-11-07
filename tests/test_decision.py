@@ -54,8 +54,9 @@ class DecisionOrderTests(unittest.TestCase):
             'odd.example': Verdict('unsure', 0.9, 'no idea'),
         })
         self.assertEqual(('allow', 'ai', 'video CDN'), decide(self.e, 'cdn.example'))
-        self.assertEqual(('block', 'ai', 'ad pixel'), decide(self.e, 'pixel.example'))
-        self.assertEqual(('flag', 'ai', 'weak guess'), decide(self.e, 'maybe.example'))
+        # The AI never blocks on its own, however confident it is.
+        self.assertEqual(('flag', 'ai', 'likely tracker: ad pixel'), decide(self.e, 'pixel.example'))
+        self.assertEqual(('flag', 'ai', 'likely tracker: weak guess'), decide(self.e, 'maybe.example'))
         self.assertEqual(('flag', 'ai', 'no idea'), decide(self.e, 'odd.example'))
 
     def test_unknown_is_flagged_for_the_classifier(self):

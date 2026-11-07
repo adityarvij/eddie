@@ -195,7 +195,7 @@ Hand this section and the ones below to a coding agent (Claude Code etc.). Targe
 
 ### Running the DNS server
 
-`eddie/dns_server.py` implements steps 1, 3 and 4 above (UDP only) and the `queries` half of step 5: every lookup writes one row to `eddie.db` through `eddie/store.py`. Each lookup is also sent to the live feed (`POST /ingest`, then `/ws/events`) by `eddie/feed.py`, off the reply path: about 25 ms from lookup to dashboard on the development Mac. Start the API without fake traffic (`./scripts/run_all.sh --no-fake`) so the screen shows only real lookups. Not built yet: the device is the client IP until #14 (so `queries.device_mac` holds the IP, and the feed shows `device_mac: "ip:<IP>"` with the IP as the label). `eddie/decision.py` implements the full decision order below. At startup the DNS server loads every `blocklists/*.txt` file (StevenBlack hosts, plus the Perflyst smart-TV and Fire TV lists: about 78,000 domains in 0.3 s) and the essentials in `allowlist.txt` (`eddie/lists.py`). Rules come from the `/rules` API (`eddie/rules.py`).
+`eddie/dns_server.py` implements steps 1, 3 and 4 above (UDP only) and the `queries` half of step 5: every lookup writes one row to `eddie.db` through `eddie/store.py`. Each lookup is also sent to the live feed (`POST /ingest`, then `/ws/events`) by `eddie/feed.py`, off the reply path: about 25 ms from lookup to dashboard on the development Mac. Start the API without fake traffic (`./scripts/run_all.sh --no-fake`) so the screen shows only real lookups. Not built yet: the device is the client IP until #14 (so `queries.device_mac` holds the IP, and the feed shows `device_mac: "ip:<IP>"` with the IP as the label). `eddie/decision.py` implements the full decision order below. At startup the DNS server loads every `blocklists/*.txt` file (StevenBlack hosts, the Perflyst smart-TV and Fire TV lists, and Eddie's own `eddie-extra.txt`: about 78,000 domains in 0.3 s) and the essentials in `allowlist.txt` (`eddie/lists.py`). Rules come from the `/rules` API (`eddie/rules.py`).
 
 ### Running the classifier
 
@@ -237,7 +237,7 @@ CREATE INDEX q_dev ON queries(device_mac, ts);
 2. **Allowlist:** essentials so nothing breaks (Netflix, YouTube video CDNs, Amazon content and auth, Apple, NTP, captive-portal checks). Ship as `allowlist.txt`.
 3. **Blocklist:** StevenBlack hosts + a smart-TV list, loaded into a Python set at startup (`blocklists/*.txt`, downloaded once before the event).
 4. **Keyword heuristic:** labels containing `metrics`, `telemetry`, `analytics`, `ads`, `adsystem`, `tracking`, `beacon`, `crashlytics`, `log` → `BLOCK`, source `heuristic`.
-5. **Cached AI verdict:** tracker with confidence ≥ 0.7 → `BLOCK`; needed → `ALLOW`; else `FLAG`.
+5. **Cached AI verdict:** needed → `ALLOW`; tracker → `FLAG` as a likely tracker; unsure → `FLAG`. The AI never blocks on its own: on real traffic the local model called Google's static files, Apple's update servers and Safe Browsing trackers at 0.8–0.9 confidence. A user rule ("block it"), a list or the keyword heuristic does the blocking.
 6. **Unknown:** `ALLOW` + `FLAG` now, queue for AI.
 
 ### Classifier prompt contract

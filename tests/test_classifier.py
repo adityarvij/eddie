@@ -176,8 +176,8 @@ class ClassifierTests(DBTestCase):
         classifier.Classifier(self.conn, lambda q: GOOD).run_once()
         self.assertTrue(watcher.poll())
         self.assertFalse(watcher.poll())
-        self.assertEqual(('block', 'ai'), (engine.evaluate('t.example', TV_IP).action,
-                                           engine.evaluate('t.example', TV_IP).source))
+        self.assertEqual(('flag', 'ai'), (engine.evaluate('t.example', TV_IP).action,
+                                          engine.evaluate('t.example', TV_IP).source))  # AI never blocks alone
         watcher.conn.close()
 
 

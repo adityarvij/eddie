@@ -5,8 +5,11 @@ First match wins:
 2. Allowlist: essentials, so a rule or list can't brick a device.
 3. Blocklist.
 4. Keyword heuristic on the domain's labels.
-5. Cached AI verdict: tracker at confidence >= 0.7 blocks, needed allows,
-   anything else flags.
+5. Cached AI verdict: needed allows; tracker flags as a likely tracker;
+   unsure flags. The AI never blocks on its own: on real traffic the local
+   model called Google's static files, Apple's update servers and Safe
+   Browsing trackers at 0.8-0.9 confidence. Blocking takes a list, the
+   heuristic or a user rule.
 6. Unknown: flag (the lookup is still forwarded). The flagged queries row in
    eddie.db is the classifier's queue (classifier.py); nothing else is kept.
 
@@ -31,7 +34,6 @@ KEYWORDS = ("metrics", "telemetry", "analytics", "adsystem", "tracking", "beacon
 # Too short to match inside a label (uploads, blog, login), so these must be a
 # whole word: a label split on anything that isn't a letter.
 WHOLE_WORDS = {"ads": "ads", "log": "log", "logs": "log"}
-TRACKER_CONFIDENCE = 0.7
 UNKNOWN = "unknown, waiting for classifier"
 
 _WORD_SPLIT = re.compile(r"[^a-z]+")
@@ -166,8 +168,8 @@ class Engine:
         if kw := keyword(domain):
             return Decision("block", "heuristic", f'keyword "{kw}"')
         if verdict := self.verdicts.get(domain):
-            if verdict.label == "tracker" and verdict.confidence >= TRACKER_CONFIDENCE:
-                return Decision("block", "ai", verdict.reason)
+            if verdict.label == "tracker":
+                return Decision("flag", "ai", f"likely tracker: {verdict.reason}" if verdict.reason else "likely tracker")
             if verdict.label == "needed":
                 return Decision("allow", "ai", verdict.reason)
             return Decision("flag", "ai", verdict.reason)

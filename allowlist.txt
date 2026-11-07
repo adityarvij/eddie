@@ -47,6 +47,34 @@ push.apple.com
 time.apple.com
 time-ios.apple.com
 
+# Apple: software update catalog and downloads (Macs ask for these directly)
+swscan.apple.com
+swdist.apple.com
+swcdn.apple.com
+gdmf.apple.com
+mesu.g.aaplimg.com
+swdist.g.aaplimg.com
+
+# Google shared infrastructure. Many sites and Google's own pages break
+# without these, and the local model has labelled them trackers. Listed host
+# by host: csi.gstatic.com (instrumentation) and some googleusercontent.com
+# ad hosts are on StevenBlack, so the parent domains can't be allowed.
+www.gstatic.com
+ssl.gstatic.com
+fonts.gstatic.com
+fonts.googleapis.com
+encrypted-tbn0.gstatic.com
+encrypted-tbn1.gstatic.com
+encrypted-tbn2.gstatic.com
+encrypted-tbn3.gstatic.com
+lh3.googleusercontent.com
+lh3.google.com
+
+# Safe Browsing: the browser's warnings for malicious sites
+safebrowsing.googleapis.com
+safebrowsing.google.com
+google-ohttp-relay-safebrowsing.fastly-edge.com
+
 # Time sync (NTP)
 pool.ntp.org
 time.google.com

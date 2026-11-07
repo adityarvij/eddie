@@ -41,7 +41,7 @@ class DemoDecisionTests(unittest.TestCase):
         from scripts.fake_traffic import streams, decide
         stream=next(s for s in streams() if s.source=='default')
         cache={stream.domain:{'label':'tracker','confidence':.9,'reason':'Telemetry'}}
-        self.assertEqual(decide(stream,False,cache)[:2],('block','ai'))
+        self.assertEqual(decide(stream,False,cache)[:2],('flag','ai'))  # the AI never blocks on its own
         self.assertEqual(decide(stream,True,cache)[1],'home_mode')
-        cache[stream.domain]['confidence']=.2
-        self.assertEqual(decide(stream,False,cache)[:2],('flag','ai'))
+        cache[stream.domain]['label']='needed'
+        self.assertEqual(decide(stream,False,cache)[:2],('allow','ai'))
