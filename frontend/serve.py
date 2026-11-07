@@ -4,6 +4,7 @@ import json
 import queue
 import re
 import subprocess
+import sys
 import threading
 import time
 import urllib.request
@@ -45,7 +46,13 @@ def answer(text):
             speaking.set()
             emit({'type': 'speaking', 'text': response})
             try:
-                subprocess.run(['/usr/bin/say', response], check=True, timeout=45)
+                if sys.platform == 'darwin':
+                    subprocess.run(['/usr/bin/say', response], check=True, timeout=45)
+                elif sys.platform == 'win32':
+                    ps_cmd = 'Add-Type -AssemblyName System.Speech; [System.Speech.Synthesis.SpeechSynthesizer]::new().Speak([Console]::In.ReadToEnd())'
+                    subprocess.run(['powershell', '-NoProfile', '-Command', ps_cmd], input=response, text=True, check=True, timeout=45)
+                else:
+                    raise OSError('Speech not supported on this OS')
             except (OSError, subprocess.SubprocessError):
                 emit({'type': 'voice_status', 'status': voice_state['status'], 'message': 'Speech output unavailable; Eddie’s response is shown on screen.'})
             finally:
@@ -96,7 +103,7 @@ def microphone():
                         active_until = 0
     except Exception as error:
         voice_state['status'] = 'error'
-        emit({'type': 'voice_status', 'status': 'error', 'message': f'Microphone unavailable: {error}. Check macOS microphone permission for the app running this server.'})
+        emit({'type': 'voice_status', 'status': 'error', 'message': f'Microphone unavailable: {error}. Check microphone permissions for the app running this server.'})
 
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
@@ -128,7 +135,7 @@ class Handler(SimpleHTTPRequestHandler):
                         data = ': heartbeat\n\n'
                     self.wfile.write(data.encode())
                     self.wfile.flush()
-            except (BrokenPipeError, ConnectionResetError):
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
                 pass
             finally:
                 with lock:
