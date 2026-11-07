@@ -56,6 +56,49 @@ The API adds `id`, `company` and `category` (from `eddie/labels.py`) and pushes:
 shares the state in-process later) and, while on, blocks a device's
 non-essential traffic with `source: "home_mode"`.
 
+## Rules: `GET/POST /rules`, `DELETE /rules/{id}`
+
+Rules live in the `rules` table of `eddie.db` (the API opens `EDDIE_DB`, the
+same file the DNS server uses; `EDDIE_DB=off` answers 503). They are checked
+before every list: device rule, then global rule (docs/ARCHITECTURE.md).
+
+`POST /rules`
+
+```json
+{"pattern": "device-metrics-us.amazon.com", "action": "block", "device_mac": "172.20.10.5", "created_by": "voice"}
+```
+
+| Field        | Notes |
+|--------------|-------|
+| `pattern`    | `a.com` matches only a.com; `*.a.com` matches a.com and every subdomain. Lowercased, trailing dot dropped. At least two labels: `com` and `*.com` are refused. |
+| `action`     | `block` \| `allow` |
+| `device_mac` | optional; omit for every device. Until #14 the DNS server identifies a device by its client IP, so use the IP for now. |
+| `created_by` | optional, default `"api"`; a short lowercase name such as `voice`, `dashboard`, `agent` |
+
+Answers `201` with the stored row plus the DNS acknowledgment:
+
+```json
+{"id": 7, "scope": "device", "device_mac": "172.20.10.5", "pattern": "device-metrics-us.amazon.com",
+ "action": "block", "created_by": "voice", "ts": 1762531200123, "applied": true}
+```
+
+- `id` is the stored rule. Keep it: undo is `DELETE /rules/{id}`.
+- `applied: true` means the running DNS server has loaded this change, so the
+  next lookup Eddie answers uses it. The API waits up to 2 s for that.
+- `applied: false` means the rule is stored but no DNS server loaded it in
+  time. **Do not tell the user it is blocked.** It takes effect if and when
+  a DNS server on the same `eddie.db` loads it.
+- Bad input answers `422` and stores nothing.
+
+`DELETE /rules/{id}` answers `200` with the removed row plus `"deleted": true`
+and `applied` (same meaning: the previous decision is back once it's true),
+or `404` if there is no such rule.
+
+`GET /rules` lists every rule, newest first, without `applied`.
+
+Devices cache answers (60 s for blocked lookups, the upstream TTL for allowed
+ones), so a device may not ask Eddie again until its cache expires.
+
 ## What they know: `GET /what-they-know?hours=24`
 
 `hours` is 1 to 168. Returns `{hours, facts, text}` where each fact is

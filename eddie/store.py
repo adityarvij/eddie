@@ -1,6 +1,8 @@
 """Eddie's SQLite store (eddie.db): schema plus the per-lookup query log.
 
-The schema is the one in README "SQLite schema" and is created on first open.
+The schema is the one in README "SQLite schema" and is created on first open,
+plus engine_state: the rules revision written and the one DNS has loaded
+(rules.py).
 QueryLog keeps disk off the DNS hot path: log() only drops a row on an
 in-memory queue, and one writer thread batches rows into SQLite. If the
 queue is full (disk stalled), rows are dropped and counted, never waited on.
@@ -26,6 +28,7 @@ CREATE TABLE IF NOT EXISTS devices (mac TEXT PRIMARY KEY, ip TEXT, hostname TEXT
 CREATE TABLE IF NOT EXISTS queries (id INTEGER PRIMARY KEY, ts INTEGER, device_mac TEXT, domain TEXT, qtype TEXT, action TEXT, source TEXT, reason TEXT);
 CREATE TABLE IF NOT EXISTS rules (id INTEGER PRIMARY KEY, scope TEXT, device_mac TEXT, pattern TEXT, action TEXT, created_by TEXT, ts INTEGER);
 CREATE TABLE IF NOT EXISTS ai_verdicts (domain TEXT PRIMARY KEY, label TEXT, confidence REAL, reason TEXT, ts INTEGER);
+CREATE TABLE IF NOT EXISTS engine_state (key TEXT PRIMARY KEY, value INTEGER);
 CREATE INDEX IF NOT EXISTS q_ts ON queries(ts);
 CREATE INDEX IF NOT EXISTS q_dev ON queries(device_mac, ts);
 """

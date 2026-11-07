@@ -3,15 +3,22 @@
 The fake generator (scripts/fake_traffic.py) and later Will's DNS server both
 POST here; Codex's frontend listens on the WebSocket.
 
+/rules writes user rules to eddie.db (EDDIE_DB, the DNS server's database) and
+waits for the DNS server to load them before answering; see docs/EVENTS.md.
+
 Run: uv run uvicorn eddie.api:app --host 0.0.0.0 --port 8000
 """
+import asyncio
 import itertools
 import json
+import os
+import sqlite3
+import time
 from collections import deque
 
-from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 
-from . import inferences, insights, labels
+from . import inferences, insights, labels, rules, store
 from .events import AIVerdictEvent, ModeUpdate, QueryEvent
 
 # In memory for now; SQLite (store.py) replaces this once the DNS side lands.
@@ -21,6 +28,9 @@ state = {"home_mode": False}
 clients: set[WebSocket] = set()
 ai_verdicts: dict[str, dict] = {}
 ids = itertools.count(1)
+db: dict[str, sqlite3.Connection | None] = {"conn": None}
+APPLY_TIMEOUT = 2.0  # seconds to wait for DNS to load a rule change (it polls every 0.2 s)
+APPLY_POLL = 0.02
 
 app = FastAPI(title="Eddie traffic")
 
@@ -92,6 +102,46 @@ async def set_mode(body: ModeUpdate):
     state["home_mode"] = body.home_mode
     await broadcast({"type": "mode", "home_mode": body.home_mode})
     return {"home_mode": body.home_mode}
+
+
+def rules_db() -> sqlite3.Connection:
+    if db["conn"] is None:
+        path = os.environ.get("EDDIE_DB", "eddie.db")
+        if path == "off":
+            raise HTTPException(503, "Rules need eddie.db, and EDDIE_DB is off.")
+        db["conn"] = store.connect(path)
+    return db["conn"]
+
+
+async def wait_applied(conn: sqlite3.Connection, rev: int) -> bool:
+    """True once the DNS engine has loaded revision rev; False if it doesn't within APPLY_TIMEOUT."""
+    deadline = time.monotonic() + APPLY_TIMEOUT
+    while rules.loaded(conn) < rev:
+        if time.monotonic() >= deadline:
+            return False
+        await asyncio.sleep(APPLY_POLL)
+    return True
+
+
+@app.get("/rules")
+async def list_rules():  # async: the shared connection stays on the event loop thread
+    return rules.all_rules(rules_db())
+
+
+@app.post("/rules", status_code=201)
+async def add_rule(body: rules.RuleIn):
+    conn = rules_db()
+    row, rev = rules.add(conn, body)
+    return {**row, "applied": await wait_applied(conn, rev)}
+
+
+@app.delete("/rules/{rule_id}")
+async def delete_rule(rule_id: int):
+    conn = rules_db()
+    row, rev = rules.remove(conn, rule_id)
+    if row is None:
+        raise HTTPException(404, f"No rule {rule_id}.")
+    return {**row, "deleted": True, "applied": await wait_applied(conn, rev)}
 
 
 @app.websocket("/ws/events")

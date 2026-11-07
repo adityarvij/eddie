@@ -195,11 +195,11 @@ Hand this section and the ones below to a coding agent (Claude Code etc.). Targe
 
 ### Running the DNS server
 
-`eddie/dns_server.py` implements steps 1, 3 and 4 above (UDP only) and the `queries` half of step 5: every lookup writes one row to `eddie.db` through `eddie/store.py`. The rest is not built yet: the device is the client IP until #14 (so `queries.device_mac` holds the IP for now), and nothing is published to the live feed until #16. `eddie/decision.py` implements the full decision order below. At startup the DNS server loads every `blocklists/*.txt` file (StevenBlack hosts, plus the Perflyst smart-TV and Fire TV lists: about 78,000 domains in 0.3 s) and the essentials in `allowlist.txt` (`eddie/lists.py`). Rules come from #12.
+`eddie/dns_server.py` implements steps 1, 3 and 4 above (UDP only) and the `queries` half of step 5: every lookup writes one row to `eddie.db` through `eddie/store.py`. The rest is not built yet: the device is the client IP until #14 (so `queries.device_mac` holds the IP for now), and nothing is published to the live feed until #16. `eddie/decision.py` implements the full decision order below. At startup the DNS server loads every `blocklists/*.txt` file (StevenBlack hosts, plus the Perflyst smart-TV and Fire TV lists: about 78,000 domains in 0.3 s) and the essentials in `allowlist.txt` (`eddie/lists.py`). Rules come from the `/rules` API (`eddie/rules.py`).
 
 ### Running the classifier
 
-`eddie/classifier.py` labels unknown domains with the local model. Its queue is the query log itself: flagged `queries` rows from the last hour with no `ai_verdicts` row yet. Each verdict is written to `ai_verdicts`, and the DNS server reloads rules and verdicts from `eddie.db` about once a second, so the next lookup of that domain uses it (about 2.5 s end to end with `llama3.2:3b` on the development Mac). DNS never waits on the model. The `ai_verdict` live-feed event isn't sent yet (#16).
+`eddie/classifier.py` labels unknown domains with the local model. Its queue is the query log itself: flagged `queries` rows from the last hour with no `ai_verdicts` row yet. Each verdict is written to `ai_verdicts`, and the DNS server reloads rules and verdicts from `eddie.db` within about 0.2 s, so the next lookup of that domain uses it (about 2.5 s end to end with `llama3.2:3b` on the development Mac). DNS never waits on the model. The `ai_verdict` live-feed event isn't sent yet (#16).
 
 ```bash
 uv run python -m eddie.classifier   # needs Ollama running and the same EDDIE_DB as the DNS server
@@ -224,11 +224,12 @@ CREATE TABLE devices (mac TEXT PRIMARY KEY, ip TEXT, hostname TEXT, vendor TEXT,
 CREATE TABLE queries (id INTEGER PRIMARY KEY, ts INTEGER, device_mac TEXT, domain TEXT, qtype TEXT, action TEXT, source TEXT, reason TEXT);
 CREATE TABLE rules (id INTEGER PRIMARY KEY, scope TEXT, device_mac TEXT, pattern TEXT, action TEXT, created_by TEXT, ts INTEGER);
 CREATE TABLE ai_verdicts (domain TEXT PRIMARY KEY, label TEXT, confidence REAL, reason TEXT, ts INTEGER);
+CREATE TABLE engine_state (key TEXT PRIMARY KEY, value INTEGER);
 CREATE INDEX q_ts ON queries(ts);
 CREATE INDEX q_dev ON queries(device_mac, ts);
 ```
 
-`rules.pattern` matches exact domain or suffix (`*.amazon-adsystem.com`). `scope` = `global` or `device`. `created_by` = `user` / `voice` / `agent`.
+`rules.pattern` matches exact domain or suffix (`*.amazon-adsystem.com`). `scope` = `global` or `device`. `created_by` = `api` (default) / `user` / `voice` / `agent` / `dashboard`. `engine_state` holds `rules_rev` (bumped by every rule write) and `rules_loaded` (the revision the DNS engine last loaded), which `/rules` uses to acknowledge a change.
 
 ### Decision order (first match wins)
 
@@ -257,8 +258,9 @@ Use Ollama `format: json`, temperature 0. Never send anything but the domain and
 | GET | `/events?since=&device=` | Recent query rows |
 | GET | `/summary?window=1h` | Totals: queries, blocked, top blocked domains, top companies, per device |
 | GET | `/what-they-know?hours=24` | "What they know about you" facts `{fact, evidence, confidence}` + spoken text (scaffold; see docs/EVENTS.md) |
-| POST | `/rules` | `{pattern, action, device_mac?}` add rule; takes effect immediately (no cache) |
-| DELETE | `/rules/{id}` | Remove rule |
+| GET | `/rules` | Every rule, newest first |
+| POST | `/rules` | `{pattern, action, device_mac?, created_by?}` add rule; answers with the stored id and `applied` once DNS has loaded it (see docs/EVENTS.md) |
+| DELETE | `/rules/{id}` | Remove rule; answers with the removed rule and `applied` |
 | POST | `/offline-mode` | Toggle: stop forwarding to upstream, prove the AI still works |
 | WS | `/ws/events` | Pushes events typed `query`, `ai_verdict`, `voice_state` or `agent_reply` |
 
