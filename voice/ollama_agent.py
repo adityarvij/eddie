@@ -10,6 +10,9 @@ through the tools below. Nothing here can change a rule, mode or device.
 - A backend failure ends the turn with a fixed spoken failure; a model failure
   raises AgentUnavailable so the caller can use the deterministic router.
 - Questions, tool results and replies are never logged or stored.
+- phrase() turns "what they know" facts into at most 5 "someone could guess"
+  lines. The model sees only the computed facts, never raw logs; a line is
+  dropped unless every number, clock time and weekday in it is in the facts.
 
 Typed test:  python voice/ollama_agent.py "What's the TV doing?"
 """
@@ -43,6 +46,19 @@ SYSTEM_PROMPT = (
 )
 BACKEND_FAILURE = "I can't reach Eddie's traffic backend, so I can't answer that right now."
 UNVERIFIED = "I couldn't check that answer against Eddie's records, so I won't guess."
+# README "Intelligence features", step 5.
+INFER_PROMPT = (
+    'Using only these facts, write at most 5 things someone could infer about the people in this household: '
+    'their schedule, sleep, when the house is empty, what they watch, which company profiles them. '
+    'One per line, each as "Someone could guess <inference>, because <evidence copied from the fact>. '
+    '<Fairly sure | Somewhat sure | Just a hunch>." Example: "Someone could guess you sleep late on weekends, '
+    'because 12 streaming sessions started after 10 AM on Saturday. Somewhat sure." '
+    'Never add facts, numbers, times or days that are not in the facts. No introduction, no list numbers.'
+)
+MAX_INFERENCES = 5
+MAX_LINE_CHARS = 220
+WEEKDAY = re.compile(r'\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)s?\b')
+CLOCK = re.compile(r'\b\d{1,2}:\d{2}\b')
 
 
 class AgentUnavailable(Exception):
@@ -241,6 +257,14 @@ def reply_numbers(text):
     return found
 
 
+def supported(line, facts):
+    """True if every number, clock time and weekday in line appears in the facts."""
+    text = json.dumps(facts).lower()
+    return (reply_numbers(line) <= numbers_in(facts)
+            and all(t in text for t in CLOCK.findall(line))
+            and all(re.search(rf'\b{day[:3]}', text) for day in WEEKDAY.findall(line.lower())))  # facts may say "Tue"
+
+
 class Agent:
     def __init__(self, url=None, model=None, chat=None, clock=time.monotonic):
         self.url = url or os.environ.get('EDDIE_OLLAMA_URL', DEFAULT_URL)
@@ -249,9 +273,9 @@ class Agent:
         self.chat = chat or self.ollama_chat
         self.clock = clock
 
-    def ollama_chat(self, messages, timeout):
-        body = {'model': self.model, 'stream': False, 'messages': messages, 'tools': TOOLS,
-                'options': {'temperature': 0, 'num_predict': 200}}
+    def ollama_chat(self, messages, timeout, tools=TOOLS, num_predict=200):
+        body = {'model': self.model, 'stream': False, 'messages': messages, 'tools': tools,
+                'options': {'temperature': 0, 'num_predict': num_predict}}
         request = urllib.request.Request(self.url.rstrip('/') + '/api/chat', data=json.dumps(body).encode(),
                                          headers={'Content-Type': 'application/json'})
         with _OPENER.open(request, timeout=timeout) as response:
@@ -282,6 +306,22 @@ class Agent:
                     results.append(output)
                 messages.append({'role': 'tool', 'tool_name': name, 'content': json.dumps(output)})
         raise AgentUnavailable('no answer within the round limit')
+
+    def infer(self, facts):
+        """Checked "someone could guess" lines from facts alone (no tools). Raises AgentUnavailable."""
+        messages = [{'role': 'system', 'content': INFER_PROMPT}, {'role': 'user', 'content': json.dumps(facts)}]
+        try:
+            message = self.chat(messages, CALL_TIMEOUT, [], 400)
+        except Exception as error:
+            raise AgentUnavailable(str(error)) from error
+        if not isinstance(message, dict):
+            raise AgentUnavailable('malformed model reply')
+        lines = []
+        for line in str(message.get('content') or '').splitlines():
+            line = ' '.join(re.sub(r'^\s*(?:[-*•]|\d+[.)])\s*', '', line).replace('**', '').split())
+            if 'could guess' in line.lower() and len(line) <= MAX_LINE_CHARS and supported(line, facts):
+                lines.append(line)
+        return lines[:MAX_INFERENCES]
 
     def run_tool(self, call):
         """(name, result) for one tool call. BackendError propagates and ends the turn."""
@@ -323,6 +363,17 @@ def answer(agent, text):
         return BACKEND_FAILURE
     except AgentUnavailable:
         return None
+
+
+def phrase(agent, facts):
+    """Model-written inferences from computed facts, or None to keep the backend's template."""
+    if not facts:
+        return None
+    try:
+        lines = agent.infer(facts)
+    except AgentUnavailable:
+        return None
+    return ' '.join(lines) or None
 
 
 if __name__ == '__main__':

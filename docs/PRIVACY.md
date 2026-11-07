@@ -81,7 +81,7 @@ Owner: [eddie/store.py](../eddie/store.py), written by [eddie/dns_server.py](../
 | "Block it" / "Block <domain>" (#11) writes one global block rule through `POST /rules` with `created_by: voice`, stored in `eddie.db` like any other rule. "It" is the last domain named in one of Eddie's replies this conversation (held in memory only, cleared on dismissal or mic stop, never logged), else the newest flagged or allowed tracker in the last 15 minutes of `/events`. The reply names the domain so a wrong guess is audible. Tested. | implemented |
 | Allow, undo, lockdown and email are not wired up; Eddie says that nothing changed. | implemented |
 | A block that times out after the API stored the rule is still reported as "Nothing changed"; the rule then shows in `GET /rules`. | gap |
-| The local model gets only computed facts (`{fact, evidence, confidence}`), never raw logs. Every number in its output is checked against the facts. | planned (for "what they know" phrasing) |
+| For "what do they know about me", the local model (`ollama_agent.phrase`) gets only the computed facts (`{fact, evidence, confidence}`, at most a week, devices by label or vendor), never raw logs, and no tools. A line is dropped unless every number, clock time and weekday in it is in the facts; if none survive or the model is down, Eddie speaks the backend template. This checks the numbers are real, not that the model read the fact right (llama3.2:3b once turned idle telemetry into "watching when it's not being used"). Tested with a stubbed model. | implemented, with that gap |
 | The voice agent (`voice/ollama_agent.py`, #29) sends the local model the question's text and read-only tool results: per-device counts by label, the companies blocked most, recent blocked domains with reasons, one domain's latest decision and AI verdict, and "what they know" facts. No MAC or IP addresses, and no raw query log. It uses the same localhost / private-IP-literal check, no-redirect and no-proxy rules as the classifier. Tested. | implemented |
 | The agent's tools only read; it has no tool that changes rules, mode or devices, and an unknown tool name is refused. Tested. | implemented |
 | Every number in an agent reply (digits or "two" to "hundred") must appear in that turn's tool results, or Eddie speaks the backend's own summary text or says it can't verify the answer. This checks that the numbers are real, not that the model attached them to the right device. Words like "no requests" aren't checked. Tested with a stubbed model. | implemented, with that gap |
@@ -93,6 +93,7 @@ Owner: [eddie/store.py](../eddie/store.py), written by [eddie/dns_server.py](../
 | Ollama itself may keep its own logs; its default doesn't log prompts, but `OLLAMA_DEBUG` would. | known behaviour |
 | Email is sent only after spoken confirmation; lockdown needs confirmation too. | planned |
 | Inferences ("what they know") stay on the box, because the inferences are themselves a profile of the household. | planned |
+| The live "what they know" report reads the query log read-only and names devices only by user label, "<vendor> device" or "unlabeled device", never MAC, IP or DHCP hostname, because its facts can reach the local model through the voice agent. Facts are computed per request and not stored. Tested. | implemented |
 
 ## Home mode and camera
 
@@ -107,7 +108,7 @@ Owner: [eddie/store.py](../eddie/store.py), written by [eddie/dns_server.py](../
 | Decision | Status |
 | --- | --- |
 | `scripts/fake_traffic.py` is scripted. Its devices, MAC address and verdicts (including the "AI:" ones) are invented, and it contains no real household data. | implemented |
-| The seeded "demo week" for the full report must be clearly labelled as demo data. | planned |
+| The seeded "demo week" (`eddie/demo_week.py`, `GET /what-they-know?demo=true`) is invented, generated in memory per request, and never stored or mixed into the live feed. Every event is `demo: true`, device names end in "(demo)", the response has `demo: true` and a label its spoken text starts with, and the dashboard shows a DEMO DATA banner over it. Voice only reads the live report. Tested. | implemented |
 | Eddie reads fake-traffic counts aloud the same way as real ones; the voice summary doesn't say which it is. | gap |
 
 ## What leaves the house

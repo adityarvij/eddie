@@ -110,7 +110,22 @@ function voiceEvent(event) {
   if (event.type === 'speaking') { reopen(); $('assistant-title').textContent = event.title || 'Here’s what I’m seeing.'; $('assistant-description').textContent = event.text || ''; setAssistantState('speaking'); speaking = true; }
   if (event.type === 'speech_end') { setAssistantState('ready'); speaking = false; }
 }
-window.eddie = { pushEvent: addEvent, wake, voiceEvent };
+// "What they know" report: real facts, or the seeded demo week under a demo banner.
+function renderReport(report) {
+  const demo = report.demo === true;
+  $('report-title').textContent = demo ? `what they know · DEMO WEEK` : `what they know · last ${report.hours}h${report.source === 'eddie.db' ? ' · from eddie.db' : ''}`;
+  $('report-demo').textContent = demo ? `DEMO DATA · ${report.label}` : ''; $('report-demo').hidden = !demo;
+  const items = (report.facts || []).map(f => { const li = document.createElement('li'); li.textContent = `${f.fact} — ${f.evidence} (confidence ${Math.round(f.confidence * 100)}%)`; return li; });
+  if (!items.length) { const li = document.createElement('li'); li.textContent = 'Not enough traffic yet to say what anyone could guess.'; items.push(li); }
+  $('report-facts').replaceChildren(...items); $('report').hidden = false;
+}
+async function loadReport(demo) {
+  try { const r = await fetch(demo ? '/api/what-they-know?demo=1' : '/api/what-they-know'); if (!r.ok) throw Error(); renderReport(await r.json()); }
+  catch { notice('Report unavailable: the traffic API is not answering.'); }
+}
+window.eddie = { pushEvent: addEvent, wake, voiceEvent, renderReport };
+$('report-live').onclick = () => loadReport(false); $('report-demo-week').onclick = () => loadReport(true);
+$('report-close').onclick = () => { $('report').hidden = true; };
 $('open-logs').onclick = () => toggleLogs($('assistant-logs').hidden);
 $('close-logs').onclick = () => { toggleLogs(false); $('open-logs').focus(); };
 dialog.addEventListener('cancel', event => { event.preventDefault(); closeByUser(); });

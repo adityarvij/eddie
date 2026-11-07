@@ -259,7 +259,7 @@ Use Ollama `format: json`, temperature 0. Never send anything but the domain and
 | PUT | `/devices/{mac}` | `{label}` names a device ("Fire Stick"); `""` or `null` clears it |
 | GET | `/events?since=&device=` | Recent query rows |
 | GET | `/summary?window=1h` | Totals: queries, blocked, top blocked domains, top companies, per device |
-| GET | `/what-they-know?hours=24` | "What they know about you" facts `{fact, evidence, confidence}` + spoken text (scaffold; see docs/EVENTS.md) |
+| GET | `/what-they-know?hours=24` | "What they know about you" facts `{fact, evidence, confidence}` + spoken text, from `eddie.db` (else the in-memory feed); `?demo=true` returns the labelled seeded demo week instead (see docs/EVENTS.md) |
 | GET | `/rules` | Every rule, newest first |
 | POST | `/rules` | `{pattern, action, device_mac?, created_by?}` add rule; answers with the stored id and `applied` once DNS has loaded it (see docs/EVENTS.md) |
 | DELETE | `/rules/{id}` | Remove rule; answers with the removed rule and `applied` |
@@ -272,7 +272,7 @@ Use Ollama `format: json`, temperature 0. Never send anything but the domain and
 |---|---|---|
 | `get_summary` | window, device? | Reads `/summary?window=` per-device counts (implemented in `voice/ollama_agent.py`) |
 | `get_recent_blocks` | device?, limit | Last blocked domains with reasons (implemented) |
-| `what_they_know` | hours? | Reads `/what-they-know` (implemented in `voice/voice_agent.py`) |
+| `what_they_know` | hours? | Reads `/what-they-know` (implemented in `voice/voice_agent.py`); "what do they know about me" reads a week and has the local model phrase checked inferences (`voice/ollama_agent.py`) |
 | `block` | pattern, device? | Adds BLOCK rule |
 | `allow` | pattern, device? | Adds ALLOW rule |
 | `lockdown_device` | device, keep (list) | Blocks everything for that device except keep patterns |
