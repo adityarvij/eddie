@@ -22,7 +22,7 @@ from typing import Literal
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, field_validator
 
-from . import inferences, insights, labels, rules, store
+from . import devices, inferences, insights, labels, rules, store
 from .events import Action, AIVerdictEvent, ModeUpdate, QueryEvent
 
 # In memory for now; SQLite (store.py) replaces this once the DNS side lands.

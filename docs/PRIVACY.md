@@ -82,7 +82,7 @@ Owner: [eddie/store.py](../eddie/store.py), written by [eddie/dns_server.py](../
 | Every number in an agent reply (digits or "two" to "hundred") must appear in that turn's tool results, or Eddie speaks the backend's own summary text or says it can't verify the answer. This checks that the numbers are real, not that the model attached them to the right device. Words like "no requests" aren't checked. Tested with a stubbed model. | implemented, with that gap |
 | If a tool can't reach the backend, Eddie says so and the model never gets to phrase a guess. Tested. | implemented |
 | Agent questions, tool results and replies are never logged or stored. | implemented |
-| The classifier sends the model only the domain, the device's label (null until #14; never its MAC or IP), lookups in the last 10 minutes and an idle flag. Tested. | implemented |
+| The classifier sends the model only the domain, the device's user label (null if unlabeled; never its MAC, IP, vendor or hostname), lookups in the last 10 minutes and an idle flag. Tested. | implemented |
 | The classifier only talks to `localhost` or a loopback or private **IP literal**. Hostnames are refused, so DNS can't point it somewhere else; redirects aren't followed and `HTTP(S)_PROXY` is ignored. Tested. | implemented |
 | Domains, model output and verdicts are never written to the classifier's log; it logs only counts and error types. Malformed model output is rejected, not stored. Tested. | implemented |
 | Ollama itself may keep its own logs; its default doesn't log prompts, but `OLLAMA_DEBUG` would. | known behaviour |
