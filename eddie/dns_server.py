@@ -15,6 +15,9 @@ classifier) are reloaded into the decision engine within RELOAD_EVERY, and
 the rules revision loaded is written back so the rules API can acknowledge it.
 devices.DeviceMap maps each client IP to its MAC from the ARP table, read in a
 worker thread, and records the devices seen in eddie.db (#14).
+Offline mode (#26, offline.py) is loaded the same way: while it's on, nothing
+is forwarded and allowed lookups get the answer kept from the last time they
+were forwarded, or SERVFAIL.
 Each decision is also sent to the live feed (POST /ingest on the local API)
 by feed.FeedPublisher, off the reply path; EDDIE_FEED=off turns that off.
 
@@ -31,7 +34,7 @@ import time
 
 from dnslib import AAAA, QTYPE, RCODE, RR, A, DNSRecord
 
-from . import decision, devices, lists, rules
+from . import decision, devices, lists, offline, rules
 from . import store
 from .feed import FeedPublisher, feed_from_env, query_event
 from .store import QueryLog, query_log_from_env
@@ -42,6 +45,7 @@ RELOAD_EVERY = 0.2  # seconds between checks of eddie.db for new rules or verdic
 MAX_IN_FLIGHT = 512  # lookups being answered at once; extra packets are dropped
 
 log = logging.getLogger("eddie.dns")
+offline_mode = offline.Mode()
 
 
 def upstreams_from_env() -> list[tuple[str, int]]:
@@ -125,11 +129,13 @@ async def resolve(packet: bytes, client_ip: str, upstreams: list[tuple[str, int]
     if verdict.action == "block":
         return block_reply(request).pack()
 
-    answer = await forward(packet, upstreams, timeout)
+    answer = offline_mode.answer(request) if offline_mode.on else await forward(packet, upstreams, timeout)
     if answer is None:
         reply = request.reply()
         reply.header.rcode = RCODE.SERVFAIL
         return reply.pack()
+    if not offline_mode.on:
+        offline_mode.put(request, answer)
     return answer
 
 
@@ -171,15 +177,17 @@ async def serve(host: str, port: int, upstreams: list[tuple[str, int]],
 
 
 class StoreWatcher:
-    """Reloads rules and AI verdicts into the decision engine when they change.
+    """Reloads rules, AI verdicts and offline mode when they change.
 
-    After a reload it records the rules revision it loaded (rules.mark_loaded):
-    the rules API's proof that DNS is enforcing a change.
+    After a reload it records the rules and offline revisions it loaded
+    (rules.mark_loaded, offline.mark_loaded): the API's proof that DNS is
+    enforcing a change.
     """
 
-    def __init__(self, path: str, engine: decision.Engine = decision.engine):
+    def __init__(self, path: str, engine: decision.Engine = decision.engine, mode: offline.Mode | None = None):
         self.conn = store.connect(path)
         self.engine = engine
+        self.mode = mode or offline_mode
         self.seen = None
 
     def poll(self) -> bool:
@@ -187,13 +195,18 @@ class StoreWatcher:
         changed = self.conn.execute(
             "SELECT (SELECT count(*) || ':' || ifnull(max(id), 0) || ':' || ifnull(max(ts), 0) FROM rules),"
             " (SELECT count(*) || ':' || ifnull(max(ts), 0) FROM ai_verdicts),"
-            " (SELECT ifnull(max(value), 0) FROM engine_state WHERE key = 'rules_rev')").fetchone()
+            " (SELECT ifnull(max(value), 0) FROM engine_state WHERE key = 'rules_rev'),"
+            " (SELECT ifnull(max(value), 0) FROM engine_state WHERE key = 'offline_rev')").fetchone()
         if changed == self.seen:
             return False
         self.engine.load_from_store(self.conn)
-        # The revision read before the load: a write that lands in between is
+        if self.mode.on != offline.wanted(self.conn):
+            self.mode.on = not self.mode.on
+            log.info("offline mode %s", "on: not forwarding" if self.mode.on else "off: forwarding")
+        # The revisions read before the load: a write that lands in between is
         # already loaded, and the next poll records it.
         rules.mark_loaded(self.conn, changed[2])
+        offline.mark_loaded(self.conn, changed[3])
         self.seen = changed
         return True
 

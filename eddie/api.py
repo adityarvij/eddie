@@ -7,6 +7,8 @@ both POST here; Codex's frontend listens on the WebSocket.
 waits for the DNS server to load them before answering; see docs/EVENTS.md.
 /devices lists the devices the DNS server recorded there, with lookup counts
 from its query log, and stores user labels (devices.py).
+/offline-mode turns the DNS server's upstream forwarding off or on through
+eddie.db and waits for DNS to load it the same way (offline.py).
 
 Run: uv run uvicorn eddie.api:app --host 0.0.0.0 --port 8000
 """
@@ -22,8 +24,8 @@ from typing import Literal
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, field_validator
 
-from . import beacons, demo_week, devices, inferences, insights, labels, rules, store
-from .events import Action, AIVerdictEvent, ModeUpdate, QueryEvent
+from . import beacons, demo_week, devices, inferences, insights, labels, offline, rules, store
+from .events import Action, AIVerdictEvent, ModeUpdate, OfflineUpdate, QueryEvent
 
 # In memory for now; SQLite (store.py) replaces this once the DNS side lands.
 recent: deque[dict] = deque(maxlen=20000)
@@ -34,7 +36,7 @@ ai_verdicts: dict[str, dict] = {}
 timing = {"beacons": beacons.Beacons(), "idle": beacons.Idle()}  # beacon_s and idle on each event (#24)
 ids = itertools.count(1)
 db: dict[str, sqlite3.Connection | None] = {"conn": None}
-APPLY_TIMEOUT = 2.0  # seconds to wait for DNS to load a rule change (it polls every 0.2 s)
+APPLY_TIMEOUT = 2.0  # seconds to wait for DNS to load a rule or offline change (it polls every 0.2 s)
 APPLY_POLL = 0.02
 
 app = FastAPI(title="Eddie traffic")
@@ -132,8 +134,8 @@ def report_events(hours: int) -> tuple[list[dict], str]:
 
 
 @app.get("/mode")
-def get_mode():
-    return {"home_mode": state["home_mode"]}
+async def get_mode():  # async: the shared connection stays on the event loop thread
+    return {"home_mode": state["home_mode"], **offline_state()}
 
 
 @app.post("/mode")
@@ -152,10 +154,10 @@ def rules_db() -> sqlite3.Connection:
     return db["conn"]
 
 
-async def wait_applied(conn: sqlite3.Connection, rev: int) -> bool:
+async def wait_applied(conn: sqlite3.Connection, rev: int, loaded=rules.loaded) -> bool:
     """True once the DNS engine has loaded revision rev; False if it doesn't within APPLY_TIMEOUT."""
     deadline = time.monotonic() + APPLY_TIMEOUT
-    while rules.loaded(conn) < rev:
+    while loaded(conn) < rev:
         if time.monotonic() >= deadline:
             return False
         await asyncio.sleep(APPLY_POLL)
@@ -170,6 +172,23 @@ def named(conn: sqlite3.Connection, rule: dict) -> dict:
 async def rule_change(conn: sqlite3.Connection, change: str, row: dict) -> None:
     # Sent once the row is stored or deleted, before DNS loads it: it says nothing about enforcement.
     await broadcast({"type": "rule_change", "change": change, **named(conn, row)})
+
+
+def offline_state() -> dict:
+    """offline: the state last asked for. offline_applied: whether DNS has loaded it."""
+    if os.environ.get("EDDIE_DB", "eddie.db") == "off":
+        return {"offline": False, "offline_applied": False}
+    conn = rules_db()
+    return {"offline": offline.wanted(conn), "offline_applied": offline.loaded(conn) >= offline.revision(conn)}
+
+
+@app.post("/offline-mode")
+async def set_offline_mode(body: OfflineUpdate):
+    conn = rules_db()
+    rev = offline.write(conn, body.offline)
+    applied = await wait_applied(conn, rev, offline.loaded)
+    await broadcast({"type": "offline_mode", "offline": body.offline, "applied": applied})
+    return {"offline": body.offline, "applied": applied}
 
 
 @app.get("/rules")
