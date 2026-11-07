@@ -12,7 +12,7 @@ from collections import deque
 from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
 
 from . import inferences, insights, labels
-from .events import ModeUpdate, QueryEvent
+from .events import AIVerdictEvent, ModeUpdate, QueryEvent
 
 # In memory for now; SQLite (store.py) replaces this once the DNS side lands.
 recent: deque[dict] = deque(maxlen=20000)
@@ -47,6 +47,13 @@ async def ingest(body: QueryEvent | list[QueryEvent]):
     return {"ok": True, "count": len(events)}
 
 
+@app.post('/ai/verdict')
+async def ai_verdict(body: AIVerdictEvent):
+    # Metadata only: neither rewrite history nor count an AI result as a query.
+    await broadcast({'type': 'ai_verdict', **body.model_dump()})
+    return {'ok': True}
+
+
 @app.get("/events")
 def events(since: int = 0, device: str | None = None, limit: int = 200):
     rows = [e for e in recent if e["ts"] > since and (device is None or e["device"] == device)]
@@ -55,7 +62,8 @@ def events(since: int = 0, device: str | None = None, limit: int = 200):
 
 @app.get("/summary")
 def summary():
-    return {**totals, "home_mode": state["home_mode"], "text": insights.summary_text(list(recent))}
+    return {**totals, "home_mode": state["home_mode"], "text": insights.summary_text(list(recent)),
+            "companies": insights.company_counts(list(recent)), "company_window_seconds": 3600}
 
 
 @app.get("/what-they-know")
