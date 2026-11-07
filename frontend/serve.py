@@ -18,6 +18,7 @@ sys.path.insert(0, str(ROOT.parent / 'voice'))
 from voice_agent import confirmation, respond
 from voice_runtime import run as run_voice
 stopped = threading.Event()
+dismissed = threading.Event()  # the close button: end the voice conversation
 listeners = set()
 lock = threading.Lock()
 voice_lock = threading.Lock()
@@ -83,7 +84,7 @@ def microphone():
             if event.get('type') == 'voice_status':
                 voice_state.update({key: value for key, value in event.items() if key != 'type'})
             emit(event)
-        run_voice(publish, answer, speaking, stopped)
+        run_voice(publish, answer, speaking, stopped, dismissed)
     except Exception as error:
         voice_state['status'] = 'error'
         emit({'type': 'voice_status', 'status': 'error', 'message': f'Voice unavailable: {error}'})
@@ -156,6 +157,7 @@ class Handler(SimpleHTTPRequestHandler):
                 if voice_thread and voice_thread.is_alive():
                     return self.json_response(200, {'message': 'Microphone is running or stopping; wait for its status.'})
                 stopped.clear()
+                dismissed.clear()
                 voice_state['status'] = 'starting'
                 voice_thread = threading.Thread(target=microphone, daemon=True)
                 voice_thread.start()
@@ -163,6 +165,12 @@ class Handler(SimpleHTTPRequestHandler):
         if self.path == '/api/voice/stop':
             stopped.set()
             return self.json_response(200, {'message': 'Stopping local microphone.'})
+        if self.path == '/api/voice/dismiss':
+            # Closing the overlay ends the conversation; the next request needs the wake phrase.
+            confirmation.cancel()
+            if voice_thread and voice_thread.is_alive():
+                dismissed.set()
+            return self.json_response(200, {'ok': True})
         if self.path == '/api/voice/ask':
             text = str(body.get('text', '')).strip()[:1000]
             if not text:
@@ -184,6 +192,15 @@ if __name__ == '__main__':
     # 0.0.0.0 lets the iPad view the dashboard; mic and other controls stay localhost-only.
     parser.add_argument('--host', default=os.environ.get('EDDIE_DASHBOARD_HOST', '127.0.0.1'))
     args = parser.parse_args()
+    if os.environ.get('EDDIE_AGENT', 'ollama') != 'off':
+        import ollama_agent
+        import voice_agent
+        try:
+            agent = ollama_agent.Agent()
+            voice_agent.ask_model = lambda text: ollama_agent.answer(agent, text)
+            print(f'Local agent: {agent.model} at {agent.url} (keyword router if it is unavailable).', flush=True)
+        except ValueError as error:
+            print(f'Local agent off: EDDIE_OLLAMA_URL refused: {error}.', flush=True)
     print(f'Eddie dashboard: http://localhost:{args.port}', flush=True)
     if not is_local(args.host):
         print(f'Viewable from the network on port {args.port}; controls only work on this computer.', flush=True)
