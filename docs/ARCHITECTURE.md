@@ -45,7 +45,7 @@ Offline mode (#26, `eddie/offline.py`): the watcher also checks `engine_state.of
 ## Remaining work
 
 - Train and evaluate the actual Hey Eddie model; record provenance, license, threshold and false-wake metrics.
-- Provision and hash all local assets; add a repeatable offline installer and hardware compatibility checks.
+- The offline installer and hash check are done (#39, `scripts/provision_voice.py`); still pin the custom Hey Eddie model once it's trained, and run `--hardware` and an offline voice check on the final Pi.
 - Wire voice allow / undo to the `/rules` contract (docs/EVENTS.md): undo by deleting the returned id. Block is done (#11). Expiry is not built.
 - Add authenticated local control before allowing dashboard controls off localhost. `serve.py --host 0.0.0.0` exposes only viewing (page, event stream, status); every POST control is refused unless it comes from a loopback address. Do not expose microphone controls publicly.
 - Rehearse the calibrated WebRTC VAD on the actual speakerphone; adjust aggressiveness/noise margin for the room.

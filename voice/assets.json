@@ -1,0 +1,65 @@
+{
+  "_comment": "Pinned offline voice assets (#39). Fetched only by scripts/provision_voice.py; the voice worker never downloads. Paths are relative to dest. '@openwakeword' is the installed package's resources/models directory.",
+  "groups": [
+    {
+      "name": "whisper",
+      "dest": "voice/models/whisper-base.en",
+      "source": "https://huggingface.co/Systran/faster-whisper-base.en (MIT)",
+      "files": [
+        {"path": "model.bin", "size": 145216508, "sha256": "2a166925539a16005f14ff328359f9b9adb9dc4fb631bb3b227526862e93e2ef",
+         "url": "https://huggingface.co/Systran/faster-whisper-base.en/resolve/3d3d5dee26484f91867d81cb899cfcf72b96be6c/model.bin"},
+        {"path": "config.json", "size": 2227, "sha256": "f3bc3821e9fc76a27bae538e11ae5b677dcdd352b4600429ce7951d398569aeb",
+         "url": "https://huggingface.co/Systran/faster-whisper-base.en/resolve/3d3d5dee26484f91867d81cb899cfcf72b96be6c/config.json"},
+        {"path": "tokenizer.json", "size": 2128466, "sha256": "929c5252409436dce1b38a75d1abbcb5e132d170d8e324e4e04ed915fa2d22df",
+         "url": "https://huggingface.co/Systran/faster-whisper-base.en/resolve/3d3d5dee26484f91867d81cb899cfcf72b96be6c/tokenizer.json"},
+        {"path": "vocabulary.txt", "size": 422309, "sha256": "ff77588746d3a2595d32ab5b69ffd7b95ce2441ac57533cb66fc3eb575a115cf",
+         "url": "https://huggingface.co/Systran/faster-whisper-base.en/resolve/3d3d5dee26484f91867d81cb899cfcf72b96be6c/vocabulary.txt"}
+      ]
+    },
+    {
+      "name": "piper",
+      "dest": "voice/models/piper",
+      "source": "https://huggingface.co/rhasspy/piper-voices en_US lessac medium (see its MODEL_CARD for license)",
+      "files": [
+        {"path": "en_US-lessac-medium.onnx", "size": 63201294, "sha256": "5efe09e69902187827af646e1a6e9d269dee769f9877d17b16b1b46eeaaf019f",
+         "url": "https://huggingface.co/rhasspy/piper-voices/resolve/e7229f7d33a10e145e109b886d661984201ac3c4/en/en_US/lessac/medium/en_US-lessac-medium.onnx"},
+        {"path": "en_US-lessac-medium.onnx.json", "size": 4885, "sha256": "efe19c417bed055f2d69908248c6ba650fa135bc868b0e6abb3da181dab690a0",
+         "url": "https://huggingface.co/rhasspy/piper-voices/resolve/e7229f7d33a10e145e109b886d661984201ac3c4/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json"}
+      ]
+    },
+    {
+      "name": "vosk",
+      "dest": "voice/models",
+      "source": "https://alphacephei.com/vosk/models (Apache-2.0)",
+      "archive": {"url": "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip", "size": 41205931,
+                  "sha256": "30f26242c4eb449f948e42cb302dd7a686cb29a3423a8367f99ff41780942498"},
+      "files": [
+        {"path": "vosk-model-small-en-us-0.15/README", "size": 199, "sha256": "c0cf286e4f7783306c5f6469b37db69228fb16803b03cae661edb2d7bba64ebb"},
+        {"path": "vosk-model-small-en-us-0.15/am/final.mdl", "size": 15962575, "sha256": "75370a0137f9daf8f469dedd7daa4513ae7a621f03240c6e512e2b50b656a7b6"},
+        {"path": "vosk-model-small-en-us-0.15/conf/mfcc.conf", "size": 131, "sha256": "1e2228006d01d805ad1c267fee9f79709ca87ac51bd82b0e3f5c69ba543f0fc4"},
+        {"path": "vosk-model-small-en-us-0.15/conf/model.conf", "size": 290, "sha256": "8f14cb1eeb07c762c371db648c6be688d347236155ca0f64fb13b6567a8ce81f"},
+        {"path": "vosk-model-small-en-us-0.15/graph/Gr.fst", "size": 24013795, "sha256": "023c8b7e30704a9e37765c635c252e608a02f361235bf94abdcf2a5225d85b20"},
+        {"path": "vosk-model-small-en-us-0.15/graph/HCLr.fst", "size": 22416994, "sha256": "5caafba3081e1646545ac6bff0dd7a318e53dcbdc86f237909ce1d2ac1293d34"},
+        {"path": "vosk-model-small-en-us-0.15/graph/disambig_tid.int", "size": 102, "sha256": "9ad87cc166d0998f08f758f47a6223a120dfffcbee805c4849c3aa5e6bb3c0fc"},
+        {"path": "vosk-model-small-en-us-0.15/graph/phones/word_boundary.int", "size": 1761, "sha256": "da199d9c991e0e84681ddbb34627b915b26302d50a8fdaa23c51e2bc3a50b5c3"},
+        {"path": "vosk-model-small-en-us-0.15/ivector/final.dubm", "size": 168048, "sha256": "8c5d7dd69d2122313baaf19f61f35dd3fa18b70c62ac0687e311e1c46e6daca7"},
+        {"path": "vosk-model-small-en-us-0.15/ivector/final.ie", "size": 8288887, "sha256": "3f37faf90c375b9e4740b569398b5829ed9cc07d19be6d441f72c3b71d7efcc6"},
+        {"path": "vosk-model-small-en-us-0.15/ivector/final.mat", "size": 44975, "sha256": "ddd83586dc5f928cda8738b922c85ffe38fc789cb5f9151a712ca12f37265382"},
+        {"path": "vosk-model-small-en-us-0.15/ivector/global_cmvn.stats", "size": 1080, "sha256": "33be09afcc80059847a275c3d043b51f1ab954c7c2438ddbbf4745e8ba144ff9"},
+        {"path": "vosk-model-small-en-us-0.15/ivector/online_cmvn.conf", "size": 95, "sha256": "a2f3571754b64297cb7efb2e7ca3df61995c5a45fcbb97188f90613552bb2dfe"},
+        {"path": "vosk-model-small-en-us-0.15/ivector/splice.conf", "size": 35, "sha256": "9f0c5f7c82d18eaf25d8bce470efa9f7741f88411fe428774bc0a9bb69a24756"}
+      ]
+    },
+    {
+      "name": "openwakeword",
+      "dest": "@openwakeword",
+      "source": "https://github.com/dscripka/openWakeWord/releases/tag/v0.5.1 (Apache-2.0)",
+      "files": [
+        {"path": "melspectrogram.onnx", "size": 1087958, "sha256": "ba2b0e0f8b7b875369a2c89cb13360ff53bac436f2895cced9f479fa65eb176f",
+         "url": "https://github.com/dscripka/openWakeWord/releases/download/v0.5.1/melspectrogram.onnx"},
+        {"path": "embedding_model.onnx", "size": 1326578, "sha256": "70d164290c1d095d1d4ee149bc5e00543250a7316b59f31d056cff7bd3075c1f",
+         "url": "https://github.com/dscripka/openWakeWord/releases/download/v0.5.1/embedding_model.onnx"}
+      ]
+    }
+  ]
+}
