@@ -93,7 +93,7 @@ function dismiss() {
 }
 // The user closed Eddie: end the voice conversation too, so the next request needs the wake phrase,
 // and don't reopen for events the worker sent before it heard about it.
-function closeByUser() { userClosed = true; dismiss(); fetch('/api/voice/dismiss', {method:'POST'}).catch(() => {}); }
+function closeByUser() { userClosed = true; dismiss(); control('/api/voice/dismiss').catch(() => {}); }
 function reopen() { if (!userClosed && (!dialog.open || dialog.classList.contains('closing'))) wake(); }
 function toggleLogs(open) {
   $('assistant-logs').hidden = !open;
@@ -123,7 +123,7 @@ async function loadReport(demo) {
   try { const r = await fetch(demo ? '/api/what-they-know?demo=1' : '/api/what-they-know'); if (!r.ok) throw Error(); renderReport(await r.json()); }
   catch { notice('Report unavailable: the traffic API is not answering.'); }
 }
-window.eddie = { pushEvent: addEvent, wake, voiceEvent, renderReport };
+window.eddie = { pushEvent: addEvent, wake, voiceEvent, renderReport, ask: text => control('/api/voice/ask', {text}) };
 $('report-live').onclick = () => loadReport(false); $('report-demo-week').onclick = () => loadReport(true);
 $('report-close').onclick = () => { $('report').hidden = true; };
 $('open-logs').onclick = () => toggleLogs($('assistant-logs').hidden);
@@ -134,7 +134,11 @@ $('wake').onclick = () => wake(true); $('close').onclick = closeByUser;
 dialog.addEventListener('click', e => { if (e.target === dialog) { const r=dialog.getBoundingClientRect(); if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom) closeByUser(); } });
 document.addEventListener('keydown', e => { if (e.code === 'Space' && !['INPUT','TEXTAREA','BUTTON'].includes(document.activeElement.tagName)) { e.preventDefault(); wake(true); } });
 $('pause').onclick = () => { paused = !paused; $('pause').textContent = paused ? 'resume' : 'pause'; if (!paused) { queued.forEach(e=>renderEvent(e)); queued=[]; } };
-$('mic').onclick = async () => { try { const r = await fetch(voiceReady ? '/api/voice/stop' : '/api/voice/start',{method:'POST'}); const data=await r.json(); if (!r.ok) throw Error(data.message || 'Could not start microphone.'); notice(data.message); } catch(e) { notice(e.message); } };
+// A paired device (the iPad) opens the link the Eddie computer prints; the token stays in the
+// URL fragment, which is never sent in a request line and is not written to browser storage.
+const pairToken = new URLSearchParams(String(location.hash || '').slice(1)).get('pair');
+const control = (path, body) => fetch(path, {method:'POST', headers: {'Content-Type':'application/json', ...(pairToken ? {Authorization:`Bearer ${pairToken}`} : {})}, body: JSON.stringify(body || {})});
+$('mic').onclick = async () => { try { const r = await control(voiceReady ? '/api/voice/stop' : '/api/voice/start'); const data=await r.json(); if (!r.ok) throw Error(data.message || 'Could not start microphone.'); notice(data.message); } catch(e) { notice(e.message); } };
 const stream = new EventSource('/events'); stream.onopen = () => { $('feed-status').textContent='Connected to local event bridge'; }; stream.onerror=()=>{ $('feed-status').textContent='Reconnecting to local event bridge…'; if(dialog.open) dismiss(); }; stream.onmessage=e=>{ try { const event=JSON.parse(e.data); if(event.type==='traffic_status'){ $('connection').firstChild.textContent=event.connected?'Connected':'Waiting'; $('source-label').textContent=event.connected?'LIVE TRAFFIC':'WAITING FOR TRAFFIC'; } else consumeEvent(event); } catch {} };
 // The traffic API runs on the same machine as this page (localhost on the Mac, its LAN IP from the iPad).
 const trafficUrl = new URLSearchParams(location.search).get('traffic') || `ws://${location.hostname || 'localhost'}:8000/ws/events`;
