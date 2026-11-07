@@ -36,7 +36,7 @@ Each `rule_change` adds a `[rule]` feed row and a toast, e.g. “Rule added: blo
 
 While voice is `confirming`, the overlay shows Eddie's read-back (“Lock down the TV?”) and “SAY YES TO CONFIRM OR NO TO CANCEL”. Both clear on the next reply, on dismissal (Escape, ✕, silence) and when `expires_in_ms` runs out. Nothing is hover-only and nothing is stored in the browser.
 
-Manual check (needs the API and DNS server sharing one `eddie.db`, plus this bridge):
+Manual check (needs the API and DNS server sharing one `eddie.db`, plus this bridge). Against the Docker API, add `-H "Authorization: Bearer $EDDIE_API_TOKEN"` to the `curl` writes below, since it sees the host as remote:
 
 1. Open the dashboard on the Mac and on the iPad (kiosk / Add to Home Screen).
 2. `curl -X POST localhost:8000/rules -H 'Content-Type: application/json' -d '{"pattern":"device-metrics-us.amazon.com","action":"block","created_by":"voice"}'`: both screens show the toast and `[rule]` row, and the list shows the rule.

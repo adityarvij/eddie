@@ -26,7 +26,7 @@ class FeedAdapterTests(unittest.TestCase):
         old=dict(api.ai_verdicts)
         api.ai_verdicts.clear()
         try:
-            with TestClient(api.app) as client:
+            with TestClient(api.app, client=('127.0.0.1', 50000)) as client:
                 verdict={'domain':'demo.example','label':'needed','confidence':.9,'reason':'Demo content','ts':1000}
                 client.post('/ai/verdict',json=verdict).raise_for_status()
                 self.assertEqual(client.get('/ai/verdicts').json()[0]['label'],'needed')
