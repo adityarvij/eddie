@@ -2,7 +2,8 @@
 import json
 import re
 
-WAKE = re.compile(r'^\s*(?:hey|hi|okay)\s+(?:eddie|eddy|edie|ed)\b', re.I)
+# Unanchored so a wake mid-conversation counts; bare "ed" is excluded because "hey Ed" is ordinary speech.
+WAKE = re.compile(r'\b(?:hey|hi|okay)\s+(?:eddie|eddy|edie)\b', re.I)
 
 
 def matches_phrase(text):
