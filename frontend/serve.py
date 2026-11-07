@@ -1,10 +1,13 @@
 """Local dashboard and offline voice bridge. No microphone audio is persisted."""
 import argparse
+import hmac
 import ipaddress
 import json
 import os
 import queue
 import re
+import secrets
+import socket
 import subprocess
 import sys
 import threading
@@ -27,6 +30,12 @@ voice_thread = None
 start_lock = threading.Lock()
 speaking = threading.Event()
 counts = {'requests': 0, 'blocked': 0}
+# Pairing token for control from another device (the iPad). Kept in memory; a new one each start
+# unless EDDIE_DASHBOARD_TOKEN pins it so a saved Home Screen link keeps working.
+token = os.environ.get('EDDIE_DASHBOARD_TOKEN') or secrets.token_urlsafe(24)
+# Controls a paired device may use. Starting or stopping the microphone, and feeding traffic
+# events, stay on the Eddie computer whatever token is sent.
+PAIRED_CONTROLS = {'/api/voice/ask'}
 
 def is_local(address):
     try:
@@ -34,6 +43,33 @@ def is_local(address):
     except ValueError:
         return False
     return (getattr(ip, 'ipv4_mapped', None) or ip).is_loopback
+
+def trusted_host(host):
+    """The Host header names this machine by IP, localhost or mDNS, never a domain that could rebind to it."""
+    name = re.sub(r':\d+$', '', host or '').strip('[]').rstrip('.').lower()
+    if name == 'localhost' or name.endswith('.local'):
+        return True
+    try:
+        ipaddress.ip_address(name)
+        return True
+    except ValueError:
+        return False
+
+def authorized(header):
+    scheme, _, value = (header or '').partition(' ')
+    return scheme.lower() == 'bearer' and hmac.compare_digest(value.strip().encode(), token.encode())
+
+def lan_ip():
+    """This machine's address on its default route, or None when offline. Nothing is sent."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(('192.0.2.1', 9))
+        ip = s.getsockname()[0]
+        return None if ip.startswith('127.') else ip
+    except OSError:
+        return None
+    finally:
+        s.close()
 
 def emit(event):
     with lock:
@@ -152,14 +188,20 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         global voice_thread
-        # The iPad may view the dashboard over the LAN, but controls stay on this machine
-        # until the bridge has authenticated local control.
-        if not is_local(self.client_address[0]):
-            return self.json_response(403, {'message': 'Controls only work on the Eddie computer.'})
+        # A rebound domain would pass the Origin check below, so the Host must name this machine.
+        if not trusted_host(self.headers.get('Host')):
+            return self.json_response(403, {'message': 'Local requests only.'})
         # Reject cross-origin browser requests to this local control service.
         origin = self.headers.get('Origin')
         if origin and origin != 'http://' + self.headers.get('Host', ''):
             return self.json_response(403, {'message': 'Local requests only.'})
+        # The Eddie computer itself is trusted. Another device (the iPad) needs the pairing token,
+        # and even then only reaches PAIRED_CONTROLS: the microphone is never switched remotely.
+        if not is_local(self.client_address[0]):
+            if self.path not in PAIRED_CONTROLS:
+                return self.json_response(403, {'message': 'This control only works on the Eddie computer.'})
+            if not authorized(self.headers.get('Authorization')):
+                return self.json_response(401, {'message': 'Pair this device with the link printed by the Eddie computer.'})
         length = int(self.headers.get('Content-Length', '0'))
         if length > 65536:
             return self.json_response(413, {'message': 'Request too large.'})
@@ -205,7 +247,7 @@ class Handler(SimpleHTTPRequestHandler):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--port', type=int, default=5173)
-    # 0.0.0.0 lets the iPad view the dashboard; mic and other controls stay localhost-only.
+    # 0.0.0.0 lets the iPad view the dashboard; a paired iPad may ask, the mic stays localhost-only.
     parser.add_argument('--host', default=os.environ.get('EDDIE_DASHBOARD_HOST', '127.0.0.1'))
     args = parser.parse_args()
     if os.environ.get('EDDIE_AGENT', 'ollama') != 'off':
@@ -220,5 +262,9 @@ if __name__ == '__main__':
             print(f'Local agent off: EDDIE_OLLAMA_URL refused: {error}.', flush=True)
     print(f'Eddie dashboard: http://localhost:{args.port}', flush=True)
     if not is_local(args.host):
-        print(f'Viewable from the network on port {args.port}; controls only work on this computer.', flush=True)
+        # The token rides in the fragment, which browsers never send, so it stays out of request logs.
+        address = lan_ip() or '<this computer IP>'
+        print(f'Viewable from the network on port {args.port}. To ask Eddie from another device, open '
+              f'http://{address}:{args.port}/#pair={token} there. '
+              'The microphone only works on this computer.', flush=True)
     ThreadingHTTPServer((args.host, args.port), Handler).serve_forever()

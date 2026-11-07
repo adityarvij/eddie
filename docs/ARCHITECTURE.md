@@ -42,12 +42,21 @@ Offline mode (#26, `eddie/offline.py`): the watcher also checks `engine_state.of
 
 `eddie/store.py` owns `eddie.db` (path from `EDDIE_DB`) and creates the README schema on first open (WAL mode, so readers don't block the writer). Every parsed DNS question writes one `queries` row with only ts (ms, arrival), device (MAC from `devices.py`, or the client IP if unknown), domain, qtype, action, source and reason; SERVFAILs are logged with the decision that was made, and non-DNS or question-less packets are not logged. The DNS task only puts the row on a bounded in-memory queue (10,000 rows); one writer thread batches inserts. If the writer falls behind, rows are dropped and counted rather than slowing DNS. Ctrl-C and SIGTERM flush the queue before exit; a hard kill loses at most the unflushed rows. Privacy measures: rows older than `EDDIE_RETENTION_DAYS` (default 7) are pruned at start and hourly with `secure_delete` plus a WAL truncate; the database files are `0600`; `EDDIE_DB=off` disables the log. The API reads it for `/devices` counts and for the live "what they know" report (`GET /what-they-know` opens its own read-only connection in the thread pool and loads the window's rows, falling back to the in-memory feed when the log has none); the live feed is still the API's own in-memory list. Every privacy decision and known gap is tracked in [PRIVACY.md](PRIVACY.md).
 
+## Dashboard bridge control (#40)
+
+`frontend/serve.py` serves the page, the `/events` SSE stream and read-only GET endpoints such as `/api/voice/status` to anyone who can reach it; with `--host 0.0.0.0` that includes the iPad. Control routes are POSTs and pass three checks in order:
+
+1. **Host.** The `Host` header must be an IP literal, `localhost` or a `.local` mDNS name, so a DNS-rebound domain can't reach loopback controls from a browser. Then the existing same-origin check rejects cross-origin browser requests.
+2. **Loopback is trusted.** Requests from the Eddie computer itself need no token.
+3. **Other devices need the pairing token and only reach `/api/voice/ask`.** The token comes from `EDDIE_DASHBOARD_TOKEN`, or is random (`secrets.token_urlsafe`) on each start. When bound beyond loopback, `serve.py` prints `http://<LAN IP>:5173/#pair=<token>`. The page sends it as `Authorization: Bearer <token>` (constant-time compare). A missing or wrong token gets 401. `/api/voice/start`, `/api/voice/stop`, `/api/voice/dismiss` and `/api/events` answer 403 from any other device, with or without the token: the microphone is never switched from the network, and traffic events only come from this machine.
+
+The token is in the URL fragment, which browsers don't send, so it isn't in request lines or access logs, and the page keeps it nowhere but the URL. A random token changes on restart, so set `EDDIE_DASHBOARD_TOKEN` for a Home Screen link that survives restarts. There is no typed-ask box in the page yet; `window.eddie.ask(text)` is the client hook. The traffic API on port 8000 is separate and still unauthenticated (see PRIVACY.md).
+
 ## Remaining work
 
 - Train and evaluate the actual Hey Eddie model; record provenance, license, threshold and false-wake metrics.
 - The offline installer and hash check are done (#39, `scripts/provision_voice.py`); still pin the custom Hey Eddie model once it's trained, and run `--hardware` and an offline voice check on the final Pi.
 - Wire voice allow / undo to the `/rules` contract (docs/EVENTS.md): undo by deleting the returned id. Block is done (#11). Expiry is not built.
-- Add authenticated local control before allowing dashboard controls off localhost. `serve.py --host 0.0.0.0` exposes only viewing (page, event stream, status); every POST control is refused unless it comes from a loopback address. Do not expose microphone controls publicly.
 - Rehearse the calibrated WebRTC VAD on the actual speakerphone; adjust aggressiveness/noise margin for the room.
 - Ready cue and capture suppression are implemented; test acoustic echo tails on final hardware.
 - Add bounded request admission, cancellation, streaming replies, device reconnect and model caching for Piper.
