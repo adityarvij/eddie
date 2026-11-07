@@ -29,6 +29,8 @@ from .events import Action, AIVerdictEvent, ModeUpdate, OfflineUpdate, QueryEven
 
 # In memory for now; SQLite (store.py) replaces this once the DNS side lands.
 recent: deque[dict] = deque(maxlen=20000)
+# The feed keeps no more history than eddie.db does (#129).
+FEED_RETENTION_MS = int(float(os.environ.get("EDDIE_RETENTION_DAYS", store.RETENTION_DAYS)) * 86_400_000)
 totals = {"seen": 0, "blocked": 0}
 state = {"home_mode": False}
 clients: set[WebSocket] = set()
@@ -40,6 +42,18 @@ APPLY_TIMEOUT = 2.0  # seconds to wait for DNS to load a rule or offline change 
 APPLY_POLL = 0.02
 
 app = FastAPI(title="Eddie traffic")
+
+
+def feed() -> deque[dict]:
+    """The live feed, after dropping events older than the retention window.
+
+    Events arrive roughly in time order, so trimming from the oldest end is enough.
+    Called on every read and ingest, so history expires even while the network is idle.
+    """
+    cutoff = int(time.time() * 1000) - FEED_RETENTION_MS
+    while recent and recent[0]["ts"] < cutoff:
+        del recent[0]
+    return recent
 
 
 async def broadcast(msg: dict) -> None:
@@ -54,13 +68,16 @@ async def broadcast(msg: dict) -> None:
 @app.post("/ingest")
 async def ingest(body: QueryEvent | list[QueryEvent]):
     events = body if isinstance(body, list) else [body]
+    cutoff = int(time.time() * 1000) - FEED_RETENTION_MS
+    feed()
     for ev in events:
         company, category = labels.lookup(ev.domain)
         every = timing["beacons"].observe(ev.device_mac, ev.domain, ev.ts)
         idle = timing["idle"].observe(ev.device_mac, ev.ts, ev.action == "allow" and category in labels.HUMAN)
         row = {**ev.model_dump(), "id": next(ids), "company": company, "category": category,
                "beacon_s": every and round(every / 1000), "idle": idle}
-        recent.append(row)
+        if ev.ts >= cutoff:  # already past retention: still counted and broadcast, never kept
+            recent.append(row)
         totals["seen"] += 1
         totals["blocked"] += ev.action == "block"
         await broadcast(row)
@@ -87,17 +104,18 @@ def cached_ai_verdicts():
 @app.get("/events")
 def events(since: int = 0, device: str | None = None, limit: int = 200,
            action: Action | None = None, domain: str | None = None):
-    rows = [e for e in recent if e["ts"] > since and (device is None or e["device"] == device)
+    rows = [e for e in feed() if e["ts"] > since and (device is None or e["device"] == device)
             and (action is None or e["action"] == action) and (domain is None or e["domain"] == domain)]
     return rows[-limit:]
 
 
 @app.get("/summary")
 def summary(window: Literal["15m", "1h", "24h"] = "1h"):
+    events = list(feed())
     # text and companies cover the last hour; devices covers the requested window.
-    return {**totals, "home_mode": state["home_mode"], "text": insights.summary_text(list(recent)),
-            "companies": insights.company_counts(list(recent)), "company_window_seconds": 3600,
-            "window": window, "devices": insights.device_counts(list(recent), insights.WINDOWS_MS[window])}
+    return {**totals, "home_mode": state["home_mode"], "text": insights.summary_text(events),
+            "companies": insights.company_counts(events), "company_window_seconds": 3600,
+            "window": window, "devices": insights.device_counts(events, insights.WINDOWS_MS[window])}
 
 
 @app.get("/what-they-know")
@@ -130,7 +148,7 @@ def report_events(hours: int) -> tuple[list[dict], str]:
                 return events, "eddie.db"
         except sqlite3.Error:
             pass  # no queries table yet, or unreadable: the feed is all there is
-    return list(recent), "feed"
+    return list(feed()), "feed"
 
 
 @app.get("/mode")
@@ -247,7 +265,7 @@ async def ws_events(ws: WebSocket):
     clients.add(ws)
     await ws.send_text(json.dumps({
         "type": "snapshot",
-        "events": list(recent)[-60:],
+        "events": list(feed())[-60:],
         "ai_verdicts": list(ai_verdicts.values()),
         "totals": totals,
         "home_mode": state["home_mode"],

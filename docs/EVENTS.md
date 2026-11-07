@@ -206,7 +206,7 @@ printable characters. Answers with the stored device and its `name`.
 `hours` is 1 to 168. Returns `{demo: false, source, hours, facts, text}`.
 `source` is `"eddie.db"` when the DNS server's query log (`EDDIE_DB`, read-only)
 has lookups in the window, otherwise `"feed"`: the API's in-memory event list
-(at most 20,000 events, lost on restart), which is what `fake_traffic.py` fills.
+(at most 20,000 events and none older than `EDDIE_RETENTION_DAYS`, lost on restart), which is what `fake_traffic.py` fills.
 The two are never mixed. Database rows are named by device label, else
 "<vendor> device", else "unlabeled device" (all such devices share that name);
 never by MAC, IP or DHCP hostname. Each fact is `{fact, evidence, confidence}`
@@ -266,7 +266,7 @@ Confirmation: after Eddie reads back a risky action, the bridge emits `voice_sta
 
 ## Per-device counts and event filters (#29)
 
-`GET /summary?window=15m|1h|24h` (default `1h`; anything else gets 422) adds `window` and `devices`: one row per device label seen in that window, `{device, requests, blocked, flagged, blocked_companies}`, busiest first, where `blocked_companies` is up to three `{company, blocked}` rows. `text` and `companies` still cover the last hour. Like the rest of `/summary`, counts come from the API's in-memory feed (at most 20,000 events), so a busy 24-hour window can be partial.
+`GET /summary?window=15m|1h|24h` (default `1h`; anything else gets 422) adds `window` and `devices`: one row per device label seen in that window, `{device, requests, blocked, flagged, blocked_companies}`, busiest first, where `blocked_companies` is up to three `{company, blocked}` rows. `text` and `companies` still cover the last hour. Like the rest of `/summary`, counts come from the API's in-memory feed (at most 20,000 events, none older than `EDDIE_RETENTION_DAYS`), so a busy 24-hour window can be partial.
 
 `GET /events` also takes `action=allow|block|flag` (anything else gets 422) and `domain=` (exact, already-normalized match). The voice agent uses these for recent blocks and domain explanations.
 
