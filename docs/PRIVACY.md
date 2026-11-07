@@ -22,7 +22,9 @@ Owner: [eddie/store.py](../eddie/store.py), written by [eddie/dns_server.py](../
 | The file is not encrypted at rest. Anyone with root, or the SD card, can read up to 7 days of history. | gap |
 | A hard kill (`kill -9`, power loss) loses queued rows. That's safe for privacy but leaves a hole in the history. Ctrl-C and SIGTERM flush first. | known behaviour |
 | **Forget timer:** health, beliefs and kids categories would be summarised and their raw rows deleted after 24 hours ("never stored beyond the day"). Needs category labels on stored rows first. | planned |
-| The `devices`, `rules` and `ai_verdicts` tables exist but nothing writes to them yet. `ai_verdicts` will hold domain-level verdicts only, nothing per household. | planned |
+| The `devices` and `rules` tables exist but nothing writes to them yet. | planned |
+| `ai_verdicts` holds one row per domain (label, confidence, reason, time): no device, IP or count. It is pruned with the query log after `EDDIE_RETENTION_DAYS`, because the list of domains a household looked up is history even without times. A domain seen again is classified again. Tested. | implemented |
+| **No new store for the classifier's queue.** It reads the flagged rows already in `queries`, so classification keeps nothing beyond the query log, and with `EDDIE_DB=off` nothing is classified at all. | implemented |
 
 ## Traffic API and live feed (port 8000)
 
@@ -69,7 +71,10 @@ Owner: [eddie/store.py](../eddie/store.py), written by [eddie/dns_server.py](../
 | Voice commands that change settings must match the whole utterance, so negations or extra words don't trigger them. | implemented |
 | Rules, lockdown and email are not wired up; Eddie says that nothing changed. | implemented |
 | The local model gets only computed facts (`{fact, evidence, confidence}`), never raw logs. Every number in its output is checked against the facts. | planned |
-| The classifier gets only the domain name, device label and counts. | planned |
+| The classifier sends the model only the domain, the device's label (null until #14; never its MAC or IP), lookups in the last 10 minutes and an idle flag. Tested. | implemented |
+| The classifier only talks to `localhost` or a loopback or private **IP literal**. Hostnames are refused, so DNS can't point it somewhere else; redirects aren't followed and `HTTP(S)_PROXY` is ignored. Tested. | implemented |
+| Domains, model output and verdicts are never written to the classifier's log; it logs only counts and error types. Malformed model output is rejected, not stored. Tested. | implemented |
+| Ollama itself may keep its own logs; its default doesn't log prompts, but `OLLAMA_DEBUG` would. | known behaviour |
 | Email is sent only after spoken confirmation; lockdown needs confirmation too. | planned |
 | Inferences ("what they know") stay on the box, because the inferences are themselves a profile of the household. | planned |
 
@@ -98,7 +103,7 @@ Owner: [eddie/store.py](../eddie/store.py), written by [eddie/dns_server.py](../
 | Tavily / Exa (optional) | One unknown domain name, never user data | planned, optional |
 | Model downloads | Nothing about the household | setup only, never at runtime |
 
-Ollama runs on the host and is local. The setup checklist's `OLLAMA_HOST=0.0.0.0` exposes it, unauthenticated, to everyone on the hotspot. **Gap:** prefer a localhost bind when the Pi isn't calling it.
+Ollama runs on the host and is local; the classifier refuses any non-private Ollama address, so the domains it sends stay on the home network. The setup checklist's `OLLAMA_HOST=0.0.0.0` exposes it, unauthenticated, to everyone on the hotspot. **Gap:** prefer a localhost bind when the Pi isn't calling it.
 
 ## Doc mismatches to fix
 

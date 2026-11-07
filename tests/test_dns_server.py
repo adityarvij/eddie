@@ -11,7 +11,7 @@ from dnslib import QTYPE, RCODE, RR, A, DNSRecord
 from eddie import decision, dns_server, store
 
 BLOCKED = 'device-metrics-us.amazon.com'  # blocked by the keyword heuristic
-UNKNOWN = 'unknown, queued for classifier'
+UNKNOWN = decision.UNKNOWN
 REAL_IP = '93.184.216.34'
 
 

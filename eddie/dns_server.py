@@ -8,6 +8,8 @@ The decision comes from decision.evaluate, which never waits on a model.
 Every lookup is written to the queries table in eddie.db (EDDIE_DB) through
 store.QueryLog, which queues the row and writes it off the event loop.
 EDDIE_DB=off logs nothing; EDDIE_RETENTION_DAYS (default 7) bounds history.
+Rules and AI verdicts written to eddie.db by other processes (rules API,
+classifier) are reloaded into the decision engine within about a second.
 
 Run (port 53):            sudo .venv/bin/python -m eddie.dns_server
 Development (no sudo):    EDDIE_DNS_PORT=8053 uv run python -m eddie.dns_server
@@ -17,15 +19,18 @@ import asyncio
 import logging
 import os
 import signal
+import sqlite3
 import time
 
 from dnslib import AAAA, QTYPE, RCODE, RR, A, DNSRecord
 
 from . import decision
+from . import store
 from .store import QueryLog, query_log_from_env
 
 BLOCK_TTL = 60
 UPSTREAM_TIMEOUT = 2.0  # seconds per upstream before trying the next one
+RELOAD_EVERY = 1.0  # seconds between checks of eddie.db for new rules or verdicts
 MAX_IN_FLIGHT = 512  # lookups being answered at once; extra packets are dropped
 
 log = logging.getLogger("eddie.dns")
@@ -148,6 +153,36 @@ async def serve(host: str, port: int, upstreams: list[tuple[str, int]],
     return transport
 
 
+class StoreWatcher:
+    """Reloads rules and AI verdicts into the decision engine when they change."""
+
+    def __init__(self, path: str, engine: decision.Engine = decision.engine):
+        self.conn = store.connect(path)
+        self.engine = engine
+        self.seen = None
+
+    def poll(self) -> bool:
+        """Reload if rules or verdicts changed since the last poll. True if it did."""
+        changed = self.conn.execute(
+            "SELECT (SELECT count(*) || ':' || ifnull(max(id), 0) || ':' || ifnull(max(ts), 0) FROM rules),"
+            " (SELECT count(*) || ':' || ifnull(max(ts), 0) FROM ai_verdicts)").fetchone()
+        if changed == self.seen:
+            return False
+        self.engine.load_from_store(self.conn)
+        self.seen = changed
+        return True
+
+
+async def watch_store(watcher: StoreWatcher, every: float = RELOAD_EVERY) -> None:
+    """Poll in a worker thread so DNS never waits on disk."""
+    while True:
+        try:
+            await asyncio.to_thread(watcher.poll)
+        except sqlite3.Error as exc:
+            log.warning("reloading rules and verdicts failed (%s)", exc)
+        await asyncio.sleep(every)
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
     host = os.environ.get("EDDIE_DNS_HOST", "0.0.0.0")
@@ -165,12 +200,15 @@ def main() -> None:
         log.info("listening on %s:%s, upstream %s, query log %s",
                  host, port, ", ".join(f"{h}:{p}" for h, p in upstreams),
                  f"{query_log.path} ({query_log.retention_days:g} days)" if query_log else "off")
+        watcher = asyncio.create_task(watch_store(StoreWatcher(query_log.path))) if query_log else None
         stop = asyncio.Event()
         # docker stop / systemd send SIGTERM; stop cleanly so queued rows get flushed.
         asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, stop.set)
         try:
             await stop.wait()
         finally:
+            if watcher:
+                watcher.cancel()
             transport.close()
 
     try:

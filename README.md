@@ -195,7 +195,17 @@ Hand this section and the ones below to a coding agent (Claude Code etc.). Targe
 
 ### Running the DNS server
 
-`eddie/dns_server.py` implements steps 1, 3 and 4 above (UDP only) and the `queries` half of step 5: every lookup writes one row to `eddie.db` through `eddie/store.py`. The rest is not built yet: the device is the client IP until #14 (so `queries.device_mac` holds the IP for now), and nothing is published to the live feed until #16. `eddie/decision.py` implements the full decision order below, but it starts empty: the blocklists and allowlist load in #8, rules come from #12, and AI verdicts from #27. Until then only the keyword heuristic blocks, and everything else is flagged and queued for the classifier.
+`eddie/dns_server.py` implements steps 1, 3 and 4 above (UDP only) and the `queries` half of step 5: every lookup writes one row to `eddie.db` through `eddie/store.py`. The rest is not built yet: the device is the client IP until #14 (so `queries.device_mac` holds the IP for now), and nothing is published to the live feed until #16. `eddie/decision.py` implements the full decision order below. The blocklists and allowlist aren't loaded until #8 and rules come from #12, so today only the keyword heuristic and AI verdicts block; everything else is flagged.
+
+### Running the classifier
+
+`eddie/classifier.py` labels unknown domains with the local model. Its queue is the query log itself: flagged `queries` rows from the last hour with no `ai_verdicts` row yet. Each verdict is written to `ai_verdicts`, and the DNS server reloads rules and verdicts from `eddie.db` about once a second, so the next lookup of that domain uses it (about 2.5 s end to end with `llama3.2:3b` on the development Mac). DNS never waits on the model. The `ai_verdict` live-feed event isn't sent yet (#16).
+
+```bash
+uv run python -m eddie.classifier   # needs Ollama running and the same EDDIE_DB as the DNS server
+```
+
+Settings: `EDDIE_OLLAMA_URL` (default `http://127.0.0.1:11434`; must be `localhost` or a loopback or private IP literal, so on the Pi use `http://<Mac IP>:11434`), `EDDIE_CLASSIFIER_MODEL` (default `llama3.2:3b`). With `EDDIE_DB=off` there's no queue, and the classifier refuses to start.
 
 ```bash
 uv run python -m eddie.dns_server                      # Mac: 0.0.0.0:53 binds without sudo on recent macOS
