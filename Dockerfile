@@ -3,7 +3,7 @@
 FROM python:3.11-slim
 
 WORKDIR /app
-RUN pip install --no-cache-dir "fastapi>=0.110" "uvicorn[standard]>=0.29"
+RUN pip install --no-cache-dir "fastapi>=0.110" "uvicorn[standard]>=0.29" "tldextract>=5.1,<6"
 
 COPY eddie/ eddie/
 COPY scripts/fake_traffic.py scripts/

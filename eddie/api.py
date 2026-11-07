@@ -19,6 +19,7 @@ recent: deque[dict] = deque(maxlen=20000)
 totals = {"seen": 0, "blocked": 0}
 state = {"home_mode": False}
 clients: set[WebSocket] = set()
+ai_verdicts: dict[str, dict] = {}
 ids = itertools.count(1)
 
 app = FastAPI(title="Eddie traffic")
@@ -50,8 +51,17 @@ async def ingest(body: QueryEvent | list[QueryEvent]):
 @app.post('/ai/verdict')
 async def ai_verdict(body: AIVerdictEvent):
     # Metadata only: neither rewrite history nor count an AI result as a query.
-    await broadcast({'type': 'ai_verdict', **body.model_dump()})
+    event = {'type': 'ai_verdict', **body.model_dump()}
+    if body.domain not in ai_verdicts and len(ai_verdicts) >= 1000:
+        ai_verdicts.pop(next(iter(ai_verdicts)))
+    ai_verdicts[body.domain] = event
+    await broadcast(event)
     return {'ok': True}
+
+
+@app.get('/ai/verdicts')
+def cached_ai_verdicts():
+    return list(ai_verdicts.values())
 
 
 @app.get("/events")
@@ -91,6 +101,7 @@ async def ws_events(ws: WebSocket):
     await ws.send_text(json.dumps({
         "type": "snapshot",
         "events": list(recent)[-60:],
+        "ai_verdicts": list(ai_verdicts.values()),
         "totals": totals,
         "home_mode": state["home_mode"],
     }))

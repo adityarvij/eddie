@@ -68,3 +68,10 @@ The worker uses a local WebRTC speech gate plus an idle noise-energy estimate, r
 ### Classifier live events and verification (#27)
 
 The worker publishes validated metadata to local `POST /ai/verdict`; the API broadcasts `ai_verdict` on `/ws/events`. The frontend prints the verdict without counting it as another DNS lookup. The two-thread inference pool is bounded; further work stays in the existing query log. This verifies off-path execution and cache/event behavior, not AI correctness for every domain. The public `api.netflix.com` smoke test returned a valid `needed` verdict in 3.94 seconds on the development Mac; this is one measurement, not a latency guarantee under load. Provision Ollama/model before runtime; no model download is triggered.
+
+
+## Real AI on the scripted demo feed
+
+`python -m eddie.feed_classifier` polls the local API for scripted demo queries and feeds the real bounded Ollama worker using an in-memory SQLite queue/cache. Real DNS still uses the durable database worker. `run_all.sh` launches the adapter only with the fake-traffic profile. Stopping it loses its cache, and no demo network history is added to disk. It polls up to 2,000 recent events once per second and retains at most 20,000 query rows for an hour; heavy traffic can outrun that window. Inference remains on the host with local-only URLs, not in the DNS or API request path.
+
+The API retains at most 1,000 verdicts in memory, returns them from `GET /ai/verdicts`, and includes `ai_verdicts` in WebSocket snapshots so a browser refresh does not hide completed results. The fake generator uses these real cached verdicts for later decisions, while still labelling the traffic itself as scripted demo traffic in its launcher/docs. The old hard-coded “sent to AI” and fabricated AI confidence text are removed. Unknowns say “awaiting classification”; an `[ai]` line is printed only after actual model output is validated. These verdicts do not prove anything about real Fire Stick traffic.
