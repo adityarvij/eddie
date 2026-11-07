@@ -13,7 +13,7 @@ Implemented tools are backend summary reads and home-mode writes. Home mode is b
 - Train and evaluate the actual Hey Eddie model; record provenance, license, threshold and false-wake metrics.
 - Provision and hash all local assets; add a repeatable offline installer and hardware compatibility checks.
 - Integrate Will's rule endpoints only after their request/response contract exists; add read-back, expiry and undo semantics.
-- Add authenticated local control before exposing the dashboard bridge off localhost. Do not expose microphone controls publicly.
+- Add authenticated local control before allowing dashboard controls off localhost. `serve.py --host 0.0.0.0` exposes only viewing (page, event stream, status); every POST control is refused unless it comes from a loopback address. Do not expose microphone controls publicly.
 - Add calibrated VAD for noisy rooms; RMS endpointing is the first implementation. Consider an in-memory pre-roll for commands spoken without a pause.
 - Add an audible ready cue without contaminating captured commands; currently the visual listening overlay is the cue.
 - Add bounded request admission, cancellation, streaming replies, device reconnect and model caching for Piper.
