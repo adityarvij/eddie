@@ -1,6 +1,6 @@
 const $ = id => document.getElementById(id);
 let paused = false, total = 0, blocked = 0, deviceSet = new Set(), queued = [], voiceReady = false, speaking = false, closeTimer;
-let is_eddie_active = false, exitTimer;
+let is_eddie_active = false, exitTimer, confirming = false, confirmTimer;
 const dialog = $('assistant');
 function updateCounts() { $('allowed').textContent = allowedCount.toLocaleString(); $('blocked-count').textContent = blocked.toLocaleString(); }
 let allowedCount = 0;
@@ -27,16 +27,20 @@ function renderEvent(event, device, action) {
   $('feed').scrollTop = $('feed').scrollHeight;
 
 }
+function setConfirming(on, ms = 0) { confirming = on; clearTimeout(confirmTimer); if (on) confirmTimer = setTimeout(() => { confirming = false; setAssistantState('listening'); }, ms); }
 function setAssistantState(state) {
+  // A pending risky action keeps asking for yes or no until it is answered or expires.
+  if (confirming && ['idle','ready','listening'].includes(state)) state = 'confirming';
   const display = state === 'idle' ? 'ready' : state;
   $('character').dataset.state = display;
   $('character').classList.toggle('talking', state === 'speaking');
-  $('assistant-state').textContent = display === 'ready' ? 'WAITING FOR YOUR NEXT QUESTION' : 'EDDIE IS ' + display.toUpperCase();
+  $('assistant-state').textContent = display === 'ready' ? 'WAITING FOR YOUR NEXT QUESTION' : display === 'confirming' ? 'SAY YES TO CONFIRM OR NO TO CANCEL' : 'EDDIE IS ' + display.toUpperCase();
 }
 function wake(preview = false) { clearTimeout(exitTimer); dialog.classList.remove('closing'); is_eddie_active = true; clearTimeout(closeTimer); if (preview || !voiceReady) closeTimer = setTimeout(dismiss, 4000); if (!dialog.open) dialog.showModal(); $('assistant-title').textContent = "Hey, what's up?"; $('assistant-description').textContent = 'Ask me what your devices have been up to.'; setAssistantState('listening'); }
 // Closing Eddie returns to the live feed, scrolled to the newest activity.
 function dismiss() {
   is_eddie_active = false;
+  setConfirming(false);
   clearTimeout(closeTimer);
   if (!dialog.open || dialog.classList.contains('closing')) return;
   dialog.classList.add('closing');
@@ -55,7 +59,7 @@ function toggleLogs(open) {
   if (open) { $('voice-logs').replaceChildren(...Array.from($('feed').children, row => row.cloneNode(true))); $('voice-logs').scrollTop = $('voice-logs').scrollHeight; $('close-logs').focus(); }
 }
 function voiceEvent(event) {
-  if (event.type === 'voice_state') { if (typeof event.is_eddie_active === 'boolean') is_eddie_active = event.is_eddie_active; if (event.state === 'dismissed') return dismiss(); if (['thinking','speaking','listening'].includes(event.state)) clearTimeout(closeTimer); if (event.state === 'listening' && (!dialog.open || dialog.classList.contains('closing'))) wake(); setAssistantState(event.state); }
+  if (event.type === 'voice_state') { if (typeof event.is_eddie_active === 'boolean') is_eddie_active = event.is_eddie_active; if (event.state === 'confirming') setConfirming(true, Number(event.expires_in_ms) || 15000); else if (['thinking','dismissed'].includes(event.state)) setConfirming(false); if (event.state === 'dismissed') return dismiss(); if (['thinking','speaking','listening'].includes(event.state)) clearTimeout(closeTimer); if (event.state === 'listening' && (!dialog.open || dialog.classList.contains('closing'))) wake(); setAssistantState(event.state); }
   if (event.type === 'agent_reply') { if (!dialog.open) wake(); $('assistant-description').textContent = event.text; }
   if (event.type === 'voice_status') { if (['off','error'].includes(event.status)) { $('character').classList.remove('talking'); if(dialog.open) dismiss(); } voiceReady = event.status === 'ready'; $('mic').textContent = voiceReady ? (event.engine === 'vosk' ? 'Stop mic · offline prototype ●' : 'Stop microphone ●') : 'Enable “Hey Eddie” ○'; if (event.message && !voiceReady) notice(event.message); else if (voiceReady) $('notice').hidden = true; }
   if (event.type === 'wake') wake();

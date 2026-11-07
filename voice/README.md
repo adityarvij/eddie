@@ -30,7 +30,7 @@ Configuration:
 
 Say “Hey Eddie,” then ask your question. The detector uses 16 kHz mono audio in 80 ms frames. Recording ends after 800 ms of silence following speech, or after 10 seconds of speech. After each reply Eddie listens again for a follow-up without the wake phrase; if no speech starts within 4 seconds, the conversation ends and Eddie is dismissed. Audio stays in memory. Speech output suspends recognition and queued audio is discarded before rearming. There is no always-on cloud transcription.
 
-Supported commands: “What's been going on?” (backend facts), “What do they know about me?” / “What do companies know about me?” (reads `GET /what-they-know`; facts computed by the backend, no model phrasing yet), “turn on home mode”, “turn off home mode”. Home mode updates backend state; actual network enforcement still depends on Will's decision engine. Domain rules, lockdown, email, follow-up confirmation and general Ollama conversation are pending. Typed questions use the same router. Do not claim these pending tools work.
+Supported commands: “What's been going on?” (backend facts), “What do they know about me?” / “What do companies know about me?” (reads `GET /what-they-know`; facts computed by the backend, no model phrasing yet), “turn on home mode”, “turn off home mode”. Home mode updates backend state; actual network enforcement still depends on Will's decision engine. Domain rules, lockdown, email and general Ollama conversation are pending; the confirmation step they will use is built (see below). Typed questions use the same router. Do not claim these pending tools work.
 
 ## Verification before demo
 
@@ -41,7 +41,7 @@ Supported commands: “What's been going on?” (backend facts), “What do they
 - Test self-trigger prevention with loud replies. No barge-in is supported yet.
 - Recheck latency, sound hardware, model licenses and memory on final ARM64 hardware.
 
-Automated command-routing tests: `python -m unittest discover -s tests -p 'test_voice*.py'`.
+Automated command-routing and confirmation tests: `python -m unittest discover -s tests -p 'test_voice*.py'`.
 
 ## Development prototype launch (2026-11-07)
 
@@ -57,3 +57,20 @@ Checks performed: ten unit tests; synthetic Piper “Hey Eddie” recognized twi
 Voice recovery: after an empty/failed transcription, Eddie says “Didn’t catch that. Try again.” and listens again. Four seconds of silence after the initial wake or during a follow-up dismisses Eddie back to the newest feed activity. Speech inference errors recover without disabling wake detection; microphone errors and bridge disconnects close the overlay. Listening/waiting uses a yellow ambient glow, speaking uses blue. Automated voice checks pass; live microphone/noisy-room accuracy still needs rehearsal.
 
 Conversation activity is explicit (`is_eddie_active`): wake activates it, each spoken reply starts a fresh four-second wait, and silence dismisses it. The initial wait has no retry prompt or extra four-second grace period. Speaking and transcription do not count toward the user response window.
+
+## Confirmation for risky actions
+
+Risky actions (lockdown and email, once built) never run from the command that asks for them. `voice_agent.Confirmation` holds at most **one** pending action, `{kind, args, prompt, expires_at}`, and speaks the read-back prompt followed by “Say yes to confirm or no to cancel.”
+
+| Next reply | Result |
+|---|---|
+| Exactly “yes”, “yeah”, “yep”, “yes please”, “do it”, “yes do it”, “go ahead” or “confirm” | Runs the action once. Success is spoken only if the action reports backend acknowledgment; otherwise Eddie says it couldn't confirm the change. |
+| Exactly “no”, “nope”, “no thanks”, “cancel”, “cancel it”, “stop”, “don't” or “never mind” | Discards it: “Cancelled. Nothing changed.” |
+| Another risky command | Replaces the pending action and says the earlier one was dropped. |
+| Anything else, including missed speech | Re-prompts once; a second unclear reply discards it without running. |
+| 15 seconds after the request | Expires. A late yes or no is told it expired; nothing runs. |
+| Conversation dismissed, microphone stopped or errored | Discarded. |
+
+Replies must match the whole utterance after lowercasing and removing punctuation, so “yes, but not the TV” is unclear, not a yes. Typed asks use the same router. While an action is pending the bridge emits `voice_state: confirming` with `kind`, `prompt` and `expires_in_ms` (never the action's arguments); the dashboard shows “say yes or no” until the next reply, dismissal or expiry. No pending action, reply or transcript is persisted or logged.
+
+No risky action is registered yet: `RISKY_ACTIONS` and `RISKY_COMMANDS` are empty until lockdown (#31) and email (#37) land, so today this flow is only reachable from unit tests. Closing the dashboard overlay by hand does not notify the worker; the 15 second expiry still applies.
