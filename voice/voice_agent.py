@@ -314,6 +314,10 @@ confirmation = Confirmation()
 # Optional local model for read-only questions: callable(raw text) -> reply, or
 # None when the model is unavailable. Set by frontend/serve.py (ollama_agent).
 ask_model = None
+# Optional local model that writes "what they know" inferences from the backend's
+# facts: callable(facts) -> text, or None to keep the backend's template.
+phrase_inferences = None
+REPORT_HOURS = 168  # "what do they know about me" reads up to a week of traffic
 
 
 def respond(text):
@@ -362,9 +366,14 @@ def route(text):
         return "I haven't changed anything. I can block or allow a domain, allow a service like Netflix, or turn home mode on or off; undo, lockdown and email aren't connected yet."
     if re.search(r'\bwhat (?:do|does|can|could) (?:\w+|my \w+|the \w+) (?:know|tell|guess|figure out|learn) about (?:me|us|my house|my home|our house)\b', text):
         try:
-            return str(what_they_know()['text'])
+            report = what_they_know(REPORT_HOURS)
         except Exception:
             return "I can't reach Eddie’s traffic backend, so I can't say what they know right now."
+        if phrase_inferences is not None and report.get('facts'):
+            reply = phrase_inferences(report['facts'])
+            if reply:
+                return reply
+        return str(report['text'])
     if text in ('hello', 'hi', 'hey', 'hey eddie'):
         return "Hey, I'm Eddie. Ask me what's been going on, tell me to block a domain, or to turn home mode on or off."
     if ask_model is not None:

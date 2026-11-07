@@ -65,7 +65,7 @@ class WhatTheyKnowTool(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 request.reset_mock()
                 self.assertEqual('Amazon gets the most tracking data.', voice_agent.respond(phrase))
-                request.assert_called_once_with('/what-they-know?hours=24')
+                request.assert_called_once_with('/what-they-know?hours=168')
 
     @patch('voice_agent.request', side_effect=OSError('offline'))
     def test_backend_failure(self, request):

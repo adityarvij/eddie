@@ -199,13 +199,34 @@ printable characters. Answers with the stored device and its `name`.
 
 ## What they know: `GET /what-they-know?hours=24`
 
-`hours` is 1 to 168. Returns `{hours, facts, text}` where each fact is
-`{fact, evidence, confidence}` computed in `eddie/inferences.py` from the
-in-memory event log (tracking company exposure, active streaming hours,
-after-midnight use, longest streaming gap, idle telemetry, and the device
+`hours` is 1 to 168. Returns `{demo: false, source, hours, facts, text}`.
+`source` is `"eddie.db"` when the DNS server's query log (`EDDIE_DB`, read-only)
+has lookups in the window, otherwise `"feed"`: the API's in-memory event list
+(at most 20,000 events, lost on restart), which is what `fake_traffic.py` fills.
+The two are never mixed. Database rows are named by device label, else
+"<vendor> device", else "unlabeled device" (all such devices share that name);
+never by MAC, IP or DHCP hostname. Each fact is `{fact, evidence, confidence}`
+computed in `eddie/inferences.py` (tracking company exposure, active streaming
+hours, after-midnight streaming sessions, longest streaming gap, idle telemetry,
+category by weekday, and the device
 and domain looked up most on a regular timer). `text` is a
-template over those facts; the local-model phrasing and number check are not
-built yet. Empty traffic returns no facts, never guesses.
+template over those facts; voice has the local model rephrase the facts
+(`voice/ollama_agent.py`) and falls back to `text`. Empty traffic returns no
+facts, never guesses.
+
+Sessions group requests of the same category with every gap under 10 minutes
+(`inferences.sessions`). Weekday facts need sessions on at least two calendar
+days: the weekday with the most session minutes per human category, and
+"heavier on weekends/weekdays" when one side's average daily minutes is at
+least 1.5 times the other's. A session counts at least one minute.
+
+`?demo=true` ignores `hours` and returns `{demo: true, label, hours: 168,
+facts, text}` computed from `eddie/demo_week.py`: an invented, seeded week
+(devices named "Living room TV (demo)" and "Kids' tablet (demo)", every event
+`demo: true`). `text` starts with `label`. Demo events are generated per
+request and never enter `/events`, the WebSocket feed or `eddie.db`. The
+voice tools only read the live report; "what do they know about me" asks for
+`hours=168`, and the dashboard's live panel does too.
 
 ## Local voice bridge (port 5173)
 

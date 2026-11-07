@@ -118,6 +118,13 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.json_response(200, api_request('/rules'))
             except Exception:
                 return self.json_response(502, {'message': 'Rules unavailable.'})
+        if self.path in ('/api/what-they-know', '/api/what-they-know?demo=1'):
+            # Read-only relay for the report panel; only these two fixed queries are forwarded.
+            try:
+                path = '/what-they-know?demo=true' if self.path.endswith('demo=1') else '/what-they-know?hours=168'
+                return self.json_response(200, api_request(path))
+            except Exception:
+                return self.json_response(502, {'message': 'Report unavailable.'})
         if self.path == '/events':
             self.send_response(200)
             self.send_header('Content-Type', 'text/event-stream')
@@ -207,6 +214,7 @@ if __name__ == '__main__':
         try:
             agent = ollama_agent.Agent()
             voice_agent.ask_model = lambda text: ollama_agent.answer(agent, text)
+            voice_agent.phrase_inferences = lambda facts: ollama_agent.phrase(agent, facts)
             print(f'Local agent: {agent.model} at {agent.url} (keyword router if it is unavailable).', flush=True)
         except ValueError as error:
             print(f'Local agent off: EDDIE_OLLAMA_URL refused: {error}.', flush=True)

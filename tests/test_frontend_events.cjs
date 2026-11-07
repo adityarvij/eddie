@@ -60,3 +60,13 @@ assert.equal(get('assistant-pending').textContent,'');
 
 assert.doesNotMatch(source,/localStorage|sessionStorage|indexedDB|document\.cookie/,'nothing is persisted client-side');
 console.log('Frontend query/verdict/rule/confirmation event checks passed');
+
+// "What they know": the demo week always shows its banner; live facts never do.
+context.window.eddie.renderReport({demo:true,label:'Demo data: an invented, seeded week.',hours:168,facts:[{fact:'Streaming happens most on Sundays',evidence:'450 of 1691 streaming minutes',confidence:.65}]});
+assert.equal(get('report-demo').hidden,false);
+assert.match(get('report-demo').textContent,/^DEMO DATA · Demo data/);
+assert.match(get('report-title').textContent,/DEMO WEEK/);
+assert.equal(get('report-facts').children[0].textContent,'Streaming happens most on Sundays — 450 of 1691 streaming minutes (confidence 65%)');
+context.window.eddie.renderReport({demo:false,hours:24,facts:[]});
+assert.equal(get('report-demo').hidden,true);
+assert.equal(get('report-title').textContent,'what they know · last 24h');

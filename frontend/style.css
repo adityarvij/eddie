@@ -40,3 +40,6 @@
 .tag{font-weight:700}.tag-allow{color:#4ade80}.tag-block{color:#f87171}.tag-flag{color:#fbbf24}.tag-ai{color:#60a5fa}.tag-rule{color:#c4b5fd}
 /* Pending risky action: the read-back Eddie is waiting on a yes or no for. */
 .assistant-copy .assistant-pending{font-size:16px;color:#fff;margin:12px 0 0}
+
+/* "What they know" report. Demo data always carries the inverted banner. */
+.report{border:1px solid #333;padding:14px 18px;margin:-6px 0 18px;font-size:12px;max-height:40dvh;overflow:auto}.report[hidden]{display:none}.report-head{display:flex;justify-content:space-between;color:#aaa}.report-head button{background:none;border:0;color:#aaa;font:inherit}.report ol{margin:8px 0 0;padding-left:20px;color:#ddd}.report li{margin:4px 0;overflow-wrap:anywhere}.demo-banner{background:#fff;color:#000;font-weight:700;padding:4px 8px;margin:8px 0 0;letter-spacing:.5px}.demo-banner[hidden]{display:none}
