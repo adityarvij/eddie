@@ -38,6 +38,8 @@ from .events import Action, AIVerdictEvent, ModeUpdate, OfflineUpdate, QueryEven
 
 # In memory for now; SQLite (store.py) replaces this once the DNS side lands.
 recent: deque[dict] = deque(maxlen=20000)
+# The feed keeps no more history than eddie.db does (#129).
+FEED_RETENTION_MS = int(float(os.environ.get("EDDIE_RETENTION_DAYS", store.RETENTION_DAYS)) * 86_400_000)
 totals = {"seen": 0, "blocked": 0}
 state = {"home_mode": False}
 clients: set[WebSocket] = set()
@@ -104,6 +106,18 @@ async def guard_writes(request: Request, call_next):
     return await call_next(request)
 
 
+def feed() -> deque[dict]:
+    """The live feed, after dropping events older than the retention window.
+
+    Events arrive roughly in time order, so trimming from the oldest end is enough.
+    Called on every read and ingest, so history expires even while the network is idle.
+    """
+    cutoff = int(time.time() * 1000) - FEED_RETENTION_MS
+    while recent and recent[0]["ts"] < cutoff:
+        del recent[0]
+    return recent
+
+
 async def broadcast(msg: dict) -> None:
     data = json.dumps(msg)
     for ws in list(clients):
@@ -116,13 +130,16 @@ async def broadcast(msg: dict) -> None:
 @app.post("/ingest")
 async def ingest(body: QueryEvent | list[QueryEvent]):
     events = body if isinstance(body, list) else [body]
+    cutoff = int(time.time() * 1000) - FEED_RETENTION_MS
+    feed()
     for ev in events:
         company, category = labels.lookup(ev.domain)
         every = timing["beacons"].observe(ev.device_mac, ev.domain, ev.ts)
         idle = timing["idle"].observe(ev.device_mac, ev.ts, ev.action == "allow" and category in labels.HUMAN)
         row = {**ev.model_dump(), "id": next(ids), "company": company, "category": category,
                "beacon_s": every and round(every / 1000), "idle": idle}
-        recent.append(row)
+        if ev.ts >= cutoff:  # already past retention: still counted and broadcast, never kept
+            recent.append(row)
         totals["seen"] += 1
         totals["blocked"] += ev.action == "block"
         await broadcast(row)
@@ -152,29 +169,47 @@ def cached_ai_verdicts():
 @app.get("/events")
 def events(since: int = 0, device: str | None = None, limit: int = 200,
            action: Action | None = None, domain: str | None = None):
-    rows = [e for e in recent if e["ts"] > since and (device is None or e["device"] == device)
+    rows = [e for e in feed() if e["ts"] > since and (device is None or e["device"] == device)
             and (action is None or e["action"] == action) and (domain is None or e["domain"] == domain)]
     return rows[-limit:]
 
 
 @app.get("/summary")
 def summary(window: Literal["15m", "1h", "24h"] = "1h"):
+    events = list(feed())
     # text and companies cover the last hour; devices covers the requested window.
-    return {**totals, "home_mode": state["home_mode"], "text": insights.summary_text(list(recent)),
-            "companies": insights.company_counts(list(recent)), "company_window_seconds": 3600,
-            "window": window, "devices": insights.device_counts(list(recent), insights.WINDOWS_MS[window])}
+    return {**totals, "home_mode": state["home_mode"], "text": insights.summary_text(events),
+            "companies": insights.company_counts(events), "company_window_seconds": 3600,
+            "window": window, "devices": insights.device_counts(events, insights.WINDOWS_MS[window])}
+
+
+def report_limit_hours() -> int:
+    """The longest honest report is the configured on-device retention window."""
+    try:
+        days = float(os.environ.get("EDDIE_RETENTION_DAYS", store.RETENTION_DAYS))
+    except ValueError:
+        days = store.RETENTION_DAYS
+    return max(1, int(days * 24))
 
 
 @app.get("/what-they-know")
-def what_they_know(hours: int = Query(24, ge=1, le=168), demo: bool = False):
+def what_they_know(hours: int | None = Query(None, ge=1, le=8760), demo: bool = False):
     if demo:  # the seeded week, generated here and never mixed with real traffic
         facts = inferences.compute_facts(demo_week.events(int(time.time() * 1000)), 168)
         return {"demo": True, "label": demo_week.LABEL, "hours": 168, "facts": facts,
                 "text": f"{demo_week.LABEL} {inferences.spoken_text(facts, 168)}"}
-    events, source = report_events(hours)
-    facts = inferences.compute_facts(events, hours)
-    return {"demo": False, "source": source, "hours": hours, "facts": facts,
-            "text": inferences.spoken_text(facts, hours)}
+    limit = report_limit_hours()
+    requested = hours or limit
+    actual = min(requested, limit)
+    events, source = report_events(actual)
+    facts = inferences.compute_facts(events, actual)
+    quality = inferences.data_quality(events, actual)
+    limited = requested > actual
+    notice = (f"I only retain the last {inferences.period(actual)}, so I used all available data."
+              if limited else None)
+    return {"demo": False, "source": source, "requested_hours": requested, "hours": actual,
+            "limited_by_retention": limited, "notice": notice, "facts": facts, **quality,
+            "text": " ".join(filter(None, (notice, inferences.spoken_text(facts, actual, quality["enough_data"]))))}
 
 
 def report_events(hours: int) -> tuple[list[dict], str]:
@@ -195,7 +230,7 @@ def report_events(hours: int) -> tuple[list[dict], str]:
                 return events, "eddie.db"
         except sqlite3.Error:
             pass  # no queries table yet, or unreadable: the feed is all there is
-    return list(recent), "feed"
+    return list(feed()), "feed"
 
 
 @app.get("/mode")
@@ -315,7 +350,7 @@ async def ws_events(ws: WebSocket):
     clients.add(ws)
     await ws.send_text(json.dumps({
         "type": "snapshot",
-        "events": list(recent)[-60:],
+        "events": list(feed())[-60:],
         "ai_verdicts": list(ai_verdicts.values()),
         "bypass": list(bypass_recent),
         "totals": totals,

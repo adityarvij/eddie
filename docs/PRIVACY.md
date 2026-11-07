@@ -19,7 +19,8 @@ Owner: [eddie/store.py](../eddie/store.py), written by [eddie/dns_server.py](../
 | Logging never slows DNS. Rows go on a bounded in-memory queue (10,000), and a writer thread inserts them. If the disk stalls, rows are dropped and counted, never waited on. | implemented |
 | `eddie.db*` is git- and docker-ignored. | implemented |
 | The device column holds the device's MAC, or its client IP when ARP can't resolve it. A phone's private Wi-Fi address changes per network (and can rotate), so one phone can show up as several devices. | implemented |
-| The file is not encrypted at rest. Anyone with root, or the SD card, can read up to 7 days of history. | gap |
+| **Encryption at rest (#129): filesystem-level, not SQLCipher.** On the Pi, `EDDIE_DB` points into a LUKS-encrypted volume (a partition or loop file mounted at `/var/lib/eddie`), so the database, `-wal` and `-shm` are all covered with no code change. SQLCipher was rejected: it replaces the stdlib `sqlite3` everywhere (store, API, devices, rules, classifier) with a native build that has to be compiled for both the Mac and the Pi, and it still needs its key on the box. See [Encrypting `eddie.db` at rest](#encrypting-eddiedb-at-rest). | planned: setup step, not yet done or verified on the Pi |
+| Until that volume is set up, the file is not encrypted at rest. Anyone with root, or the SD card, can read up to 7 days of history. Even once it is, encryption only protects a powered-off or stolen card: root on the running box reads the mounted volume, and a key file stored on the same card protects nothing. | gap |
 | A hard kill (`kill -9`, power loss) loses queued rows. That's safe for privacy but leaves a hole in the history. Ctrl-C and SIGTERM flush first. | known behaviour |
 | **Forget timer:** health, beliefs and kids categories would be summarised and their raw rows deleted after 24 hours ("never stored beyond the day"). Needs category labels on stored rows first. | planned |
 | **Devices** (`eddie/devices.py`, #14): the `devices` table holds MAC, current IP, vendor, DHCP hostname, the user's label, and first / last seen. Only devices that looked something up through Eddie are recorded, never every ARP neighbour. Unlabeled devices not seen for `EDDIE_RETENTION_DAYS` are deleted with the query log; labeled devices are user settings and kept, like rules. With `EDDIE_DB=off` nothing is recorded (the IP → MAC map stays in memory for rules). Tested. | implemented |
@@ -35,6 +36,7 @@ Owner: [eddie/store.py](../eddie/store.py), written by [eddie/dns_server.py](../
 | Decision | Status |
 | --- | --- |
 | The API keeps recent events in memory only (at most 20,000), so a restart wipes them. It does not read the `queries` table. | implemented |
+| **Feed retention (#129):** the feed keeps no more history than `eddie.db`. Events older than `EDDIE_RETENTION_DAYS` (default 7) are dropped on every ingest and every read (`/events`, `/summary`, `/what-they-know`'s feed fallback, the `/ws/events` snapshot), so they expire even while the network is idle. An event that arrives already older than the window is counted and broadcast but never kept. Trimming goes from the oldest arrival, so an out-of-order old event can sit behind a newer one until that one expires too. Tested in [tests/test_feed_retention.py](../tests/test_feed_retention.py). | implemented |
 | The DNS server sends every lookup (time, client IP, domain, qtype, action, source, reason: the same fields as a `queries` row) to `POST /ingest` over plain HTTP ([eddie/feed.py](../eddie/feed.py)). `EDDIE_API_URL` must be `localhost` or a loopback or private IP literal; public hosts and hostnames are refused at startup, redirects aren't followed and proxy settings are ignored, so lookups can't leave the house this way. Events wait only in a bounded in-memory queue (1,000) and are dropped, not stored, when the API is unreachable. Events are never written to the DNS server's log. `EDDIE_FEED=off` sends nothing. Tested in [tests/test_feed.py](../tests/test_feed.py). | implemented |
 | With `EDDIE_API_URL` set to another machine's private IP, every lookup crosses the local network unencrypted and unauthenticated, readable by anyone on that network. The default keeps it on the box. | gap |
 | Docker publishes the API on `127.0.0.1` only. `EDDIE_BIND=0.0.0.0` is an explicit opt-in to reach it from the iPad. | implemented |
@@ -91,6 +93,7 @@ Owner: [eddie/store.py](../eddie/store.py), written by [eddie/dns_server.py](../
 | Email is not wired up; Eddie says that nothing changed. | implemented |
 | A block that times out after the API stored the rule is still reported as "Nothing changed"; the rule then shows in `GET /rules`. | gap |
 | For "what do they know about me", the local model (`ollama_agent.phrase`) gets only the computed facts (`{fact, evidence, confidence}`, at most a week, devices by label or vendor), never raw logs, and no tools. A line is dropped unless every number, clock time and weekday in it is in the facts; if none survive or the model is down, Eddie speaks the backend template. This checks the numbers are real, not that the model read the fact right (llama3.2:3b once turned idle telemetry into "watching when it's not being used"). Tested with a stubbed model. | implemented, with that gap |
+| The voice agent's write tools (#108) let the local model propose a block, allow, lockdown or home-mode change. The proposal's arguments live only in the in-memory confirmation slot (15 s, never logged or shown on screen) and nothing is written without a spoken yes; the resulting rules are the same `created_by: voice` rows as spoken commands. The model is sent no more than before: the question and tool results, plus the service keys in the tool schema. Tested with a stubbed model. | implemented |
 | The voice agent (`voice/ollama_agent.py`, #29) sends the local model the question's text and read-only tool results: per-device counts by label, the companies blocked most, recent blocked domains with reasons, one domain's latest decision and AI verdict, and "what they know" facts. No MAC or IP addresses, and no raw query log. It uses the same localhost / private-IP-literal check, no-redirect and no-proxy rules as the classifier. Tested. | implemented |
 | The agent's tools only read; it has no tool that changes rules, mode or devices, and an unknown tool name is refused. Tested. | implemented |
 | Every number in an agent reply (digits or "two" to "hundred") must appear in that turn's tool results, or Eddie speaks the backend's own summary text or says it can't verify the answer. This checks that the numbers are real, not that the model attached them to the right device. Words like "no requests" aren't checked. Tested with a stubbed model. | implemented, with that gap |
@@ -127,6 +130,17 @@ Owner: [eddie/store.py](../eddie/store.py), written by [eddie/dns_server.py](../
 | `scripts/fake_traffic.py` is scripted. Its devices, MAC address and verdicts (including the "AI:" ones) are invented, and it contains no real household data. | implemented |
 | The seeded "demo week" (`eddie/demo_week.py`, `GET /what-they-know?demo=true`) is invented, generated in memory per request, and never stored or mixed into the live feed. Every event is `demo: true`, device names end in "(demo)", the response has `demo: true` and a label its spoken text starts with, and the dashboard shows a DEMO DATA banner over it. Voice only reads the live report. Tested. | implemented |
 | Eddie reads fake-traffic counts aloud the same way as real ones; the voice summary doesn't say which it is. | gap |
+
+## Encrypting `eddie.db` at rest
+
+Decided in #129; a setup step on the Pi, not code. Nothing here has been run on the hardware yet.
+
+1. Create a LUKS volume for Eddie's data: a spare partition, or a loop file (`cryptsetup luksFormat /var/lib/eddie.img`), and mount it at `/var/lib/eddie`.
+2. Keep the key off the SD card: a passphrase typed at boot over SSH (dropbear in the initramfs), or a key file on a USB stick kept apart from the box. A key file on the card itself makes the encryption pointless, because whoever has the card has the key. The Pi has no TPM to seal it to.
+3. Run the DNS server and API with `EDDIE_DB=/var/lib/eddie/eddie.db`. The `-wal` and `-shm` files sit next to it, so they are covered too, and secure delete and `0600` still apply inside the volume.
+4. If the volume isn't mounted, Eddie must not quietly create a plaintext database on the card instead: the service should depend on the mount (`RequiresMountsFor=/var/lib/eddie` in systemd).
+
+What it does not cover: root on the running box, the in-memory feed, and the development Mac (use FileVault there).
 
 ## What leaves the house
 

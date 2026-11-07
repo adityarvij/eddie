@@ -280,7 +280,7 @@ Writes from anywhere but loopback need `Authorization: Bearer $EDDIE_API_TOKEN`,
 |---|---|---|
 | `get_summary` | window, device? | Reads `/summary?window=` per-device counts (implemented in `voice/ollama_agent.py`) |
 | `get_recent_blocks` | device?, limit | Last blocked domains with reasons (implemented) |
-| `what_they_know` | hours? | Reads `/what-they-know` (implemented in `voice/voice_agent.py`); "what do they know about me" reads a week and has the local model phrase checked inferences (`voice/ollama_agent.py`) |
+| `what_they_know` | hours? | Reads `/what-they-know`; explicit ranges such as "the last 3 days" are honored, otherwise it uses all retained history, and the local model phrases checked inferences |
 | `block` | pattern, device? | Adds BLOCK rule |
 | `allow` | pattern, device? | Adds ALLOW rule |
 | `lockdown_device` | device, keep (list) | Blocks everything for that device except keep patterns |
@@ -288,7 +288,7 @@ Writes from anywhere but loopback need `Authorization: Bearer $EDDIE_API_TOKEN`,
 | `draft_email` | to, subject, body | Prepares email, asks for spoken yes |
 | `send_email` | draft_id | Sends via Gmail only after confirmation |
 
-**System prompt:** "You are Eddie, a local privacy guard. Answer in two short sentences, spoken style, a little dry. Use tools for facts; never invent numbers. Confirm before sending email or locking down a device."
+**System prompt:** "You are Eddie, a local privacy guard. Answer in two short sentences, spoken style, a little dry. Use tools for facts; never invent numbers." Write tools never run inside the model turn: Eddie checks the call against the tool's schema, reads the change back and runs it only after a spoken yes.
 
 ### Voice loop
 
@@ -485,7 +485,7 @@ With a Fire Stick you'll mainly see Safety, What's on screen, Identity linking a
 
 ## Voice implementation update
 
-The offline wake/capture/transcription worker and deterministic summary/home-mode tool router are implemented. Whisper, shared wake features, Vosk and Piper Lessac assets are pinned by SHA-256 in `voice/assets.json` and installed with `python scripts/provision_voice.py` (#39), which also runs a hardware check; `scripts/run_voice.sh` verifies them offline before starting. The dedicated Hey Eddie ONNX model still needs training; the explicit offline Vosk prototype is available now via `./scripts/run_voice.sh`. Live-room microphone accuracy remains unverified. Read-only Ollama tool calling (#29: `get_summary`, `get_recent_blocks`, `explain_domain`, `what_they_know`) answers questions, with every spoken number checked against tool results; domain rules, lockdown and email are not connected to the model. The keyword router handles block, allow, undo and "lock down <device>" (#17), and service allows and lockdown wait for a spoken yes (one pending action, 15 s expiry, discarded on dismissal); all are unit tested. See [voice setup](voice/README.md), [architecture and remaining work](docs/ARCHITECTURE.md), and [contributor instructions](AGENTS.md). The Mac is the development host; final deployment stays portable to Linux.
+The offline wake/capture/transcription worker and deterministic summary/home-mode tool router are implemented. Whisper, shared wake features, Vosk and Piper Lessac assets are pinned by SHA-256 in `voice/assets.json` and installed with `python scripts/provision_voice.py` (#39), which also runs a hardware check; `scripts/run_voice.sh` verifies them offline before starting. The dedicated Hey Eddie ONNX model still needs training; the explicit offline Vosk prototype is available now via `./scripts/run_voice.sh`. Live-room microphone accuracy remains unverified. Ollama tool calling (#29: `get_summary`, `get_recent_blocks`, `explain_domain`, `what_they_know`) answers questions, with every spoken number checked against tool results. Plain-English rules (#108) give the model `block`, `allow`, `lockdown_device` and `set_mode`, but a call only becomes a schema-checked read-back waiting for a spoken yes; email is not connected to the model. The keyword router handles block, allow, undo and "lock down <device>" (#17), and service allows and lockdown wait for a spoken yes (one pending action, 15 s expiry, discarded on dismissal); all are unit tested. See [voice setup](voice/README.md), [architecture and remaining work](docs/ARCHITECTURE.md), and [contributor instructions](AGENTS.md). The Mac is the development host; final deployment stays portable to Linux.
 
 The voice view now features a larger active Eddie, spoken interaction without a text box, and an Open logs control beneath Eddie that opens a drawer for recent network activity.
 

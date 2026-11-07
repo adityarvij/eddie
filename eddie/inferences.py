@@ -15,6 +15,7 @@ in the window, otherwise from the API's in-memory feed.
 """
 import sqlite3
 import time
+import math
 from bisect import bisect_right
 from collections import Counter, defaultdict
 from datetime import datetime
@@ -28,6 +29,27 @@ IDLE_MS = 5 * 60 * 1000  # no human traffic for this long = nobody is using the 
 LATE_HOURS = range(0, 5)  # midnight to 5 AM local
 SESSION_GAP_MS = 10 * 60 * 1000  # same category, gaps under this = one session
 WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+
+
+def period(hours: int) -> str:
+    """A truthful spoken duration; never silently turn an arbitrary range into "a week"."""
+    if hours == 1:
+        return "hour"
+    if hours % 168 == 0:
+        weeks = hours // 168
+        return f"{weeks} week{'s' if weeks != 1 else ''}"
+    if hours % 24 == 0:
+        days = hours // 24
+        return f"{days} day{'s' if days != 1 else ''}"
+    return f"{hours} hours"
+
+
+def data_quality(events: list[dict], hours: int, now_ms: int | None = None) -> dict:
+    """Small, explicit evidence check used before Eddie offers an inference."""
+    now_ms = now_ms or int(time.time() * 1000)
+    rows = [e for e in events if 0 <= now_ms - e["ts"] < hours * HOUR_MS]
+    covered = min(hours, max(1, math.ceil((now_ms - min(e["ts"] for e in rows)) / HOUR_MS))) if rows else 0
+    return {"data_points": len(rows), "covered_hours": covered, "enough_data": len(rows) >= 2}
 
 
 def clock(ts_ms: int, with_day: bool = False) -> str:
@@ -214,9 +236,8 @@ def beacon_fact(window: list[dict], hours: int) -> dict | None:
     )
 
 
-def spoken_text(facts: list[dict], hours: int) -> str:
-    if not facts:
-        span = "week" if hours == 168 else f"{hours} hours"
-        return f"I haven't seen enough traffic in the last {span} to say what anyone could guess about you."
+def spoken_text(facts: list[dict], hours: int, enough_data: bool | None = None) -> str:
+    if enough_data is False or not facts:
+        return f"I don't have enough data from the last {period(hours)} to say what anyone could guess about you."
     lines = [f"{f['fact']}: {f['evidence']}." for f in facts[:3]]
     return "From what your devices sent, someone could guess this. " + " ".join(lines)

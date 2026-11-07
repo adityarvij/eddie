@@ -243,7 +243,7 @@ printable characters. Answers with the stored device and its `name`.
 `hours` is 1 to 168. Returns `{demo: false, source, hours, facts, text}`.
 `source` is `"eddie.db"` when the DNS server's query log (`EDDIE_DB`, read-only)
 has lookups in the window, otherwise `"feed"`: the API's in-memory event list
-(at most 20,000 events, lost on restart), which is what `fake_traffic.py` fills.
+(at most 20,000 events and none older than `EDDIE_RETENTION_DAYS`, lost on restart), which is what `fake_traffic.py` fills.
 The two are never mixed. Database rows are named by device label, else
 "<vendor> device", else "unlabeled device" (all such devices share that name);
 never by MAC, IP or DHCP hostname. Each fact is `{fact, evidence, confidence}`
@@ -266,8 +266,12 @@ facts, text}` computed from `eddie/demo_week.py`: an invented, seeded week
 (devices named "Living room TV (demo)" and "Kids' tablet (demo)", every event
 `demo: true`). `text` starts with `label`. Demo events are generated per
 request and never enter `/events`, the WebSocket feed or `eddie.db`. The
-voice tools only read the live report; "what do they know about me" asks for
-`hours=168`, and the dashboard's live panel does too.
+voice tools only read the live report. An explicit spoken range is sent as
+`hours`; with no range, voice and the dashboard omit it so the API uses all
+locally retained history. The response includes `requested_hours`, actual
+`hours`, `limited_by_retention`, `data_points`, `covered_hours`, and
+`enough_data`. Longer requests are capped to retention with a `notice`; fewer
+than two observations make Eddie say there is not enough data instead of infer.
 
 ## Local voice bridge (port 5173)
 
@@ -280,7 +284,7 @@ Relays to the traffic API (`EDDIE_API_URL`, default `http://127.0.0.1:8000`), so
 | `GET /api/rules` | `GET /rules` | read-only |
 | `GET /api/devices` | `GET /devices?hours=24` | read-only |
 | `GET /api/mode` | `GET /mode` | read-only |
-| `GET /api/what-they-know[?demo=1]` | `GET /what-they-know?hours=168` or `?demo=true` | read-only |
+| `GET /api/what-they-know[?demo=1]` | `GET /what-they-know` (all retained data) or `?demo=true` | read-only |
 | `POST /api/mode` `{home_mode: bool}` | `POST /mode` | answers with the API's echo `{home_mode}` |
 | `POST /api/offline-mode` `{offline: bool}` | `POST /offline-mode` | answers with `{offline, applied}`; `applied: false` is passed through |
 
@@ -303,7 +307,7 @@ Confirmation: after Eddie reads back a risky action, the bridge emits `voice_sta
 
 ## Per-device counts and event filters (#29)
 
-`GET /summary?window=15m|1h|24h` (default `1h`; anything else gets 422) adds `window` and `devices`: one row per device label seen in that window, `{device, requests, blocked, flagged, blocked_companies}`, busiest first, where `blocked_companies` is up to three `{company, blocked}` rows. `text` and `companies` still cover the last hour. Like the rest of `/summary`, counts come from the API's in-memory feed (at most 20,000 events), so a busy 24-hour window can be partial.
+`GET /summary?window=15m|1h|24h` (default `1h`; anything else gets 422) adds `window` and `devices`: one row per device label seen in that window, `{device, requests, blocked, flagged, blocked_companies}`, busiest first, where `blocked_companies` is up to three `{company, blocked}` rows. `text` and `companies` still cover the last hour. Like the rest of `/summary`, counts come from the API's in-memory feed (at most 20,000 events, none older than `EDDIE_RETENTION_DAYS`), so a busy 24-hour window can be partial.
 
 `GET /events` also takes `action=allow|block|flag` (anything else gets 422) and `domain=` (exact, already-normalized match). The voice agent uses these for recent blocks and domain explanations.
 
