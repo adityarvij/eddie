@@ -8,6 +8,10 @@ The dashboard bridge publishes `voice_status`, `wake`, `voice_state`, `transcrip
 
 Implemented tools are backend summary reads and home-mode writes. Home mode is backend state, not evidence of DNS enforcement. Missing tools explicitly report that no change occurred. The model does not fabricate counts. Ollama tool calling is a future layer over the same tool boundary; use structured validated arguments, bounded iterations and confirmation state for lockdown/email.
 
+## DNS server status
+
+`eddie/dns_server.py` answers UDP DNS on port 53 with asyncio and dnslib. Each query goes through `decision.evaluate(domain, client_ip)`. Blocked queries get `0.0.0.0` / `::` (TTL 60, empty answer for other types). Allowed queries are forwarded as raw packets to each upstream in turn (2 s timeout each), and the answer is returned unchanged. If every upstream fails, the device gets SERVFAIL. Non-DNS packets are dropped, and at most 512 lookups are in flight. The decision path makes no model or network calls. Not built yet: TCP (truncated answers can't be retried over TCP), device labels (#14), query logging (#6), real decision order (#10), and events to the live feed (#16).
+
 ## Remaining work
 
 - Train and evaluate the actual Hey Eddie model; record provenance, license, threshold and false-wake metrics.

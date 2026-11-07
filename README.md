@@ -142,7 +142,7 @@ Rehearse Sunday morning and record a backup video.
 
 1. Power the Pi; `ssh <user>@eddie.local` from the Mac.
 2. Get the Pi's IP with `hostname -I` (usually `172.20.10.x` on an iPhone hotspot).
-3. Clone the repo onto the Pi; start Eddie.
+3. Clone the repo onto the Pi; start Eddie (`sudo .venv/bin/python -m eddie.dns_server`, see "Running the DNS server").
 4. Check from the Mac: `dig @<Pi IP> google.com`.
 5. Fire Stick: Settings → Network → forget and reconnect → Advanced → DNS 1 = Pi's IP. Watch lookups scroll.
 6. iPad: open `http://<Pi IP>:8000`, Add to Home Screen.
@@ -192,6 +192,18 @@ Hand this section and the ones below to a coding agent (Claude Code etc.). Targe
 6. If the domain was unknown, queue it for the classifier; when the verdict lands, cache it and push an `ai_verdict` event. Subsequent queries use the cached verdict.
 
 **Latency budget:** under 20 ms added per query on the hot path. The AI never blocks a DNS reply.
+
+### Running the DNS server
+
+`eddie/dns_server.py` implements steps 1, 3 and 4 above (UDP only). Steps 2, 5 and 6 are not built yet: the device is the client IP until #14, nothing is logged until #6, and `eddie/decision.py` is a stub that blocks only `device-metrics-us.amazon.com` until #10.
+
+```bash
+uv run python -m eddie.dns_server                      # Mac: 0.0.0.0:53 binds without sudo on recent macOS
+sudo .venv/bin/python -m eddie.dns_server              # Pi / Linux: port 53 needs root
+EDDIE_DNS_PORT=8053 uv run python -m eddie.dns_server  # development, any OS: dig @127.0.0.1 -p 8053 google.com
+```
+
+Settings: `EDDIE_DNS_HOST` (default `0.0.0.0`), `EDDIE_DNS_PORT` (default `53`), `EDDIE_UPSTREAMS` (default `1.1.1.1,9.9.9.9`, tried in order with a 2 s timeout each; if all fail the device gets SERVFAIL). On the Mac, Internet Sharing must be off because it holds port 53. Binding `127.0.0.1:53` still needs sudo on macOS.
 
 ## Agent build spec: data, API, tools
 
