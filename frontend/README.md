@@ -18,7 +18,7 @@ Open http://localhost:5173. Click **Wake Eddie** or press **Space** to preview t
 .venv-frontend/bin/python frontend/serve.py --host 0.0.0.0   # or EDDIE_DASHBOARD_HOST=0.0.0.0
 ```
 
-Then open `http://<Mac IP>:5173` on the iPad. Other devices can view the page, the event stream and voice status. Every control (`/api/voice/start`, `/stop`, `/ask`, `/api/events`) answers 403 unless it comes from the computer running Eddie, so the microphone can't be switched on from the network. The traffic API must also accept network connections (`EDDIE_BIND=0.0.0.0` for the Docker API, or `--host 0.0.0.0` for uvicorn) and the macOS firewall must allow incoming connections for Python.
+Then open `http://<Mac IP>:5173` on the iPad. Other devices can view the page, the event stream and every read-only GET endpoint. To pair a device for typed asks, open the `http://<Mac IP>:5173/#pair=…` link `serve.py` prints at start (set `EDDIE_DASHBOARD_TOKEN` to keep the same link across restarts); the page sends the token on control requests. Microphone start/stop/dismiss and `/api/events` answer 403 unless they come from the computer running Eddie, paired or not, so the microphone can't be switched on from the network. See [ARCHITECTURE.md](../docs/ARCHITECTURE.md#dashboard-bridge-control-40). The traffic API must also accept network connections (`EDDIE_BIND=0.0.0.0` for the Docker API, or `--host 0.0.0.0` for uvicorn) and the macOS firewall must allow incoming connections for Python.
 
 ## Local “Hey Eddie”
 

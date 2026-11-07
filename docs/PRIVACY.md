@@ -65,12 +65,13 @@ Owner: [eddie/store.py](../eddie/store.py), written by [eddie/dns_server.py](../
 
 | Decision | Status |
 | --- | --- |
-| `frontend/serve.py` binds `127.0.0.1` only. | implemented |
+| `frontend/serve.py` binds `127.0.0.1` by default; `--host 0.0.0.0` / `EDDIE_DASHBOARD_HOST` is an explicit opt-in for the iPad. | implemented |
 | Cross-origin POSTs are rejected; bodies are capped at 64 KB and typed asks at 1,000 characters. | implemented |
 | The page loads no external fonts, scripts, analytics or cloud audio. | implemented |
 | The page keeps nothing in `localStorage`, `sessionStorage`, IndexedDB or cookies; a pending action's read-back is cleared from the screen on answer, dismissal or expiry. Tested (`tests/test_frontend_events.cjs`). | implemented |
 | `GET /api/rules` relays the traffic API's rule list (pattern, action, device name and MAC or IP, who created it, when) read-only. With `--host 0.0.0.0`, anyone on the network who can open the dashboard can read the household's rules, even if the API itself stays on loopback. It cannot change them. | known behaviour |
-| Authenticated local control before exposing the bridge or mic controls beyond localhost (#40). Mic controls must never be public. | planned |
+| **Bridge controls** (#40): microphone start/stop/dismiss and `/api/events` are refused from any device but the Eddie computer, token or not. Another device can only send a typed ask (`/api/voice/ask`), and only with the pairing token (`Authorization: Bearer`); otherwise 401. POSTs whose `Host` isn't an IP, `localhost` or `.local` are refused (DNS rebinding). Tested (`tests/test_dashboard_bridge.py`). | implemented |
+| The pairing token is printed to the terminal that starts `serve.py` when it is bound beyond loopback, and lives in the paired device's URL fragment (bookmark, Home Screen link, browser history), never in a request line, server log or browser storage. Anyone who sees that link can send asks, which Eddie answers aloud and which can lead to rule changes after the spoken or typed confirmation. A random token is replaced on restart; a pinned `EDDIE_DASHBOARD_TOKEN` is not, until changed. There is no rate limit and plain HTTP carries the token unencrypted on the LAN. | known behaviour |
 
 ## Agent, facts and actions
 

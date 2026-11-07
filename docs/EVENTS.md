@@ -232,6 +232,8 @@ voice tools only read the live report; "what do they know about me" asks for
 
 The dashboard bridge SSE endpoint `/events` emits `voice_status` with `status` (`off`, `starting`, `ready`, `error`), optional `engine` (`vosk` prototype or `openwakeword`) and `message`. `GET /api/voice/status` returns the latest status. Start/stop POST endpoints operate the local microphone. These are separate from the traffic API on port 8000.
 
+Control auth (#40): POSTs need a `Host` that is an IP, `localhost` or `.local`, and a same-origin `Origin` if one is sent (403 otherwise). From the Eddie computer (loopback) no token is needed. From another device, only `POST /api/voice/ask` (`{text}`) is allowed, with `Authorization: Bearer <pairing token>`; a missing or wrong token gets 401 `{message}`. `/api/voice/start`, `/api/voice/stop`, `/api/voice/dismiss` and `/api/events` answer 403 from other devices whatever the token.
+
 Wake lifecycle: `wake`, `voice_state: listening`, `voice_state: thinking`, optional `transcript`, `agent_reply`, `speaking`, `speech_end`, then `voice_state: listening` again for a follow-up without the wake phrase. If no speech starts within 4 seconds of listening, the worker emits `voice_state: dismissed` and the dashboard closes Eddie and returns to the live feed; the next request needs the wake phrase. No transcript is persisted. Capture or inference failure yields `voice_status: error`.
 
 

@@ -35,6 +35,20 @@ class LocalAddress(unittest.TestCase):
             self.assertFalse(serve.is_local(address), address)
 
 
+class PairingChecks(unittest.TestCase):
+    def test_host_must_name_this_machine(self):
+        for host in ('localhost:5173', '127.0.0.1:5173', '[::1]:5173', '192.168.1.20:5173', 'eddies-mac.local:5173', 'LOCALHOST'):
+            self.assertTrue(serve.trusted_host(host), host)
+        for host in ('evil.example:5173', 'localhost.evil.example', '', None):
+            self.assertFalse(serve.trusted_host(host), host)
+
+    def test_only_the_exact_bearer_token_authorizes(self):
+        self.assertTrue(serve.authorized('Bearer ' + serve.token))
+        self.assertTrue(serve.authorized('bearer ' + serve.token))
+        for header in (None, '', serve.token, 'Bearer ', 'Bearer ' + serve.token + 'x', 'Basic ' + serve.token):
+            self.assertFalse(serve.authorized(header), header)
+
+
 @unittest.skipUnless(lan_ip(), 'needs a non-loopback network address')
 class LanAccess(unittest.TestCase):
     """Dashboard bound to all interfaces: viewable from the LAN, controllable only locally."""
@@ -50,9 +64,9 @@ class LanAccess(unittest.TestCase):
         cls.server.shutdown()
         cls.server.server_close()
 
-    def call(self, host, path, body=None):
+    def call(self, host, path, body=None, headers=None):
         data = None if body is None else json.dumps(body).encode()
-        request = urllib.request.Request(f'http://{host}:{self.port}{path}', data=data, method='POST' if data else 'GET')
+        request = urllib.request.Request(f'http://{host}:{self.port}{path}', data=data, method='POST' if data else 'GET', headers=headers or {})
         try:
             with urllib.request.urlopen(request, timeout=3) as response:
                 return response.status, response.read()
@@ -65,18 +79,39 @@ class LanAccess(unittest.TestCase):
         self.assertIn(b'<html', page.lower())
         self.assertEqual(200, self.call(lan_ip(), '/api/voice/status')[0])
 
-    def test_lan_cannot_use_controls(self):
-        for path in ('/api/voice/start', '/api/voice/stop', '/api/voice/dismiss', '/api/voice/ask', '/api/events'):
-            status, body = self.call(lan_ip(), path, {'text': 'hi', 'domain': 'x.com'})
-            self.assertEqual(403, status, path)
-            self.assertIn('Eddie computer', json.loads(body)['message'])
+    def test_lan_cannot_use_mic_or_feed_controls_even_paired(self):
+        for headers in ({}, {'Authorization': 'Bearer ' + serve.token}):
+            for path in ('/api/voice/start', '/api/voice/stop', '/api/voice/dismiss', '/api/events'):
+                status, body = self.call(lan_ip(), path, {'text': 'hi', 'domain': 'x.com'}, headers)
+                self.assertEqual(403, status, path)
+                self.assertIn('Eddie computer', json.loads(body)['message'])
         self.assertFalse(serve.stopped.is_set())
         self.assertFalse(serve.dismissed.is_set())
+
+    def test_lan_ask_needs_the_pairing_token(self):
+        with patch.object(serve, 'answer') as answer:
+            for headers in ({}, {'Authorization': 'Bearer wrong'}, {'Authorization': serve.token}):
+                status, body = self.call(lan_ip(), '/api/voice/ask', {'text': 'hi'}, headers)
+                self.assertEqual(401, status, headers)
+                self.assertIn('Pair', json.loads(body)['message'])
+            status, _ = self.call(lan_ip(), '/api/voice/ask', {'text': 'what is the TV doing?'},
+                                  {'Authorization': 'Bearer ' + serve.token})
+            self.assertEqual(200, status)
+            for _ in range(50):  # answer runs on its own thread
+                if answer.called:
+                    break
+                threading.Event().wait(0.02)
+            answer.assert_called_once_with('what is the TV doing?')
 
     def test_localhost_keeps_controls(self):
         status, _ = self.call('127.0.0.1', '/api/events', {'domain': 'example.com', 'action': 'block'})
         self.assertEqual(200, status)
 
+    def test_rebound_domain_is_refused_on_localhost(self):
+        # A page on evil.example rebound to 127.0.0.1 sends a matching Origin and Host.
+        status, body = self.call('127.0.0.1', '/api/voice/start', {}, {'Host': 'evil.example', 'Origin': 'http://evil.example'})
+        self.assertEqual(403, status)
+        self.assertFalse(serve.voice_thread and serve.voice_thread.is_alive())
 
 
 class RulesRelay(unittest.TestCase):
