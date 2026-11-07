@@ -100,7 +100,7 @@ restarts of both processes, so it stays on until it's turned off.
 
 Rules live in the `rules` table of `eddie.db` (the API opens `EDDIE_DB`, the
 same file the DNS server uses; `EDDIE_DB=off` answers 503). They are checked
-before every list: device rule, then global rule (docs/ARCHITECTURE.md).
+before every list: device rule, then the device's lockdown rule, then global rule (docs/ARCHITECTURE.md).
 
 `POST /rules`
 
@@ -110,7 +110,7 @@ before every list: device rule, then global rule (docs/ARCHITECTURE.md).
 
 | Field        | Notes |
 |--------------|-------|
-| `pattern`    | `a.com` matches only a.com; `*.a.com` matches a.com and every subdomain. Lowercased, trailing dot dropped. At least two labels: empty, `*`, `com` and `*.com` are refused. IP addresses are refused (`192.168.1.10`, `*.10.0.0.1`, `::1`): a name whose last label is all digits isn't a domain. |
+| `pattern`    | `a.com` matches only a.com; `*.a.com` matches a.com and every subdomain. Lowercased, trailing dot dropped. At least two labels: empty, `com` and `*.com` are refused. The one exception is `*` with `action: block` and a `device_mac`: lockdown (#17), which blocks every domain for that device except its own device rules and the allowlist. `*` without a device or as an allow is refused. IP addresses are refused (`192.168.1.10`, `*.10.0.0.1`, `::1`): a name whose last label is all digits isn't a domain. |
 | `action`     | `block` \| `allow` |
 | `device_mac` | optional; omit for every device. Use the device's `mac` from `GET /devices` (its MAC, or its client IP while the MAC is unknown). A rule made with a client IP also matches the device after its MAC becomes known. |
 | `created_by` | optional, default `"user"`; exactly `user` \| `voice` \| `agent` |

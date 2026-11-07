@@ -98,6 +98,18 @@ class RulesAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual('0.0.0.0', await self.ask(DOMAIN))
         self.assertEqual('flag', decision.evaluate(DOMAIN, '172.20.10.5').action)
 
+    async def test_device_lockdown_blocks_everything_but_its_allow_rules(self):
+        await self.start_dns()
+        keep = await self.http.post('/rules', json={'pattern': 'a.example', 'action': 'allow', 'device_mac': '127.0.0.1'})
+        lock = await self.http.post('/rules', json={'pattern': '*', 'action': 'block', 'device_mac': '127.0.0.1'})
+        self.assertEqual((201, 'device', True), (lock.status_code, lock.json()['scope'], lock.json()['applied']))
+        self.assertEqual('0.0.0.0', await self.ask(DOMAIN))
+        self.assertEqual(REAL_IP, await self.ask('a.example'))
+        self.assertEqual('flag', decision.evaluate(DOMAIN, '172.20.10.5').action)
+        await self.http.delete(f"/rules/{lock.json()['id']}")
+        self.assertEqual(REAL_IP, await self.ask(DOMAIN))
+        self.assertTrue(keep.json()['applied'])
+
     async def test_allow_rule_overrides_a_heuristic_block(self):
         await self.start_dns()
         tracker = 'device-metrics-us.amazon.com'
@@ -136,6 +148,7 @@ class RulesAPITests(unittest.IsolatedAsyncioTestCase):
                {'pattern': '', 'action': 'block'},
                {'pattern': '   ', 'action': 'block'},
                {'pattern': '*', 'action': 'block'},
+               {'pattern': '*', 'action': 'allow', 'device_mac': '172.20.10.5'},
                {'pattern': '*.', 'action': 'block'},
                {'pattern': '*.*', 'action': 'block'},
                {'pattern': '192.168.1.10', 'action': 'block'},
