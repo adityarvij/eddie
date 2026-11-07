@@ -24,7 +24,7 @@ from typing import Literal
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, field_validator
 
-from . import beacons, devices, inferences, insights, labels, offline, rules, store
+from . import beacons, demo_week, devices, inferences, insights, labels, offline, rules, store
 from .events import Action, AIVerdictEvent, ModeUpdate, OfflineUpdate, QueryEvent
 
 # In memory for now; SQLite (store.py) replaces this once the DNS side lands.
@@ -101,9 +101,36 @@ def summary(window: Literal["15m", "1h", "24h"] = "1h"):
 
 
 @app.get("/what-they-know")
-def what_they_know(hours: int = Query(24, ge=1, le=168)):
-    facts = inferences.compute_facts(list(recent), hours)
-    return {"hours": hours, "facts": facts, "text": inferences.spoken_text(facts, hours)}
+def what_they_know(hours: int = Query(24, ge=1, le=168), demo: bool = False):
+    if demo:  # the seeded week, generated here and never mixed with real traffic
+        facts = inferences.compute_facts(demo_week.events(int(time.time() * 1000)), 168)
+        return {"demo": True, "label": demo_week.LABEL, "hours": 168, "facts": facts,
+                "text": f"{demo_week.LABEL} {inferences.spoken_text(facts, 168)}"}
+    events, source = report_events(hours)
+    facts = inferences.compute_facts(events, hours)
+    return {"demo": False, "source": source, "hours": hours, "facts": facts,
+            "text": inferences.spoken_text(facts, hours)}
+
+
+def report_events(hours: int) -> tuple[list[dict], str]:
+    """The DNS server's query log when it has lookups in the window, else the in-memory feed.
+
+    Runs in FastAPI's thread pool on its own read-only connection, so a week
+    of rows doesn't stall the event loop or share the rules connection.
+    """
+    path = os.environ.get("EDDIE_DB", "eddie.db")
+    if path != "off" and os.path.exists(path):
+        try:
+            conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+            try:
+                events = inferences.events_from_db(conn, int(time.time() * 1000) - hours * 3_600_000)
+            finally:
+                conn.close()
+            if events:
+                return events, "eddie.db"
+        except sqlite3.Error:
+            pass  # no queries table yet, or unreadable: the feed is all there is
+    return list(recent), "feed"
 
 
 @app.get("/mode")

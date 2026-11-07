@@ -1,3 +1,4 @@
+import json
 import sys
 import time
 import unittest
@@ -170,6 +171,91 @@ class Router(unittest.TestCase):
     def test_router_falls_back_when_model_unavailable(self, request):
         voice_agent.ask_model = lambda text: None
         self.assertEqual(voice_agent.respond("What's been going on?"), 'Seven requests were blocked.')
+
+
+FACTS = [
+    {'fact': 'Someone is up watching after midnight',
+     'evidence': '1 streaming session started between midnight and 5 AM, 55 requests in all', 'confidence': 0.6},
+    {'fact': 'Streaming happens most on Sundays',
+     'evidence': '450 of 1691 streaming minutes in 9 sessions were on Sunday, across 7 days with streaming',
+     'confidence': 0.65},
+    {'fact': 'The house may have been empty or asleep for a stretch',
+     'evidence': 'no streaming for 20h starting Tue 10:20 PM', 'confidence': 0.5},
+]
+
+
+class Inferences(unittest.TestCase):
+    def model(self, content):
+        seen = []
+
+        def chat(messages, timeout, tools=None, num_predict=None):
+            seen.append({'messages': messages, 'tools': tools})
+            if isinstance(content, Exception):
+                raise content
+            return {'role': 'assistant', 'content': content}
+        return ollama_agent.Agent(url='http://127.0.0.1:11434', model='stub', chat=chat), seen
+
+    def test_model_sees_only_facts_and_no_tools(self):
+        bot, seen = self.model('Someone could guess you stay up late: 1 session after midnight. Somewhat sure.')
+        self.assertEqual(['Someone could guess you stay up late: 1 session after midnight. Somewhat sure.'],
+                         bot.infer(FACTS))
+        self.assertEqual([], seen[0]['tools'])
+        self.assertIn('Using only these facts', seen[0]['messages'][0]['content'])
+        self.assertEqual(FACTS, json.loads(seen[0]['messages'][1]['content']))
+
+    def test_lines_with_unsupported_numbers_times_or_days_are_dropped(self):
+        bot, _ = self.model('\n'.join([
+            'Here is what I found:',
+            '1. Someone could guess Sunday is TV day: 450 of 1691 minutes. Fairly sure.',
+            '2. Someone could guess you watch 3 hours a night. Fairly sure.',  # 3 isn't in the facts
+            '- Someone could guess the house empties at 10:20 PM on Tuesdays. A hunch.',
+            '- Someone could guess the house empties at 9:15 PM. A hunch.',  # no such time
+            '- Someone could guess Fridays are quiet. A hunch.',  # no Friday in the facts
+            '- **Someone could guess** a night owl lives here, 60 percent sure.',
+        ]))
+        self.assertEqual([
+            'Someone could guess Sunday is TV day: 450 of 1691 minutes. Fairly sure.',
+            'Someone could guess the house empties at 10:20 PM on Tuesdays. A hunch.',
+            'Someone could guess a night owl lives here, 60 percent sure.',
+        ], bot.infer(FACTS))
+
+    def test_at_most_five_lines(self):
+        bot, _ = self.model('\n'.join(['Someone could guess people watch on Sundays.'] * 8))
+        self.assertEqual(5, len(bot.infer(FACTS)))
+
+    def test_phrase_falls_back_when_model_fails_or_nothing_survives(self):
+        down, _ = self.model(OSError('connection refused'))
+        self.assertIsNone(ollama_agent.phrase(down, FACTS))
+        invented, _ = self.model('Someone could guess you own 4 TVs.')
+        self.assertIsNone(ollama_agent.phrase(invented, FACTS))
+        unused, seen = self.model('Someone could guess nothing.')
+        self.assertIsNone(ollama_agent.phrase(unused, []))
+        self.assertEqual([], seen, 'no facts, no model call')
+
+
+class InferenceRouting(unittest.TestCase):
+    REPORT = {'demo': False, 'hours': 168, 'facts': FACTS, 'text': 'Template text.'}
+
+    def tearDown(self):
+        voice_agent.phrase_inferences = None
+
+    @patch('voice_agent.request', return_value=REPORT)
+    def test_privacy_question_reads_a_week_and_uses_the_model(self, request):
+        given = []
+        voice_agent.phrase_inferences = lambda facts: given.append(facts) or 'Someone could guess Sundays.'
+        self.assertEqual('Someone could guess Sundays.', voice_agent.respond('What do they know about me?'))
+        request.assert_called_once_with('/what-they-know?hours=168')
+        self.assertEqual([FACTS], given)
+
+    @patch('voice_agent.request', return_value=REPORT)
+    def test_template_when_model_has_nothing(self, request):
+        voice_agent.phrase_inferences = lambda facts: None
+        self.assertEqual('Template text.', voice_agent.respond('What do they know about me?'))
+
+    @patch('voice_agent.request', return_value={**REPORT, 'facts': [], 'text': 'Not enough traffic.'})
+    def test_no_facts_never_reaches_the_model(self, request):
+        voice_agent.phrase_inferences = lambda facts: self.fail('model called without facts')
+        self.assertEqual('Not enough traffic.', voice_agent.respond('What do they know about me?'))
 
 
 if __name__ == '__main__':
