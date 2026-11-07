@@ -23,7 +23,9 @@ class FeedRetention(unittest.TestCase):
         patcher = patch.object(api, 'recent', self.feed)
         patcher.start()
         self.addCleanup(patcher.stop)
-        self.client = TestClient(api.app)
+        # Exercise writes as the loopback-only feed producers do. TestClient's
+        # default synthetic host is remote under the API write-auth policy.
+        self.client = TestClient(api.app, client=('127.0.0.1', 50000))
 
     def domains(self):
         return [e['domain'] for e in self.feed]
