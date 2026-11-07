@@ -41,6 +41,13 @@ The server binds only to localhost for the laptop demo. External fonts, analytic
 
 ## Voice view
 
-Calling Eddie opens a larger animated character with listening, thinking and speaking states. The view stays open after a reply and prompts “Say Hey Eddie to ask again”; this means the wake detector is ready, not continuous command capture. There is no typed input. Transcripts and replies are not displayed beneath Eddie; speech is the primary response.
+Calling Eddie opens a larger animated character with listening, thinking and speaking states. After “Hey Eddie” and after each reply, Eddie keeps listening for a follow-up without the wake phrase. If nothing is said for 4 seconds, Eddie disappears and the live feed comes back; the next request starts with “Hey Eddie” again. A preview opened with **Wake Eddie** or **Space** while the microphone is off also closes after 4 seconds. There is no typed input. Transcripts and replies are not displayed beneath Eddie; speech is the primary response.
 
 **Open logs** at the bottom right opens a live drawer of the same recent network activity shown by the main feed. Closing the drawer leaves Eddie open. Escape or the top close control dismisses Eddie. This drawer does not persist microphone audio or speech transcripts.
+
+
+Voice recovery: after an empty/failed transcription, Eddie says “Didn’t catch that. Try again.” and listens again. Four seconds of silence after the initial wake or during a follow-up dismisses Eddie back to the newest feed activity. Speech inference errors recover without disabling wake detection; microphone errors and bridge disconnects close the overlay. Listening/waiting uses a yellow ambient glow, speaking uses blue. Automated voice checks pass; live microphone/noisy-room accuracy still needs rehearsal.
+
+Conversation activity is explicit (`is_eddie_active`): wake activates it, each spoken reply starts a fresh four-second wait, and silence dismisses it. The initial wait has no retry prompt or extra four-second grace period. Speaking and transcription do not count toward the user response window.
+
+Dismissal fades and gently lowers Eddie over 320 ms before closing the dialog. Escape uses the same exit. A new wake cancels an unfinished exit; reduced-motion preferences skip the animation. The four-second response timeout starts the exit rather than closing abruptly.

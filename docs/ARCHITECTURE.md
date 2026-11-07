@@ -28,6 +28,13 @@ The development launcher uses provisioned Piper Lessac rather than macOS speech.
 
 ## Voice-first presentation
 
-The assistant view has no text-entry UI. Its larger character stays animated while open, with distinct listening, thinking and speaking states. A runtime idle event displays a wake-ready prompt without dismissing Eddie; a new wake phrase is still required for the next command. Open logs toggles a live recent-network-activity drawer inside the assistant view, using the existing feed rather than a new log store.
+The assistant view has no text-entry UI. Its larger character stays animated while open, with distinct listening, thinking and speaking states. After a wake and after each reply the worker keeps listening for a follow-up; 4 seconds without speech emits `voice_state: dismissed`, which closes Eddie and returns to the live feed. A new wake phrase is then required. Open logs toggles a live recent-network-activity drawer inside the assistant view, using the existing feed rather than a new log store.
 
 The assistant copy beneath the character is hidden in the voice view; state remains above Eddie and Open logs remains available. Speech events still drive the character animation.
+
+
+Voice recovery: after an empty/failed transcription, Eddie says “Didn’t catch that. Try again.” and listens again. Four seconds of silence after the initial wake or during a follow-up dismisses Eddie back to the newest feed activity. Speech inference errors recover without disabling wake detection; microphone errors and bridge disconnects close the overlay. Listening/waiting uses a yellow ambient glow, speaking uses blue. Automated voice checks pass; live microphone/noisy-room accuracy still needs rehearsal.
+
+Conversation activity is explicit (`is_eddie_active`): wake activates it, each spoken reply starts a fresh four-second wait, and silence dismisses it. The initial wait has no retry prompt or extra four-second grace period. Speaking and transcription do not count toward the user response window.
+
+Dismissal fades and gently lowers Eddie over 320 ms before closing the dialog. Escape uses the same exit. A new wake cancels an unfinished exit; reduced-motion preferences skip the animation. The four-second response timeout starts the exit rather than closing abruptly.

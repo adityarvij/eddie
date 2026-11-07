@@ -79,7 +79,7 @@
 2. "Hey Eddie, what's the TV doing?" → spoken answer
 3. "Block it" → feed turns red, Netflix still plays
 4. Home mode: Adi's phone is on the Wi-Fi → the Fire Stick goes quiet; phone leaves the Wi-Fi → it reconnects. Pitch: the same thing keeps strangers from watching you through Ring indoor cameras
-5. Simulated living-room camera on the dashboard: uploading with a live frame → Adi's phone joins the Wi-Fi → "Upload blocked: home mode" → phone leaves → uploads resume
+5. Simulated living-room camera on the dashboard: uploading with a live frame → Adi's phone joins the Wi-Fi → "Upload blocked: home mode" → phone leaves → uploads resume. Preferred if router mode works: a real phone camera streaming to YouTube Live, cut mid-stream by home mode (see "Home mode demo with a real stream")
 6. Pull the internet → Eddie still works (proves local)
 7. "Hey Eddie, email Will the report" → assistant action
 8. Pitch: buyer (privacy-conscious homes, Airbnb hosts) and why now
@@ -362,6 +362,32 @@ The most dangerous thing smart devices leak isn't what you watch. It's when you'
 - **New device alert:** "A device I've never seen joined your network at 2:14 AM." Unknown devices are quarantined (no internet) until you approve them.
 - **Presence masking (stretch):** in away mode, keep presence-revealing devices at a steady, normal-looking traffic level so the pattern looks occupied.
 
+### Home mode demo with a real stream (Option A, planned)
+
+Not built yet. Goal: show the audience what would happen to a Ring camera, using a real camera uploading to a real cloud, cut mid-stream by "Hey Eddie, turn on home mode". No fake script.
+
+- **Why it matches Ring:** a Ring camera uploads straight to the cloud. Here a phone streams straight to YouTube Live, so Eddie cuts the camera itself, not a laptop in the house.
+- **Eddie must be the router.** A live stream is one long connection, so DNS blocking can't stop one that's already running. The Pi's built-in Wi-Fi broadcasts an "Eddie" network that every device joins; the USB Wi-Fi adapter (keep it) joins the iPhone hotspot as the upstream. Eddie hands out addresses, answers DNS and runs the firewall (nftables). Side benefits: no per-device DNS setup, and phone presence comes straight from devices joining and leaving.
+- **Camera:** a spare phone on Eddie's Wi-Fi running an RTMP app (e.g. Larix Broadcaster) with the YouTube stream key. Set the stream to "Ultra-low latency" so the cut shows in seconds, not 20–30.
+- **Enforcement:** home mode adds the camera's IP to a firewall set; every packet to or from it is dropped, so the upload dies on the next packet. Turning home mode off removes it and the app reconnects.
+
+  ```bash
+  # one-time setup on the Pi
+  sudo nft add table inet eddie
+  sudo nft add set inet eddie homeblock '{ type ipv4_addr; }'
+  sudo nft add chain inet eddie fwd '{ type filter hook forward priority 0; }'
+  sudo nft add rule inet eddie fwd ip saddr @homeblock drop
+  sudo nft add rule inet eddie fwd ip daddr @homeblock drop
+  # home mode on / off (backend runs these with the camera's IP from the device table)
+  sudo nft add element inet eddie homeblock '{ 10.42.0.23 }'
+  sudo nft delete element inet eddie homeblock '{ 10.42.0.23 }'
+  ```
+
+- **Demo:** YouTube stream live on screen → "Hey Eddie, turn on home mode" (or Will's phone joins Eddie's Wi-Fi) → dashboard shows "Home mode: blocking Living room cam" → the stream stalls → home mode off → the stream comes back. The Fire Stick keeps playing Netflix next to it, trackers blocked.
+- **Check early:** enable live streaming on the YouTube account now (first-time activation can take up to 24 hours); streaming through an app with a stream key avoids the YouTube mobile app's subscriber requirement. Test the Pi access point as soon as the kit arrives, since it's the riskiest step.
+- **Fallback:** if router mode fails, stay on DNS-only, turn home mode on before the camera app reconnects (restart the stream) so the lookup is blocked, and present instant cut-off as what router mode does.
+- Record the full sequence once it works, as the backup video.
+
 ### More ideas
 
 - **Bypass detection:** flag devices that skip Eddie with their own DNS or encrypted DNS, and block those resolvers.
@@ -416,3 +442,5 @@ With a Fire Stick you'll mainly see Safety, What's on screen, Identity linking a
 The offline wake/capture/transcription worker and deterministic summary/home-mode tool router are implemented. Whisper, shared wake features, Vosk and Piper Lessac assets are provisioned on the development Mac. The dedicated Hey Eddie ONNX model still needs training; the explicit offline Vosk prototype is available now via `./scripts/run_voice.sh`. Live-room microphone accuracy remains unverified. General Ollama tool calling, domain rules, lockdown and email are not yet connected. See [voice setup](voice/README.md), [architecture and remaining work](docs/ARCHITECTURE.md), and [contributor instructions](AGENTS.md). The Mac is the development host; final deployment stays portable to Linux.
 
 The voice view now features a larger active Eddie, spoken interaction without a text box, and a bottom-right Open logs drawer for recent network activity.
+
+Voice conversations remain active between requests without repeating Hey Eddie. Four seconds waiting without speech dismisses Eddie, including immediately after the initial wake.
