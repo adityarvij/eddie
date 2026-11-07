@@ -5,20 +5,43 @@ from pathlib import Path
 
 
 class Capture:
-    """16 kHz / 80 ms frames; ignore leading silence and stop after speech."""
-    def __init__(self, threshold=0.015):
+    """16 kHz / 80 ms frames; wait up to 4 s for speech, then stop after 800 ms of silence."""
+    def __init__(self, threshold=0.015, wait_frames=50, max_frames=125):
         self.threshold = threshold
+        self.wait_frames = wait_frames
+        self.max_frames = max_frames
         self.frames = []
+        self.waited = 0
+        self.spoken = 0
         self.silent = 0
         self.heard = False
 
     def push(self, frame):
         import numpy as np
+        loud = bool(np.sqrt(np.mean((frame.astype(np.float32) / 32768) ** 2)) >= self.threshold)
+        self.heard |= loud
         self.frames.append(frame.copy())
-        loud = np.sqrt(np.mean((frame.astype(np.float32) / 32768) ** 2)) >= self.threshold
-        self.heard |= bool(loud)
+        if not self.heard:
+            # Keep a short pre-roll only, so waiting for speech stays bounded.
+            self.frames = self.frames[-3:]
+            self.waited += 1
+            return self.waited >= self.wait_frames
+        self.spoken += 1
         self.silent = 0 if loud else self.silent + 1
-        return len(self.frames) >= 125 or (self.heard and self.silent >= 10)
+        return self.spoken >= self.max_frames or self.silent >= 10
+
+
+def transcribe_command(samples, transcriber, emit, answer):
+    """Recover from a missed utterance without terminating wake detection."""
+    emit({'type': 'voice_state', 'state': 'thinking'})
+    try:
+        segments, _ = transcriber.transcribe(samples, language='en', beam_size=1, vad_filter=True)
+        text = ' '.join(segment.text.strip() for segment in segments).strip()
+    except Exception:
+        text = ''
+    if text:
+        emit({'type': 'transcript', 'text': text})
+    answer(text)
 
 
 def run(emit, answer, speaking, stopped):
@@ -82,6 +105,7 @@ def run(emit, answer, speaking, stopped):
         emit({'type': 'voice_status', 'status': 'ready', 'message': ready_message, 'engine': engine})
         capture = None
         hits = 0
+        followup = False
         while not stopped.is_set():
             if speaking.is_set():
                 stopped.wait(0.1)
@@ -95,9 +119,9 @@ def run(emit, answer, speaking, stopped):
             if overflow.is_set():
                 overflow.clear()
                 drain()
-                capture = None
                 hits = 0
-                emit({'type': 'voice_state', 'state': 'idle'})
+                if capture is not None:
+                    capture = Capture(rms)
                 continue
             if capture is None:
                 score = max(detector.predict(frame).values(), default=0)
@@ -105,20 +129,28 @@ def run(emit, answer, speaking, stopped):
                 if hits >= 2:
                     hits = 0
                     capture = Capture(rms)
+                    followup = False
                     emit({'type': 'wake'})
                     emit({'type': 'voice_state', 'state': 'listening'})
                 continue
             if not capture.push(frame):
                 continue
-            if capture.heard:
-                emit({'type': 'voice_state', 'state': 'thinking'})
-                samples = np.concatenate(capture.frames).astype(np.float32) / 32768
-                segments, _ = transcriber.transcribe(samples, language='en', beam_size=1, vad_filter=True)
-                text = ' '.join(s.text.strip() for s in segments).strip()
-                if text:
-                    emit({'type': 'transcript', 'text': text})
-                    # Synchronous reply prevents queued audio or speech re-triggering the detector.
-                    answer(text)
-            capture = None
+            if not capture.heard:
+                if not followup:
+                    answer('')
+                    followup = True
+                    drain()
+                    capture = Capture(rms)
+                    emit({'type': 'voice_state', 'state': 'listening'})
+                    continue
+                capture = None
+                drain()
+                emit({'type': 'voice_state', 'state': 'dismissed'})
+                continue
+            samples = np.concatenate(capture.frames).astype(np.float32) / 32768
+            transcribe_command(samples, transcriber, emit, answer)
+            followup = True
+            # Keep listening for a follow-up without requiring the wake phrase again.
             drain()
-            emit({'type': 'voice_state', 'state': 'idle'})
+            capture = Capture(rms)
+            emit({'type': 'voice_state', 'state': 'listening'})

@@ -28,6 +28,9 @@ The development launcher uses provisioned Piper Lessac rather than macOS speech.
 
 ## Voice-first presentation
 
-The assistant view has no text-entry UI. Its larger character stays animated while open, with distinct listening, thinking and speaking states. A runtime idle event displays a wake-ready prompt without dismissing Eddie; a new wake phrase is still required for the next command. Open logs toggles a live recent-network-activity drawer inside the assistant view, using the existing feed rather than a new log store.
+The assistant view has no text-entry UI. Its larger character stays animated while open, with distinct listening, thinking and speaking states. After a wake and after each reply the worker keeps listening for a follow-up; 4 seconds without speech emits `voice_state: dismissed`, which closes Eddie and returns to the live feed. A new wake phrase is then required. Open logs toggles a live recent-network-activity drawer inside the assistant view, using the existing feed rather than a new log store.
 
 The assistant copy beneath the character is hidden in the voice view; state remains above Eddie and Open logs remains available. Speech events still drive the character animation.
+
+
+Voice recovery: after an initial wake with no command, or an empty/failed transcription, Eddie says “Didn’t catch that. Try again.” and listens again. Four seconds of silence during a follow-up dismisses Eddie back to the newest feed activity. Speech inference errors recover without disabling wake detection; microphone errors and bridge disconnects close the overlay. Listening/waiting uses a yellow ambient glow, speaking uses blue. Automated voice checks pass; live microphone/noisy-room accuracy still needs rehearsal.

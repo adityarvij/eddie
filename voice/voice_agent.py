@@ -13,15 +13,45 @@ def request(path, body=None):
         return json.load(response)
 
 
+HOME_MODE_TOOL = {
+    'type': 'function',
+    'function': {
+        'name': 'set_home_mode',
+        'description': 'Enable or disable home mode when the user explicitly requests it.',
+        'parameters': {
+            'type': 'object',
+            'properties': {'enabled': {'type': 'boolean'}},
+            'required': ['enabled'],
+            'additionalProperties': False,
+        },
+    },
+}
+
+
+def set_home_mode(enabled):
+    """Shared action for the voice router and future local-model tool calling."""
+    if type(enabled) is not bool:
+        raise ValueError('enabled must be a boolean')
+    result = request('/mode', {'home_mode': enabled})
+    if result.get('home_mode') is not enabled:
+        raise ValueError('Mode was not acknowledged')
+    return {'home_mode': enabled}
+
+
 def respond(text):
+    if not text.strip():
+        return "Didn't catch that. Try again."
     text = re.sub(r'[^a-z0-9\s]', '', text.lower()).strip()
-    if re.fullmatch(r'(?:please )?(?:turn|switch) (on|off) home mode(?: please)?', text):
-        enabled = 'on' in text.split()
+    text = re.sub(r'\s+', ' ', text)
+    # Match the entire request so negations, questions and additional actions
+    # cannot accidentally activate a privacy setting.
+    on = re.fullmatch(r'(?:please )?(?:(?:turn|switch) on home mode|(?:turn|switch) home mode on|enable home mode|(?:i want|id like) home mode (?:on|enabled)|(?:can|could|would) you (?:turn on|enable) home mode)(?: please)?', text)
+    off = re.fullmatch(r'(?:please )?(?:(?:turn|switch) off home mode|(?:turn|switch) home mode off|disable home mode|(?:i want|id like) home mode (?:off|disabled)|(?:can|could|would) you (?:turn off|disable) home mode)(?: please)?', text)
+    if on or off:
+        enabled = bool(on)
         try:
-            result = request('/mode', {'home_mode': enabled})
-            if result.get('home_mode') is not enabled:
-                raise ValueError('Mode was not acknowledged')
-            return f"Home mode is {'on' if enabled else 'off'} in Eddie’s backend. DNS enforcement depends on the connected decision engine."
+            set_home_mode(enabled)
+            return f"Home mode turned {'on' if enabled else 'off'}."
         except Exception:
             return "I couldn't update home mode. Check the local backend before trying again."
     if re.search(r'\b(block|allow|lock|undo|email|send|mode)\b', text):
