@@ -57,3 +57,20 @@ Checks performed: ten unit tests; synthetic Piper “Hey Eddie” recognized twi
 Voice recovery: after an empty/failed transcription, Eddie says “Didn’t catch that. Try again.” and listens again. Four seconds of silence after the initial wake or during a follow-up dismisses Eddie back to the newest feed activity. Speech inference errors recover without disabling wake detection; microphone errors and bridge disconnects close the overlay. Listening/waiting uses a yellow ambient glow, speaking uses blue. Automated voice checks pass; live microphone/noisy-room accuracy still needs rehearsal.
 
 Conversation activity is explicit (`is_eddie_active`): wake activates it, each spoken reply starts a fresh four-second wait, and silence dismisses it. The initial wait has no retry prompt or extra four-second grace period. Speaking and transcription do not count toward the user response window.
+
+## Confirmation for risky actions
+
+Risky actions (lockdown and email, once built) never run from the command that asks for them. `voice_agent.Confirmation` holds at most **one** pending action, `{kind, args, prompt, expires_at}`, and speaks the read-back prompt followed by “Say yes to confirm or no to cancel.”
+
+| Next reply | Result |
+|---|---|
+| Exactly “yes”, “yeah”, “yep”, “yes please”, “do it”, “yes do it”, “go ahead” or “confirm” | Runs the action once. Success is spoken only if the action reports backend acknowledgment; otherwise Eddie says it couldn't confirm the change. |
+| Exactly “no”, “nope”, “no thanks”, “cancel”, “cancel it”, “stop”, “don't” or “never mind” | Discards it: “Cancelled. Nothing changed.” |
+| Another risky command | Replaces the pending action and says the earlier one was dropped. |
+| Anything else, including missed speech | Re-prompts once; a second unclear reply discards it without running. |
+| 15 seconds after the request | Expires. A late yes or no is told it expired; nothing runs. |
+| Conversation dismissed, microphone stopped or errored | Discarded. |
+
+Replies must match the whole utterance after lowercasing and removing punctuation, so “yes, but not the TV” is unclear, not a yes. Typed asks use the same router. While an action is pending the bridge emits `voice_state: confirming` with `kind`, `prompt` and `expires_in_ms` (never the action's arguments); the dashboard shows “say yes or no” until the next reply, dismissal or expiry. No pending action, reply or transcript is persisted or logged.
+
+No risky action is registered yet: `RISKY_ACTIONS` and `RISKY_COMMANDS` are empty until lockdown (#31) and email (#37) land, so today this flow is only reachable from unit tests. Closing the dashboard overlay by hand does not notify the worker; the 15 second expiry still applies.
