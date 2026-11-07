@@ -1,0 +1,2 @@
+vosk==0.3.44
+sounddevice>=0.5,<0.6

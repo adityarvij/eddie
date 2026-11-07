@@ -1,0 +1,12 @@
+[project]
+name = "eddie"
+version = "0.1.0"
+description = "Local privacy guard"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+]
+
+[tool.uv]
+package = false
