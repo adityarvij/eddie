@@ -5,6 +5,11 @@ batches events and posts them, so DNS never waits on the API. If the API is
 down or slow, events are dropped and counted, never retried: the feed is a
 live view, and the query log (store.py) is the history.
 
+Two kinds of lookup are left out of the feed (they're still answered and in
+the query log): network plumbing (decision.is_plumbing: reverse lookups,
+service discovery), and repeats of the same device, domain and decision
+within REPEAT_MS, such as a browser asking for A and AAAA at once.
+
 Events use the query format in docs/EVENTS.md. Until devices.py (#14) maps an
 IP to a MAC and label, device_mac is "ip:<client IP>" and device is the IP.
 
@@ -21,11 +26,14 @@ import threading
 import urllib.request
 
 from .classifier import _OPENER, check_local
+from .decision import is_plumbing
 
 DEFAULT_URL = "http://127.0.0.1:8000"
 MAX_PENDING = 1_000  # events waiting for the sender before new ones are dropped
 BATCH = 100  # events per POST at most
 TIMEOUT = 1.0  # seconds per POST
+REPEAT_MS = 2_000  # same device, domain and decision again within this is one feed line
+MAX_RECENT = 10_000  # (device, domain, decision) keys remembered for REPEAT_MS
 
 log = logging.getLogger("eddie.feed")
 _STOP = object()
@@ -47,10 +55,23 @@ class FeedPublisher:
         self.timeout = timeout
         self.dropped = 0
         self.failing = False
+        self.last_sent: dict[tuple, int] = {}  # (device_mac, domain, action) -> ts
         self.thread = threading.Thread(target=self._send_loop, name="eddie-feed", daemon=True)
         self.thread.start()
 
     def publish(self, event: dict) -> None:
+        """Queue a query event, unless it's plumbing or a repeat. Never blocks."""
+        if is_plumbing(event["domain"]):
+            return
+        key = (event["device_mac"], event["domain"], event["action"])
+        last = self.last_sent.get(key)
+        if last is not None and 0 <= event["ts"] - last < REPEAT_MS:
+            return
+        if len(self.last_sent) >= MAX_RECENT:
+            self.last_sent = {k: t for k, t in self.last_sent.items() if event["ts"] - t < REPEAT_MS}
+            if len(self.last_sent) >= MAX_RECENT:
+                self.last_sent.clear()
+        self.last_sent[key] = event["ts"]
         try:
             self.pending.put_nowait(event)
         except queue.Full:

@@ -199,7 +199,7 @@ Hand this section and the ones below to a coding agent (Claude Code etc.). Targe
 
 ### Running the classifier
 
-`eddie/classifier.py` labels unknown domains with the local model. Its queue is the query log itself: flagged `queries` rows from the last hour with no `ai_verdicts` row yet. Each verdict is written to `ai_verdicts`, and the DNS server reloads rules and verdicts from `eddie.db` within about 0.2 s, so the next lookup of that domain uses it (about 2.5 s end to end with `llama3.2:3b` on the development Mac). DNS never waits on the model. Each verdict is also sent to the live feed as an `ai_verdict` event (`POST /ai/verdict`).
+`eddie/classifier.py` labels unknown domains with the local model. Its queue is the query log itself: flagged `queries` rows from the last hour with no `ai_verdicts` row yet. Each verdict is written to `ai_verdicts`, and the DNS server reloads rules and verdicts from `eddie.db` within about 0.2 s, so the next lookup of that domain uses it (about 2.5 s end to end with `llama3.2:3b` on the development Mac). DNS never waits on the model. Each verdict is also sent to the live feed as an `ai_verdict` event (`POST /ai/verdict`). Network plumbing (reverse lookups, service-discovery names, `.local`) is never queued, since it isn't a company to judge.
 
 ```bash
 uv run python -m eddie.classifier   # needs Ollama running and the same EDDIE_DB as the DNS server
