@@ -22,12 +22,19 @@ const source=fs.readFileSync('frontend/app.js','utf8');
 vm.runInNewContext(source,context);
 socket.onmessage({data:JSON.stringify({domain:'example.org',device:'TV',action:'allow',ts:Date.now()})});
 assert.equal(get('requests').textContent,'1');
-socket.onmessage({data:JSON.stringify({type:'ai_verdict',domain:'example.org',label:'needed',confidence:.9,reason:'App content',ts:Date.now()})});
+const tag=row=>row.children.at(-1).children[0];  // a row ends with the line: [tag, text]
+const verdictTs=new Date(2026,0,1,9,5,7).getTime();
+socket.onmessage({data:JSON.stringify({type:'ai_verdict',domain:'example.org',label:'needed',confidence:.9,reason:'App content',ts:verdictTs})});
 assert.equal(get('requests').textContent,'1','AI events must not be counted as DNS requests');
 assert.equal(get('allowed').textContent,'1');
-assert.match(get('feed').children.at(-1).textContent,/^\[ai\] example\.org → needed/);
-const tag=row=>row.children.at(-1).children[0];  // a row ends with the line: [tag, text]
-assert.equal(tag(get('feed').children.at(-1)).className,'tag tag-ai');
+assert.match(get('feed').children.at(-1).textContent,/\[approved \(ai\)\] example\.org — App content$/);
+assert.equal(tag(get('feed').children.at(-1)).className,'tag tag-allow','an AI line is coloured like its result');
+for (const [label, shown] of [['unsure','unsure (ai)'],['tracker','flagged (ai)']]) {
+  socket.onmessage({data:JSON.stringify({type:'ai_verdict',domain:'t.example',label,confidence:.6,reason:'Why',ts:verdictTs})});
+  assert.equal(tag(get('feed').children.at(-1)).textContent,`[${shown}]`,'the AI never blocks, so a tracker reads flagged');
+  assert.equal(tag(get('feed').children.at(-1)).className,'tag tag-flag');
+}
+assert.equal(get('feed').children.at(-1).children[0].textContent,new Date(verdictTs).toLocaleTimeString([],{hour12:false}),'an AI line starts with the verdict time');
 socket.onmessage({data:JSON.stringify({domain:'ads.example',device:'TV',action:'block',reason:'On a list',ts:Date.now()})});
 assert.match(get('feed').children.at(-1).textContent,/\[blocked\] TV → ads\.example — On a list$/);
 assert.equal(tag(get('feed').children.at(-1)).className,'tag tag-block');
@@ -37,7 +44,8 @@ assert.match(get('feed').children[0].textContent,/\[approved\] TV → example\.o
 
 // Rule changes: a [rule] feed row and a toast that say stored, never enforced.
 socket.onmessage({data:JSON.stringify({type:'rule_change',change:'added',id:7,pattern:'device-metrics-us.amazon.com',action:'block',device_mac:'f0:4f:7c:11:22:33',device:'Fire Stick',created_by:'voice'})});
-assert.equal(get('feed').children.at(-1).textContent,'[rule] Rule added: block device-metrics-us.amazon.com · Fire Stick · by voice');
+assert.equal(tag(get('feed').children.at(-1)).parent.textContent,'[rule] Rule added: block device-metrics-us.amazon.com · Fire Stick · by voice');
+assert.match(get('feed').children.at(-1).children[0].textContent,/^\d{2}:\d{2}:\d{2}$/,'a rule line starts with its time');
 assert.equal(tag(get('feed').children.at(-1)).className,'tag tag-rule');
 assert.equal(get('notice').textContent,'Rule added: block device-metrics-us.amazon.com · Fire Stick · by voice');
 socket.onmessage({data:JSON.stringify({type:'rule_change',change:'removed',id:8,pattern:'a.example',action:'allow',device_mac:null,device:null,created_by:'api'})});
@@ -59,6 +67,11 @@ assert.equal(get('assistant-pending').hidden,true,'dismissal clears the pending 
 assert.equal(get('assistant-pending').textContent,'');
 
 assert.doesNotMatch(source,/localStorage|sessionStorage|indexedDB|document\.cookie/,'nothing is persisted client-side');
+// A snapshot's verdicts sit among its DNS lines by time, not in a block at the end.
+socket.onmessage({data:JSON.stringify({type:'snapshot',events:[
+  {domain:'a.example',device:'TV',action:'flag',ts:1000},{domain:'c.example',device:'TV',action:'allow',ts:3000}],
+  ai_verdicts:[{type:'ai_verdict',domain:'b.example',label:'needed',reason:'Why',ts:2000}],totals:{seen:2,blocked:0}})});
+assert.deepEqual(get('feed').children.map(row=>row.textContent.match(/[abc]\.example/)[0]),['a.example','b.example','c.example']);
 console.log('Frontend query/verdict/rule/confirmation event checks passed');
 
 // "What they know": the demo week always shows its banner; live facts never do.
