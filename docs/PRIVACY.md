@@ -95,7 +95,7 @@ Owner: [eddie/store.py](../eddie/store.py), written by [eddie/dns_server.py](../
 | Domains, model output and verdicts are never written to the classifier's log; it logs only counts and error types. Malformed model output is rejected, not stored. Tested. | implemented |
 | Ollama itself may keep its own logs; its default doesn't log prompts, but `OLLAMA_DEBUG` would. | known behaviour |
 | Email is sent only after spoken confirmation; lockdown needs confirmation too. | planned |
-| Inferences ("what they know") stay on the box, because the inferences are themselves a profile of the household. | planned |
+| Inferences ("what they know") stay in the house, because the inferences are themselves a profile of the household: facts are computed in Python and phrased only by the local model at `EDDIE_OLLAMA_URL`, which must be localhost or a private IP literal (no proxies, no redirects). No cloud model is ever called. Tested with a stubbed model. | implemented |
 | The live "what they know" report reads the query log read-only and names devices only by user label, "<vendor> device" or "unlabeled device", never MAC, IP or DHCP hostname, because its facts can reach the local model through the voice agent. Facts are computed per request and not stored. Tested. | implemented |
 
 ## Home mode and camera

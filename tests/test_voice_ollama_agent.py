@@ -212,6 +212,7 @@ class Inferences(unittest.TestCase):
             '- Someone could guess the house empties at 9:15 PM. A hunch.',  # no such time
             '- Someone could guess Fridays are quiet. A hunch.',  # no Friday in the facts
             '- **Someone could guess** a night owl lives here, 60 percent sure.',
+            'Nobody could guess much from 450 minutes.',  # not phrased as a guess
         ]))
         self.assertEqual([
             'Someone could guess Sunday is TV day: 450 of 1691 minutes. Fairly sure.',

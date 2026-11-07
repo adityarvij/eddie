@@ -319,7 +319,8 @@ class Agent:
         lines = []
         for line in str(message.get('content') or '').splitlines():
             line = ' '.join(re.sub(r'^\s*(?:[-*•]|\d+[.)])\s*', '', line).replace('**', '').split())
-            if 'could guess' in line.lower() and len(line) <= MAX_LINE_CHARS and supported(line, facts):
+            if (line.lower().startswith('someone could guess') and len(line) <= MAX_LINE_CHARS
+                    and supported(line, facts)):
                 lines.append(line)
         return lines[:MAX_INFERENCES]
 
