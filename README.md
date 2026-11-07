@@ -12,6 +12,15 @@
 4. Blocked requests get a dead-end answer. The data never leaves the house.
 5. The screen shows every decision live. "Hey Eddie" lets you ask and command by voice.
 
+## Run it (development)
+
+```bash
+./scripts/run_all.sh            # API + fake traffic in Docker, dashboard on the host
+./scripts/run_all.sh --no-fake  # API only, for a real DNS server posting to :8000
+```
+
+Dashboard at http://localhost:5173, API at http://localhost:8000. The traffic API and `fake_traffic.py` run in Docker (`compose.yaml`) with `restart: unless-stopped`, so they keep running until `docker compose down`. The dashboard (`frontend/serve.py`, launched through `scripts/run_voice.sh` with the Vosk wake prototype and Piper voice) stays on the host because it also runs the voice loop, and Docker on macOS can't reach the microphone or speaker; Ctrl-C stops it. Ollama also stays on the host for Metal GPU access. `EDDIE_BIND=0.0.0.0` exposes the API on the network; the iPad also needs `serve.py` to bind beyond localhost and the page opened with `?traffic=ws://<Mac IP>:8000/ws/events`, which isn't wired up yet. The fake traffic's verdicts, including the "AI:" ones, are scripted, not real classifier output.
+
 ## Stack (hackathon version)
 
 - **Network core:** Python + dnslib (DNS server) on the Raspberry Pi; devices point their DNS at it; optional scapy for non-DNS traffic
