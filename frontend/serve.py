@@ -1,5 +1,6 @@
 """Local dashboard and offline voice bridge. No microphone audio is persisted."""
 import argparse
+import functools
 import hmac
 import io
 import ipaddress
@@ -160,9 +161,8 @@ def answer(text, reply=None, alarm=None):
 
 def speak_piper(model, response):
     """Speak on this computer's speaker, hand the reply to the dashboard as audio, or both (EDDIE_SPEAKER)."""
-    from piper import PiperVoice
     import numpy as np
-    voice = PiperVoice.load(model)
+    voice = piper_voice(model)
     if SPEAKER == 'pi':
         import sounddevice as sd
         for chunk in voice.synthesize(response):
@@ -181,6 +181,13 @@ def speak_piper(model, response):
     else:
         # Only the dashboard speaks: keep the mic deaf for as long as it plays, plus the fetch and room echo.
         time.sleep(len(samples) / 2 / rate + DASHBOARD_TAIL)
+
+
+@functools.lru_cache(maxsize=1)
+def piper_voice(model):
+    """Loaded once: reading the voice from disk took 3.6 s a reply on the Pi 5."""
+    from piper import PiperVoice
+    return PiperVoice.load(model)
 
 
 def wav_bytes(samples, rate):

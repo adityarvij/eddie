@@ -463,7 +463,8 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   class AudioContext {
     constructor() { this.state = 'suspended'; this.destination = {}; }
     resume() { this.state = 'running'; }
-    createBufferSource() { return {connect() {}, start() { started.push(this.buffer); }}; }
+    createBuffer() { return 'silence'; }
+    createBufferSource() { return {connect() {}, start() { if (this.buffer !== 'silence') started.push(this.buffer); }}; }
     async decodeAudioData(bytes) { return {decoded: bytes}; }
   }
   context.window.AudioContext = AudioContext;

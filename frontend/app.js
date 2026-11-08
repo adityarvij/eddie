@@ -356,8 +356,17 @@ let voiceContext = null, pendingVoice = '';
 function unlockVoice() {
   const Context = window.AudioContext || window.webkitAudioContext;
   if (!Context) return;
+  // Web Audio follows the iPad's Silent mode unless the page asks for playback, like a music app (Safari 16.4+).
+  if (typeof navigator !== 'undefined' && navigator.audioSession) navigator.audioSession.type = 'playback';
   if (!voiceContext) voiceContext = new Context();
-  if (voiceContext.state !== 'running') voiceContext.resume();
+  if (voiceContext.state !== 'running') {
+    voiceContext.resume();
+    // Older iPads also want a sound started inside the tap itself.
+    const silence = voiceContext.createBufferSource();
+    silence.buffer = voiceContext.createBuffer(1, 1, 22050);
+    silence.connect(voiceContext.destination);
+    silence.start();
+  }
   $('voice-unlock').hidden = true;
   if (pendingVoice) { const id = pendingVoice; pendingVoice = ''; playVoice(id); }
 }
@@ -373,7 +382,9 @@ async function playVoice(id) {
     source.start();
   } catch {}
 }
-document.addEventListener('pointerdown', unlockVoice);
+// Safari counts the end of a tap (touchend, click) as permission to play, not pointerdown.
+document.addEventListener('touchend', unlockVoice);
+document.addEventListener('click', unlockVoice);
 $('voice-unlock').onclick = unlockVoice;
 
 function consumeEvent(event) {

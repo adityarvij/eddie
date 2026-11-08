@@ -43,6 +43,8 @@ class Speak(unittest.TestCase):
             self.addCleanup(p.stop)
         self.sleep = serve.time.sleep
         serve.latest_audio.clear()
+        serve.piper_voice.cache_clear()
+        self.addCleanup(serve.piper_voice.cache_clear)
 
     def speak(self, speaker):
         with patch.object(serve, 'SPEAKER', speaker):
@@ -69,6 +71,12 @@ class Speak(unittest.TestCase):
         self.assertEqual('speech_audio', self.events[0]['type'])
         self.assertEqual([(RATE // 2 + RATE // 4, RATE)], self.played)
         self.sleep.assert_not_called()  # playing here already holds the mic for the reply's length
+
+    def test_the_voice_loads_once(self):
+        with patch.object(Piper, 'load', wraps=Piper.load) as load:
+            self.speak('pi')
+            self.speak('ipad')
+        load.assert_called_once_with('voice.onnx')
 
 
 class AudioEndpoint(unittest.TestCase):
