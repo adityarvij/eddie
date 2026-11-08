@@ -514,6 +514,11 @@ async function loadSuggestions() {
   catch (e) { const p = document.createElement('p'); p.textContent = `unavailable${e.message ? `: ${e.message}` : ''}`; $('suggestions-list').replaceChildren(p); }
 }
 $('suggestions-open').onclick = () => showSuggestions($('suggestions').hidden);
+// capabilities, bottom right: what to ask Eddie, in a small pane over the corner. Eddie points here
+// instead of reading the whole list aloud.
+function showCapabilities(open) { $('capabilities').hidden = !open; $('capabilities-open').setAttribute('aria-expanded', String(open)); }
+$('capabilities-open').onclick = () => showCapabilities($('capabilities').hidden);
+$('capabilities-close').onclick = () => { showCapabilities(false); $('capabilities-open').focus(); };
 $('suggestions-close').onclick = () => { showSuggestions(false); $('suggestions-open').focus(); };
 // Cross-device tracker map (#107): which tracking companies each device looked up, from GET /api/tracker-map.
 function showTrackerMap(open) { $('tracker-map').hidden = !open; $('tracker-map-open').setAttribute('aria-expanded', String(open)); if (open) loadTrackerMap(); }
@@ -563,7 +568,7 @@ dialog.addEventListener('cancel', event => { event.preventDefault(); closeByUser
 dialog.addEventListener('close', () => { clearTimeout(exitTimer); dialog.classList.remove('closing'); toggleLogs(false); });
 $('close').onclick = closeByUser;
 dialog.addEventListener('click', e => { if (e.target === dialog) { const r=dialog.getBoundingClientRect(); if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom) closeByUser(); } });
-document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('devices-sheet').hidden && !dialog.open && e.target.tagName !== 'INPUT') { toggleDevices(false); return; } if (e.key === 'Escape' && !$('rules-sheet').hidden && !dialog.open) { toggleRules(false); return; } if (e.code === 'Space' && !['INPUT','TEXTAREA','BUTTON'].includes(document.activeElement.tagName)) { e.preventDefault(); wake(true); } });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('devices-sheet').hidden && !dialog.open && e.target.tagName !== 'INPUT') { toggleDevices(false); return; } if (e.key === 'Escape' && !$('rules-sheet').hidden && !dialog.open) { toggleRules(false); return; } if (e.key === 'Escape' && !$('capabilities').hidden && !dialog.open) { showCapabilities(false); return; } if (e.code === 'Space' && !['INPUT','TEXTAREA','BUTTON'].includes(document.activeElement.tagName)) { e.preventDefault(); wake(true); } });
 // A paired device (the iPad) opens the link the Eddie computer prints; the token stays in the
 // URL fragment, which is never sent in a request line and is not written to browser storage.
 const pairToken = new URLSearchParams(String(location.hash || '').slice(1)).get('pair');

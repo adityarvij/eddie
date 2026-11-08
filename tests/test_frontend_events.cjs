@@ -32,12 +32,15 @@ assert.match(styles, /\[data-hat-tip\] \.bellhop-hat\{[^}]*animation:role-hat-ti
 assert.doesNotMatch(styles, /role-hat-tip[^}]*infinite/, 'the hat-tip never loops');
 assert.match(fs.readFileSync('frontend/index.html','utf8'), /<\/g><g class="role-accessory bellhop-hat"/, 'the hat is drawn over the head, outside the eyes and mouth');
 const page = fs.readFileSync('frontend/index.html','utf8');
-assert.match(page, /<footer>.*id="open-rules"[^>]*>rules \(<span id="rules-count">.*id="open-devices".*id="offline-mode".*id="suggestions-open"[^>]*>learn more</, 'footer: rules, devices, online/offline, learn more');
+assert.match(page, /<footer>.*id="open-rules"[^>]*>rules \(<span id="rules-count">.*id="open-devices".*id="offline-mode".*id="suggestions-open"[^>]*>suggestions<.*id="capabilities-open"[^>]*>capabilities<\/button><\/div><\/footer>/, 'footer: rules, devices, online/offline, suggestions, capabilities last');
+assert.doesNotMatch(page, /learn more/, 'learn more is gone');
+assert.match(styles, /footer button span\{margin-left:0\}/, 'no stray space in "rules (7)"');
 assert.doesNotMatch(page, /class="panels"|id="rules" class="rules"/, 'no rules panel on the main screen');
 assert.match(page, /id="tracker-map-open"[^>]*hidden/, 'who sees what is hidden for now');
 assert.match(page, /id="devices-sheet".*id="quarantine-mode".*id="device-list"/, 'quarantine lives with the devices');
 assert.doesNotMatch(source, /DNS-only/, 'no DNS-only note');
-assert.match(page, /what to ask eddie/, 'learn more lists what to ask');
+assert.match(page, /<section id="capabilities"[^>]*hidden>.*what to ask eddie.*List my rules/, 'capabilities pane lists what to ask');
+assert.doesNotMatch(page.slice(page.indexOf('id="suggestions"'), page.indexOf('id="tracker-map"')), /what to ask/, 'suggestions are just the privacy settings');
 // getElementById returns the first match, so a repeated id makes one element overwrite another.
 const pageIds=[...fs.readFileSync('frontend/index.html','utf8').matchAll(/\sid="([^"]+)"/g)].map(m=>m[1]);
 assert.deepEqual(pageIds.filter((id,i)=>pageIds.indexOf(id)!==i),[],'every id in index.html is unique');

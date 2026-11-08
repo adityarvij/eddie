@@ -65,9 +65,9 @@ class NoModelFallback(unittest.TestCase):
         self.addCleanup(self.model.stop)
 
     @patch('voice_agent.request')
-    def test_unmatched_question_lists_supported_capabilities_without_a_write(self, request):
+    def test_unmatched_question_points_to_capabilities_without_a_write(self, request):
         reply = voice_agent.respond('Can you recommend a movie for tonight?')
-        self.assertEqual(voice_agent.NOT_CAUGHT, reply)
+        self.assertEqual(f"{voice_agent.NOT_CAUGHT} {voice_agent.CAPABILITIES_HINT}", reply)
         request.assert_not_called()
 
     @patch('voice_agent.request')
@@ -79,7 +79,8 @@ class NoModelFallback(unittest.TestCase):
 class HomeModeTool(unittest.TestCase):
     @patch('voice_agent.request', return_value={'home_mode': True})
     def test_explicit_enable_phrases(self, request):
-        for phrase in ('I want home mode on', 'enable home mode', 'turn home mode on', 'Can you turn on home mode?', 'Please turn on home mode'):
+        for phrase in ('I want home mode on', 'enable home mode', 'turn home mode on', 'Can you turn on home mode?', 'Please turn on home mode',
+                       'Itty, turn on home mode please.', 'Home mode on.', 'Hey Eddie, turn on the home mode', 'Eddie activate home mode now'):
             with self.subTest(phrase=phrase):
                 request.reset_mock()
                 self.assertTrue(voice_agent.respond(phrase).startswith('Home mode saved as on'))
@@ -87,7 +88,8 @@ class HomeModeTool(unittest.TestCase):
 
     @patch('voice_agent.request')
     def test_negations_and_questions_do_not_change_mode(self, request):
-        for phrase in ("don't turn on home mode", 'is home mode on', 'I might want home mode on', 'turn on home mode and email Will'):
+        for phrase in ("don't turn on home mode", 'is home mode on', 'I might want home mode on', 'turn on home mode and email Will',
+                       'what is home mode on', 'do not turn on home mode', 'should I turn on home mode', 'maybe home mode on'):
             voice_agent.respond(phrase)
         request.assert_not_called()
 
@@ -157,6 +159,17 @@ class BurglarsEyeTool(unittest.TestCase):
             with self.assertRaises(ValueError):
                 voice_agent.burglars_eye(hours)
         request.assert_not_called()
+
+class HomeModeOff(unittest.TestCase):
+    def test_off_phrasings(self):
+        for phrase in ('turn off home mode', 'Home mode off.', 'Itty, turn off home mode please', 'disable home mode',
+                       'Hey Eddie, switch the home mode off'):
+            with self.subTest(phrase=phrase):
+                self.assertIs(False, voice_agent.home_mode_command(voice_agent.words(phrase)))
+        for phrase in ("don't turn off home mode", 'is home mode off', 'turn off home mode and block it'):
+            with self.subTest(phrase=phrase):
+                self.assertIsNone(voice_agent.home_mode_command(voice_agent.words(phrase)))
+
 
 if __name__ == '__main__':
     unittest.main()
