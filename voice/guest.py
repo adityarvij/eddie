@@ -2,7 +2,7 @@
 
 Eddie can't tell voices apart, so while Guest Mode is on every voice and typed ask is
 treated as a guest's. The owner turns Guest Mode on and off, and picks what guests may
-use, from the dashboard on the Eddie computer (POST /api/guest), never by voice.
+use, from the dashboard (POST /api/guest). By voice the owner can only turn it on.
 
 The profile is a local JSON file (owner-only, mode 0600): {"active": bool, "allowed": [...]}.
 Only APPROVABLE categories can be allowed. OWNER_ONLY ones are refused whatever the file
@@ -59,7 +59,7 @@ class Profile:
         os.replace(tmp, self.path)
 
     def update(self, active=None, allowed=None):
-        """Owner change from the dashboard. Raises ValueError for anything but a bool and approvable names."""
+        """Owner change from the dashboard (or a spoken "turn on guest mode"). Raises ValueError for anything but a bool and approvable names."""
         if active is not None and type(active) is not bool:
             raise ValueError('active must be true or false')
         if allowed is not None and (not isinstance(allowed, list) or not all(c in APPROVABLE for c in allowed)):

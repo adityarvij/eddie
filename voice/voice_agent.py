@@ -94,6 +94,36 @@ def home_mode_command(text):
     return None
 
 
+# Guest Mode by voice (#163), phrased like home mode. Only the owner reaches it (a guest gets the
+# modes refusal first), and only to turn it on: Eddie can't tell voices apart, so "turn off guest
+# mode" would let any guest out. Turning it off stays on the dashboard's guest flag.
+_GUEST = r'(?:the )?guest ?mode'
+_GUEST_ON, _GUEST_OFF = _HOME_ON.replace(_HOME, _GUEST), _HOME_OFF.replace(_HOME, _GUEST)
+
+
+def guest_mode_command(text):
+    """True or False for a whole-utterance guest mode on/off command, else None."""
+    for on, core in ((True, _GUEST_ON), (False, _GUEST_OFF)):
+        match = re.fullmatch(rf'(?:(?P<lead>[a-z0-9]+(?: [a-z0-9]+)?) )?{LEAD}(?:go ahead and )?{core}{_MODE_TAIL}', text)
+        if match and not set((match['lead'] or '').split()) & NOT_A_LEAD_IN:
+            return on
+    return None
+
+
+def guest_mode_reply(on):
+    """The owner's spoken Guest Mode switch: on at once, like the dashboard's; off only from the dashboard."""
+    if not on:
+        return "Guest mode is already off."
+    try:
+        profile.update(active=True)
+    except OSError:
+        return "I couldn't turn on guest mode. Nothing changed for guests."
+    # As on the dashboard: a pending yes and the remembered domain don't carry over to the guest.
+    confirmation.cancel()
+    forget_conversation()
+    return f"Guest mode turned on. {guest_help()} Turn it off with the guest flag on the dashboard."
+
+
 def home_mode_action(enabled):
     """RISKY_ACTIONS['home_mode']: the model's set_mode after a yes."""
     return home_mode_reply(enabled)
@@ -655,8 +685,8 @@ def kid_name(device):
 
 
 def kid_mode_request(on):
-    """Confirmation.request args to turn kid mode on or off for every child's device not
-    already that way, or the spoken reply when there's nothing to change."""
+    """set_kid_mode's args (as Confirmation.request args) to turn kid mode on or off for every
+    child's device not already that way, or the spoken reply when there's nothing to change."""
     try:
         devices = request('/devices')['devices']
         locked = {row.get('device_mac') for row in request('/rules')
@@ -686,7 +716,7 @@ def set_kid_mode(on, devices, by='voice'):
 
 
 def kid_mode_change(on, by='dashboard'):
-    """Kid mode from the dashboard, whose own confirm dialog was the yes: the spoken-style result."""
+    """Kid mode from the dashboard's button or a spoken command, both run at once: the spoken-style result."""
     command = kid_mode_request(on)
     if isinstance(command, str):
         return command
@@ -1174,8 +1204,11 @@ def route(text):
         return profile.check('rules') or confirmation.request(*allow_request(*allow))
     kid_mode = kid_mode_target(raw)
     if kid_mode is not None:
-        command = profile.check('modes') or kid_mode_request(kid_mode)
-        return command if isinstance(command, str) else confirmation.request(*command)
+        # Runs at once, like home and guest mode: no yes/no.
+        return profile.check('modes') or kid_mode_change(kid_mode, by='voice')
+    guest_on = guest_mode_command(text)
+    if guest_on is not None:
+        return profile.check('modes') or guest_mode_reply(guest_on)
     lockdown = lockdown_target(raw)
     if lockdown and lockdown[1]:
         command = profile.check('rules') or lockdown_request(*lockdown)

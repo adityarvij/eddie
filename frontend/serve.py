@@ -51,7 +51,7 @@ token = os.environ.get('EDDIE_DASHBOARD_TOKEN') or secrets.token_urlsafe(24)
 # events, stay on the Eddie computer whatever token is sent.
 # /api/voice/dismiss only ends a conversation (closing Eddie on the iPad); it can't open or close the mic.
 PAIRED_CONTROLS = {'/api/voice/ask', '/api/voice/dismiss', '/api/mode', '/api/offline-mode', '/api/quarantine', '/api/devices/decide',
-                   '/api/devices/update', '/api/kid-mode', '/api/questions/answer', '/api/questions/undo',
+                   '/api/devices/update', '/api/kid-mode', '/api/guest', '/api/questions/answer', '/api/questions/undo',
                    '/api/tracker-map/block'}
 # Read-only relays to the traffic API, so the page (and the iPad) need no CORS or direct API access.
 READ_RELAYS = {'/api/rules': ('/rules', 'Rules unavailable.'),
@@ -134,7 +134,10 @@ def answer(text, reply=None, alarm=None):
         speaking.set()
         try:
             emit({'type': 'voice_state', 'state': 'thinking'})
+            was = voice_agent.profile.role()
             response = (reply or respond)(text)
+            if voice_agent.profile.role() != was:  # "turn on guest mode": the hat goes on now, not at the next poll
+                emit({'type': 'guest', **guest_view()})
             emit({'type': 'agent_reply', 'text': response})
             emit({'type': 'speaking', 'text': response, **({'title': alarm} if alarm else {})})
             if alarm:
@@ -279,7 +282,7 @@ def guest_view(view=None):
 
 
 def update_guest(body):
-    """(status, payload) for the owner's Guest Mode change (#163) from the Eddie computer.
+    """(status, payload) for the owner's Guest Mode change (#163) from the Eddie computer or the paired iPad.
 
     Any switch drops a pending yes/no and the remembered domain, so neither carries over between
     owner and guest; turning it off forgets the guest's timers.
@@ -439,7 +442,7 @@ class Handler(SimpleHTTPRequestHandler):
                 dismissed.set()
             return self.json_response(200, {'ok': True})
         if self.path == '/api/guest':
-            # Not in PAIRED_CONTROLS: only the Eddie computer changes what guests may use.
+            # In PAIRED_CONTROLS: the paired iPad's guest flag is the owner's switch too.
             return self.json_response(*update_guest(body))
         if self.path == '/api/voice/ask':
             text = str(body.get('text', '')).strip()[:1000]

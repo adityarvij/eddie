@@ -212,6 +212,7 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   assert.equal(get('kid-mode').attrs['aria-pressed'], 'true');
   assert.equal(get('kid-flag').hidden, false, 'the kid flag shows beside the house');
   assert.equal(get('kid-flag').attrs['aria-label'], 'kid mode on');
+  assert.equal(get('character').dataset.accessory, 'propeller', 'Eddie dresses for kid mode from the stored rules');
   rows = get('device-list').children;
   assert.equal(rows[2].children[2].textContent, '172.20.10.9 · locked down · 1 tracker blocked');
 
@@ -245,13 +246,8 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   assert.equal(get('kid-flag').attrs['title'], 'kid mode on for 1 of 2');
   assert.equal(get('kid-mode').attrs['aria-pressed'], 'false');
 
-  // The kid mode button asks first, then shows the bridge's own words, never its own claim.
-  let asked = '';
-  context.confirm = text => { asked = text; return false; };
-  get('kid-mode').onclick();
-  assert.equal(asked, "Turn on kid mode? Fire Stick will only reach the kid-safe list, plus Eddie's essentials like sign-in and updates.");
-  assert.ok(!calls.some(c => c.path === '/api/kid-mode'), 'no request without a yes');
-  context.confirm = () => true;
+  // The kid mode button sends at once, then shows the bridge's own words, never its own claim.
+  context.confirm = () => { throw Error('kid mode does not ask'); };
   get('kid-mode').onclick();
   assert.equal(get('kid-mode').textContent, 'kid mode: turning on…');
   assert.deepEqual(JSON.parse(calls.find(c => c.path === '/api/kid-mode').init.body), {on:true});
@@ -261,6 +257,7 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   await answer('/api/devices', 200, {hours:24, devices:[]});
   assert.equal(get('kid-mode').textContent, 'kid mode: off');
   assert.equal(get('kid-mode').disabled, true, 'no child device: nothing to switch');
+  assert.equal(get('character').dataset.role, 'regular', 'no locked child device, no kid outfit');
   assert.equal(get('kid-flag').hidden, true);
 
   // The devices link opens and closes the list.
@@ -473,10 +470,8 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   await answer('/api/guest', 200, {active:false, allowed:[], approvable:['house_guide','timers'], owner_only:['traffic']});
   assert.equal(get('guest-mode').textContent, 'guest mode: off');
   assert.deepEqual(get('guest-allowed').children.map(l => [l.children[0].checked, l.children[1].textContent]), [[false,'house guide'],[false,'timers']]);
-  let guestAsk = '';
-  context.confirm = text => { guestAsk = text; return true; };
+  context.confirm = () => { throw Error('guest mode does not ask'); };
   get('guest-mode').onclick();
-  assert.match(guestAsk, /every voice as a guest/);
   assert.equal(get('guest-mode').textContent, 'guest mode: off', 'not shown as on before the bridge saves it');
   assert.equal(get('character').dataset.role, 'regular', 'a guest switch press still waiting on the bridge adds no hat');
   await answer('/api/guest', 200, {active:true, allowed:[], approvable:['house_guide','timers'], owner_only:['traffic']});
@@ -503,11 +498,23 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   // Checkout returns Eddie to the owner's acknowledged role; the next guest session tips the hat again.
   socket.onmessage({data:JSON.stringify({type:'mode', home_mode:true, home_manual:true, home_applied:true})});
   assert.equal(get('character').dataset.role, 'concierge', 'Guest Mode wins over home mode');
+  context.renderDevices([{mac:'aa:bb:cc:00:00:01', ip:'172.20.10.9', label:'Kids tablet', kid:true, trackers:0, recent_domains:[]}]);
+  context.renderRules([{id:9, pattern:'*', action:'block', device_mac:'aa:bb:cc:00:00:01', created_by:'voice'}]);
+  assert.equal(get('character').dataset.role, 'kid', 'kid mode wins over Guest Mode');
+  context.renderRules([]);
+  assert.equal(get('character').dataset.role, 'concierge', 'kid mode off: the bellhop hat is back');
+  delete get('character').dataset.hatTip;
+  // A spoken "turn on guest mode" reaches the page as a guest event, not just at the next poll.
+  context.consumeEvent({type:'guest', active:false, allowed:[], approvable:['house_guide','timers'], owner_only:['traffic']});
+  assert.equal(get('character').dataset.role, 'home');
+  context.consumeEvent({type:'guest', active:true, allowed:[], approvable:['house_guide','timers'], owner_only:['traffic']});
+  assert.equal(get('character').dataset.role, 'concierge');
+  assert.equal(get('guest-mode').textContent, 'guest mode: on');
   context.loadGuest(); await answer('/api/guest', 502, {message:'unavailable'});
   assert.equal(get('character').dataset.role, 'home', 'an unreadable guest profile drops the hat');
   context.loadGuest(); await answer('/api/guest', 200, {active:true, allowed:[], approvable:['house_guide','timers'], owner_only:['traffic']});
   assert.equal(get('character').dataset.hatTip, undefined, 'a poll blip is not a new activation');
-  context.confirm = () => true; get('guest-mode').onclick();
+  get('guest-mode').onclick();
   await answer('/api/guest', 200, {active:false, allowed:[], approvable:['house_guide','timers'], owner_only:['traffic']});
   assert.equal(get('character').dataset.role, 'home', 'checkout restores owner Home Eddie');
   assert.equal(get('character').dataset.accessory, 'roof');
@@ -535,7 +542,7 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   context.loadGuest();
   await answer('/api/guest', 200, {active:true, allowed:['timers'], approvable:['house_guide','timers'], owner_only:['traffic'], topics:['Wi-Fi']});
   assert.deepEqual(get('guest-topics').children.map(li => li.textContent), ['“Set a timer for 10 minutes.”','“Stop recording.”'], 'topics only when the house guide is approved');
-  context.confirm = () => true; get('guest-flag').onclick();  // the header flag is the same switch
+  get('guest-flag').onclick();  // the header flag is the same switch
   await answer('/api/guest', 200, {active:false, allowed:['timers'], approvable:['house_guide','timers'], owner_only:['traffic'], topics:['Wi-Fi']});
   assert.deepEqual([get('guest-flag').attrs['aria-pressed'], get('capabilities-owner').hidden, get('guest-capabilities').hidden], ['false', false, true]);
   assert.equal(get('capabilities-title').textContent, 'what to ask eddie');
