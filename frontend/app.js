@@ -62,8 +62,9 @@ function renderRules(list) {
   $('rules-count').textContent = list.length;
   modes.spoofing = list.filter(rule => rule.action === 'spoof').length; renderModes();
   lockedMacs = new Set(list.filter(rule => rule.pattern === '*' && rule.action === 'block' && rule.device_mac).map(rule => rule.device_mac)); if (deviceList.length) renderDevices(deviceList);
-  const items = list.slice(0, 5).map(rule => { const li = document.createElement('li'); li.textContent = ruleLine(rule); return li; });
-  if (list.length > 5) { const more = document.createElement('li'); more.textContent = `+${list.length - 5} more`; items.push(more); }
+  // Every rule, in the rules sheet the footer's "rules (n)" opens; newest first, as the API lists them.
+  const items = list.map(rule => { const li = document.createElement('li'); li.textContent = ruleLine(rule); return li; });
+  if (!items.length) { const none = document.createElement('li'); none.textContent = 'no rules yet'; items.push(none); }
   $('rules-list').replaceChildren(...items);
 }
 async function loadRules() {
@@ -154,8 +155,15 @@ async function toggleKidMode() {
   finally { kidPending = null; loadRules(); loadDevices(); }
 }
 function toggleDevices(open) {
+  if (open) toggleRules(false);
   $('devices-sheet').hidden = !open; $('open-devices').setAttribute('aria-expanded', String(open));
   if (open) { loadRules(); loadDevices(); }
+}
+// Rules sit beside devices in the footer; one sheet is open at a time.
+function toggleRules(open) {
+  if (open) toggleDevices(false);
+  $('rules-sheet').hidden = !open; $('open-rules').setAttribute('aria-expanded', String(open));
+  if (open) loadRules();
 }
 // The answer shown is the API's: stored, and whether DNS has loaded it.
 async function decideDevice(d, decision) {
@@ -234,12 +242,15 @@ function homeNote() {
   if (modes.home_mode === null || modes.home_applied === null) return ['', false];
   if (!modes.home_applied) return [`home mode ${modes.home_mode ? 'on' : 'off'} not yet applied by DNS`, true];
   if (modes.home_mode) return [`home mode: blocking camera uploads · ${modes.home_manual ? 'turned on by hand' : 'a household phone is home'}`, false];
-  return [modes.home_manual ? 'home mode: off by hand, phones ignored' : '', false];
+  return ['', false];  // off says nothing: the hollow house beside the heading already shows it
 }
 function renderModes() {
   for (const [id, label, key] of [['home-mode', 'home mode', 'home_mode'], ['offline-mode', 'offline mode', 'offline'], ['quarantine-mode', 'quarantine new devices', 'quarantine']]) {
     const button = $(id), pending = modePending[key], on = modes[key];
-    const text = pending !== undefined ? `${label}: turning ${pending ? 'on' : 'off'}…` : `${label}: ${on === null ? 'unavailable' : on ? 'on' : 'off'}`;
+    // The footer's offline mode reads just "online" or "offline".
+    const text = key === 'offline'
+      ? (pending !== undefined ? `going ${pending ? 'offline' : 'online'}…` : on === null ? 'offline mode unavailable' : on ? 'offline' : 'online')
+      : pending !== undefined ? `${label}: turning ${pending ? 'on' : 'off'}…` : `${label}: ${on === null ? 'unavailable' : on ? 'on' : 'off'}`;
     button.disabled = pending !== undefined || on === null;
     button.setAttribute('aria-busy', String(pending !== undefined)); button.setAttribute('aria-pressed', String(on === true));
     // Home mode is the house icon beside the heading, so its state is in the label, not the text.
@@ -253,7 +264,7 @@ function renderModes() {
   $('offline-note').textContent = waiting ? `offline mode ${modes.offline ? 'on' : 'off'} not yet applied by DNS` : '';
   const qWaiting = modes.quarantine !== null && modePending.quarantine === undefined && !modes.quarantine_applied;
   $('quarantine-note').textContent = qWaiting ? 'quarantine change not yet applied by DNS'
-    : 'DNS-only: a device using hard-coded IPs or its own DNS still gets out; router mode (#22/#23) stops that';
+    : 'when on, a device Eddie hasn\'t seen before gets only the essentials until you approve it here';
   $('quarantine-note').classList.toggle('alert', qWaiting);
   const [home, homeAlert] = homeNote();
   $('home-note').textContent = home; $('home-note').classList.toggle('alert', homeAlert);
@@ -264,7 +275,7 @@ function renderModes() {
 }
 // While the mic is on, the heading shows the mic icon and the footer button is gone: it's turned off
 // by saying "stop recording". While off, the button reads "start mic", prefixed "offline •" once offline mode is confirmed on.
-function renderMic() { $('mic-on').hidden = !voiceReady; $('mic').hidden = voiceReady; $('mic').textContent = `${modes.offline ? 'offline • ' : ''}start mic`; }
+function renderMic() { $('mic-on').hidden = !voiceReady; $('mic').hidden = voiceReady; $('mic').textContent = 'start mic'; }
 async function loadModes() {
   try { const r = await fetch('/api/mode'); if (!r.ok) throw Error(); applyModes(await r.json()); }
   catch { modes.home_mode = modes.offline = modes.away = modes.kid_mode = modes.session_role = null; renderModes(); }
@@ -470,6 +481,8 @@ function voiceEvent(event) {
   if (event.type === 'transcript' && event.text) { reopen(); $('assistant-title').textContent = event.text; }
   if (event.type === 'speaking') { reopen(); $('assistant-title').textContent = event.title || 'Here’s what I’m seeing.'; $('assistant-description').textContent = event.text || ''; setAssistantState('speaking'); speaking = true; }
   if (event.type === 'speech_audio') playVoice(String(event.id || ''));
+  // A spoken change (home mode, a rule) may have landed while this screen missed its event: reread them.
+  if (event.type === 'speech_end') { loadModes(); loadRules(); }
   if (event.type === 'speech_end') { setAssistantState('ready'); speaking = false; }
 }
 // "What they know" report: real facts, or the seeded demo week under a demo banner.
@@ -550,7 +563,7 @@ dialog.addEventListener('cancel', event => { event.preventDefault(); closeByUser
 dialog.addEventListener('close', () => { clearTimeout(exitTimer); dialog.classList.remove('closing'); toggleLogs(false); });
 $('close').onclick = closeByUser;
 dialog.addEventListener('click', e => { if (e.target === dialog) { const r=dialog.getBoundingClientRect(); if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom) closeByUser(); } });
-document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('devices-sheet').hidden && !dialog.open && e.target.tagName !== 'INPUT') { toggleDevices(false); return; } if (e.code === 'Space' && !['INPUT','TEXTAREA','BUTTON'].includes(document.activeElement.tagName)) { e.preventDefault(); wake(true); } });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('devices-sheet').hidden && !dialog.open && e.target.tagName !== 'INPUT') { toggleDevices(false); return; } if (e.key === 'Escape' && !$('rules-sheet').hidden && !dialog.open) { toggleRules(false); return; } if (e.code === 'Space' && !['INPUT','TEXTAREA','BUTTON'].includes(document.activeElement.tagName)) { e.preventDefault(); wake(true); } });
 // A paired device (the iPad) opens the link the Eddie computer prints; the token stays in the
 // URL fragment, which is never sent in a request line and is not written to browser storage.
 const pairToken = new URLSearchParams(String(location.hash || '').slice(1)).get('pair');
@@ -565,6 +578,8 @@ $('offline-mode').onclick = () => setMode('offline', !modes.offline);
 $('quarantine-mode').onclick = () => setMode('quarantine', !modes.quarantine);
 $('kid-mode').onclick = toggleKidMode;
 $('open-devices').onclick = () => toggleDevices($('devices-sheet').hidden);
+$('open-rules').onclick = () => toggleRules($('rules-sheet').hidden);
+$('close-rules').onclick = () => { toggleRules(false); $('open-rules').focus(); };
 $('close-devices').onclick = () => { toggleDevices(false); $('open-devices').focus(); };
 connectTraffic();
 loadRules();
