@@ -23,8 +23,8 @@ const styles=fs.readFileSync('frontend/style.css','utf8');
 assert.match(styles, /prefers-reduced-motion:reduce[^}]*\.character\[data-motion\]/, 'reduced motion disables role animation');
 assert.match(styles, /data-state="speaking"[^}]*--edge:45,113,255/, 'speaking remains blue for every role');
 assert.match(styles, /--edge:255,210,55/, 'listening remains yellow for every role');
-assert.match(styles, /data-state="thinking"\][^}]*--edge:168,120,255[^}]*animation:think-glow/, 'thinking has its own breathing violet edge');
-assert.doesNotMatch(styles, /\[data-state="thinking"\],\[data-state="confirming"\]/, 'thinking is no longer drawn like listening');
+assert.match(styles, /data-state="thinking"\][^}]*animation:think-sway/, 'thinking sways the glow');
+assert.doesNotMatch(styles, /data-state="thinking"\][^}]*--edge/, 'thinking keeps the listening colour');
 // Concierge (#162): one gold accent with a forced-colours fallback, and a hat-tip that runs once, not on a loop.
 assert.match(styles, /\.bellhop-e\{stroke:#e8b931/, 'the E is gold');
 assert.match(styles, /forced-colors:active\)\{\.character \.bellhop-hat \.bellhop-e\{stroke:CanvasText/, 'the E has a monochrome fallback');
