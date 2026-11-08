@@ -4,7 +4,8 @@ The schema is the one in README "SQLite schema" and is created on first open,
 plus engine_state: the rules revision written and the one DNS has loaded
 (rules.py), away_devices: the devices away mode covers while it's on
 (away.py), traffic: per-device byte counts from the optional traffic
-monitor (traffic.py), and device_status: which MACs are approved, new or
+monitor (traffic.py), baselines / baseline_domains: each device's usual
+domains (baselines.py), and device_status: which MACs are approved, new or
 denied (quarantine.py, #98).
 QueryLog keeps disk off the DNS hot path: log() only drops a row on an
 in-memory queue, and one writer thread batches rows into SQLite. If the
@@ -35,6 +36,8 @@ CREATE TABLE IF NOT EXISTS engine_state (key TEXT PRIMARY KEY, value INTEGER);
 CREATE TABLE IF NOT EXISTS device_status (mac TEXT PRIMARY KEY, status TEXT, first_seen INTEGER, decided_at INTEGER);
 CREATE TABLE IF NOT EXISTS away_devices (mac TEXT PRIMARY KEY, score INTEGER, security INTEGER);
 CREATE TABLE IF NOT EXISTS traffic (id INTEGER PRIMARY KEY, first_ts INTEGER, last_ts INTEGER, device_mac TEXT, ip TEXT, port INTEGER, proto TEXT, bytes_out INTEGER, bytes_in INTEGER, packets_out INTEGER, packets_in INTEGER);
+CREATE TABLE IF NOT EXISTS baselines (device_mac TEXT PRIMARY KEY, state TEXT, started_at INTEGER, lookups INTEGER, active_at INTEGER, last_seen INTEGER);
+CREATE TABLE IF NOT EXISTS baseline_domains (device_mac TEXT, domain TEXT, first_seen INTEGER, last_seen INTEGER, learned INTEGER, PRIMARY KEY (device_mac, domain));
 CREATE INDEX IF NOT EXISTS q_ts ON queries(ts);
 CREATE INDEX IF NOT EXISTS q_dev ON queries(device_mac, ts);
 CREATE INDEX IF NOT EXISTS t_dev ON traffic(device_mac, last_ts);
@@ -73,13 +76,15 @@ def connect(path: str) -> sqlite3.Connection:
 
 
 def prune(conn: sqlite3.Connection, retention_days: float, now_ms: int | None = None) -> int:
-    """Delete queries and traffic rows, AI verdicts and unlabeled devices older than the retention window.
+    """Delete queries and traffic rows, AI verdicts, baseline domains and unlabeled devices older than the retention window.
 
     Verdicts go too: the list of domains the household looked up is history
     even without times. A domain seen again is simply classified again.
     Devices the user labeled are settings, like rules, and are kept, and so
     are approved and denied MACs; a new MAC nobody decided on is forgotten
     with its devices row, and alerts again if it comes back.
+    A baseline domain not looked up within the window is forgotten (it counts
+    as new again), and so is the baseline of a device not seen within it.
     Returns rows deleted.
     """
     now_ms = int(time.time() * 1000) if now_ms is None else now_ms
@@ -88,6 +93,8 @@ def prune(conn: sqlite3.Connection, retention_days: float, now_ms: int | None = 
         deleted = conn.execute("DELETE FROM queries WHERE ts < ?", (cutoff,)).rowcount
         deleted += conn.execute("DELETE FROM traffic WHERE last_ts < ?", (cutoff,)).rowcount
         deleted += conn.execute("DELETE FROM ai_verdicts WHERE ts < ?", (cutoff,)).rowcount
+        deleted += conn.execute("DELETE FROM baseline_domains WHERE last_seen < ?", (cutoff,)).rowcount
+        deleted += conn.execute("DELETE FROM baselines WHERE last_seen < ?", (cutoff,)).rowcount
         deleted += conn.execute("DELETE FROM devices WHERE label IS NULL AND ifnull(last_seen, 0) < ?",
                                 (cutoff,)).rowcount
         deleted += conn.execute("DELETE FROM device_status WHERE status = 'pending'"

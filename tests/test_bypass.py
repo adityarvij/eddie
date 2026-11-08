@@ -98,7 +98,7 @@ class IngestTests(unittest.TestCase):
             sent.append(msg)
 
         with patch.object(api, 'recent', []), patch.object(api, 'totals', {'seen': 0, 'blocked': 0}), \
-                patch.object(api, 'suspicions', Suspicions()), patch.object(api, 'bypass_recent', []) as kept, \
+                patch.dict('os.environ', {'EDDIE_DB': 'off'}), patch.object(api, 'suspicions', Suspicions()), patch.object(api, 'bypass_recent', []) as kept, \
                 patch.object(api, 'broadcast', broadcast):
             client = TestClient(api.app, client=('127.0.0.1', 50000))
             client.post('/ingest', json=body)
