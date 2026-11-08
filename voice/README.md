@@ -40,6 +40,7 @@ Configuration:
 | `EDDIE_TIMERS_FILE` | `voice/timers.json`; pending timers and reminders. `off` keeps them in memory only, so a restart loses them |
 | `EDDIE_GUEST_FILE` | `voice/guest.json`; the Guest Mode profile (#163). `off` keeps it in memory only |
 | `EDDIE_HOUSE_GUIDE` | `voice/house_guide.json`; the concierge house guide, read on each question. Missing means an empty guide |
+| `EDDIE_SPEAKER` | `pi` (default): replies play on this computer's speaker. `ipad`: each reply is sent to the dashboard as a WAV clip and plays there, through Web Audio after the first tap (Safari blocks sound until then; a reply that arrives first shows “tap to hear Eddie”), while the mic stays deaf for the clip's length plus 0.8 s. `both`: both. Needs `EDDIE_PIPER_MODEL`; timer alarms still sound here |
 | `EDDIE_ALARM_SOUND` | Unset plays the generated chime; or a local 16-bit PCM `.wav` (first 10 s played) |
 
 Say “Hey Eddie,” then ask your question. The detector uses 16 kHz mono audio in 80 ms frames. Recording ends after 800 ms of silence following speech, or after 10 seconds of speech. After each reply Eddie listens again for a follow-up without the wake phrase; if no speech starts within 4 seconds, the conversation ends and Eddie is dismissed. Audio stays in memory. Speech output suspends recognition and queued audio is discarded before rearming. There is no always-on cloud transcription.

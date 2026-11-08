@@ -1,6 +1,7 @@
 """Local dashboard and offline voice bridge. No microphone audio is persisted."""
 import argparse
 import hmac
+import io
 import ipaddress
 import json
 import os
@@ -12,6 +13,7 @@ import subprocess
 import sys
 import threading
 import time
+import wave
 import urllib.error
 import urllib.request
 from datetime import datetime
@@ -36,6 +38,11 @@ voice_thread = None
 start_lock = threading.Lock()
 speaking = threading.Event()
 counts = {'requests': 0, 'blocked': 0}
+# Where spoken replies play: 'pi' (this computer's speaker), 'ipad' (the dashboard) or 'both'.
+SPEAKER = os.environ.get('EDDIE_SPEAKER', 'pi')
+DASHBOARD_TAIL = 0.8  # s: the dashboard fetching and starting the clip, then the room's echo
+# The newest spoken reply as WAV, for /api/voice/audio/<id>; memory only, replaced by the next one.
+latest_audio = {}
 # Pairing token for control from another device (the iPad). Kept in memory; a new one each start
 # unless EDDIE_DASHBOARD_TOKEN pins it so a saved Home Screen link keeps working.
 token = os.environ.get('EDDIE_DASHBOARD_TOKEN') or secrets.token_urlsafe(24)
@@ -135,12 +142,7 @@ def answer(text, reply=None, alarm=None):
                     emit({'type': 'voice_status', 'status': voice_state['status'], 'message': f'Alarm sound unavailable: {error}'})
             piper_model = os.environ.get('EDDIE_PIPER_MODEL')
             if piper_model:
-                from piper import PiperVoice
-                import numpy as np
-                import sounddevice as sd
-                voice = PiperVoice.load(piper_model)
-                for chunk in voice.synthesize(response):
-                    playback.play(sd, np.frombuffer(chunk.audio_int16_bytes, dtype=np.int16), chunk.sample_rate)
+                speak_piper(piper_model, response)
             elif sys.platform == 'darwin':
                 subprocess.run(['/usr/bin/say', response], check=True, timeout=45)
             elif sys.platform == 'win32':
@@ -155,6 +157,42 @@ def answer(text, reply=None, alarm=None):
             emit({'type': 'speech_end'})
             pending = confirmation.status()
             emit({'type': 'voice_state', 'state': 'confirming', **pending} if pending else {'type': 'voice_state', 'state': 'idle'})
+
+def speak_piper(model, response):
+    """Speak on this computer's speaker, hand the reply to the dashboard as audio, or both (EDDIE_SPEAKER)."""
+    from piper import PiperVoice
+    import numpy as np
+    voice = PiperVoice.load(model)
+    if SPEAKER == 'pi':
+        import sounddevice as sd
+        for chunk in voice.synthesize(response):
+            playback.play(sd, np.frombuffer(chunk.audio_int16_bytes, dtype=np.int16), chunk.sample_rate)
+        return
+    chunks = list(voice.synthesize(response))
+    rate = chunks[0].sample_rate if chunks else 22050
+    samples = b''.join(chunk.audio_int16_bytes for chunk in chunks)
+    clip = secrets.token_urlsafe(9)
+    latest_audio.clear()
+    latest_audio.update(id=clip, wav=wav_bytes(samples, rate))
+    emit({'type': 'speech_audio', 'id': clip})
+    if SPEAKER == 'both':
+        import sounddevice as sd
+        playback.play(sd, np.frombuffer(samples, dtype=np.int16), rate)
+    else:
+        # Only the dashboard speaks: keep the mic deaf for as long as it plays, plus the fetch and room echo.
+        time.sleep(len(samples) / 2 / rate + DASHBOARD_TAIL)
+
+
+def wav_bytes(samples, rate):
+    """16-bit mono PCM WAV, in memory."""
+    out = io.BytesIO()
+    with wave.open(out, 'wb') as file:
+        file.setnchannels(1)
+        file.setsampwidth(2)
+        file.setframerate(rate)
+        file.writeframes(samples)
+    return out.getvalue()
+
 
 def ring_timers():
     """Ring timers and reminders as they come due (#122), whether or not the microphone is on."""
@@ -276,6 +314,16 @@ class Handler(SimpleHTTPRequestHandler):
             return self.json_response(200, {'type': 'voice_status', **voice_state})
         if self.path == '/api/guest':
             return self.json_response(200, voice_agent.profile.view())
+        if self.path.startswith('/api/voice/audio/'):
+            audio = dict(latest_audio)
+            if not audio or self.path != '/api/voice/audio/' + audio['id']:
+                return self.json_response(404, {'message': 'That reply is gone.'})
+            self.send_response(200)
+            self.send_header('Content-Type', 'audio/wav')
+            self.send_header('Content-Length', str(len(audio['wav'])))
+            self.send_header('Cache-Control', 'no-store')
+            self.end_headers()
+            return self.wfile.write(audio['wav'])
         if self.path in READ_RELAYS:
             path, failure = READ_RELAYS[self.path]
             try:
@@ -461,6 +509,12 @@ if __name__ == '__main__':
     # 0.0.0.0 lets the iPad view the dashboard; a paired iPad may ask, the mic stays localhost-only.
     parser.add_argument('--host', default=os.environ.get('EDDIE_DASHBOARD_HOST', '127.0.0.1'))
     args = parser.parse_args()
+    if SPEAKER not in ('pi', 'ipad', 'both'):
+        print(f'EDDIE_SPEAKER={SPEAKER!r} is not pi, ipad or both; using pi.', flush=True)
+        SPEAKER = 'pi'
+    if SPEAKER != 'pi':
+        print(f"Spoken replies play on {'the dashboard' if SPEAKER == 'ipad' else 'this speaker and the dashboard'}"
+              ' (tap the dashboard once to allow sound).', flush=True)
     try:
         import local_intent
         matcher = local_intent.Matcher()
