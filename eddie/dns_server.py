@@ -225,6 +225,9 @@ async def resolve(packet: bytes, client_ip: str, upstreams: list[tuple[str, int]
     if verdict.action == "block":
         return block_reply(request).pack()
 
+    if request.q.qtype == QTYPE.AAAA and decision.matches(domain, decision.CAMERA_DOMAINS):
+        return request.reply().pack()
+
     if offline_mode.on:
         answer = offline_mode.answer(request)
     else:
