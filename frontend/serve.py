@@ -19,7 +19,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT.parent / 'voice'))
-from voice_agent import confirmation, forget_conversation, question_announcement, request as api_request, respond
+from voice_agent import confirmation, forget_conversation, kid_mode_change, question_announcement, request as api_request, respond
 from voice_runtime import run as run_voice
 stopped = threading.Event()
 dismissed = threading.Event()  # the close button: end the voice conversation
@@ -37,7 +37,7 @@ token = os.environ.get('EDDIE_DASHBOARD_TOKEN') or secrets.token_urlsafe(24)
 # Controls a paired device may use. Starting or stopping the microphone, and feeding traffic
 # events, stay on the Eddie computer whatever token is sent.
 PAIRED_CONTROLS = {'/api/voice/ask', '/api/mode', '/api/offline-mode', '/api/quarantine', '/api/devices/decide',
-                   '/api/questions/answer', '/api/questions/undo'}
+                   '/api/devices/update', '/api/kid-mode', '/api/questions/answer', '/api/questions/undo'}
 # Read-only relays to the traffic API, so the page (and the iPad) need no CORS or direct API access.
 READ_RELAYS = {'/api/rules': ('/rules', 'Rules unavailable.'),
                '/api/devices': ('/devices?hours=24', 'Devices unavailable.'),
@@ -52,6 +52,17 @@ MODE_CONTROLS = {'/api/mode': ('/mode', 'home_mode'), '/api/offline-mode': ('/of
                  '/api/quarantine': ('/quarantine', 'quarantine')}
 # Approve or deny a new device (#98): {mac, decision} -> POST /devices/<mac>/<decision>.
 MAC = re.compile(r'[0-9a-f]{2}(?::[0-9a-f]{2}){5}')
+
+
+def device_key(value):
+    """A /devices key: a MAC, or a client IP while the MAC is unknown."""
+    if not isinstance(value, str):
+        return False
+    try:
+        ipaddress.ip_address(value)
+        return True
+    except ValueError:
+        return bool(MAC.fullmatch(value))
 
 def is_local(address):
     try:
@@ -334,6 +345,29 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.json_response(200, api_request(f'/devices/{mac}/{decision}', {}, timeout=5))
             except Exception:
                 return self.json_response(502, {'message': 'The traffic API did not confirm the change.'})
+        if self.path == '/api/devices/update':
+            # Name a device, or mark it as a child's or an adult's (#119): {mac, label?, kid?} -> PUT /devices/<mac>.
+            mac = body.get('mac') if isinstance(body, dict) else None
+            change = {k: body[k] for k in ('label', 'kid') if isinstance(body, dict) and k in body}
+            if (not device_key(mac) or not change or ('kid' in change and not isinstance(change['kid'], bool))
+                    or ('label' in change and not isinstance(change['label'], (str, type(None))))):
+                return self.json_response(400, {'message': 'Expected a device and a label or kid.'})
+            try:
+                return self.json_response(200, api_request(f'/devices/{mac}', change, timeout=5, method='PUT'))
+            except urllib.error.HTTPError as error:
+                error.close()
+                if error.code == 422:
+                    return self.json_response(422, {'message': 'Names are at most 40 printable characters.'})
+                if error.code == 404:
+                    return self.json_response(404, {'message': "Eddie hasn't seen that device."})
+                return self.json_response(502, {'message': 'The traffic API did not confirm the change.'})
+            except Exception:
+                return self.json_response(502, {'message': 'The traffic API did not confirm the change.'})
+        if self.path == '/api/kid-mode':
+            # The page's own confirm dialog was the yes; the reply says only what the API acknowledged.
+            if not isinstance(body, dict) or not isinstance(body.get('on'), bool):
+                return self.json_response(400, {'message': 'on must be true or false.'})
+            return self.json_response(200, {'message': kid_mode_change(body['on'])})
         if self.path == '/api/events':
             if not isinstance(body, dict) or not body.get('domain'):
                 return self.json_response(400, {'message': 'A domain is required.'})

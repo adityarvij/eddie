@@ -132,12 +132,13 @@ The AI only flags likely trackers; Eddie asks before anything is blocked. When y
 
 ## Lock down a device (#17)
 
-“Lock down the TV”, “please lock down my Fire Stick” or “can you lockdown the kids' iPad?” blocks everything for one device except a keep list, after a spoken yes. The device name is matched against the labels set on the dashboard's device panel (`GET /devices`): an exact label wins, otherwise a label containing the words (“TV” finds “Living Room TV” if it's the only one). Vendor names like “Amazon device” don't count; label the device first. The keep list is every service in `voice/services.json` (Netflix, YouTube, Prime Video, Apple TV); there's no spoken way to change it yet, so “lock down the TV to Netflix” changes nothing. The allowlist's essentials (sign-in, updates, time, captive-portal checks) always survive a lockdown, so it can't brick the device.
+“Lock down the TV”, “please lock down my Fire Stick” or “can you lockdown the kids' iPad?” blocks everything for one device except a keep list, after a spoken yes. The device name is matched against the names set in the dashboard's device list (`GET /devices`): an exact label wins, otherwise a label containing the words (“TV” finds “Living Room TV” if it's the only one). Vendor names like “Amazon device” don't count, and nor does `---`, which is how the list shows a device with no name; name the device first. The keep list is every streaming service in `voice/services.json` (Netflix, YouTube, Prime Video, Apple TV), or the kid-safe list for a device marked as a child's (below); there's no spoken way to change it yet, so “lock down the TV to Netflix” changes nothing. The allowlist's essentials (sign-in, updates, time, captive-portal checks) always survive a lockdown, so it can't brick the device.
 
 | Request | Eddie says |
 |---|---|
 | One labelled device | “Lock down the TV? It'll only reach Netflix, YouTube, Prime Video and Apple TV, plus Eddie's essentials like sign-in and updates. Say yes to confirm or no to cancel.” Nothing is written yet; the confirmation table below applies (no, timeout, dismissal: nothing changes). |
-| No label matches | “I don't know a device called fridge. The devices I know by name are Fire Stick and TV. Label it on the dashboard's device panel, then ask again. Nothing changed.” |
+| No label matches | “I don't know a device called fridge. The devices I know by name are Fire Stick and TV; 1 more has no name yet and shows as ---. Name it in the dashboard's device list, then ask again. Nothing changed.” |
+| A device marked as a child's | “Lock down the kids' tablet? It's marked as a child's, so it'll only reach YouTube Kids and PBS Kids, plus Eddie's essentials like sign-in and updates. Say yes to confirm or no to cancel.” |
 | Several labels match | “Which one: Living Room TV or Bedroom TV? Nothing changed.” |
 | Already locked down | “The TV is already locked down. Nothing changed.” |
 | Backend down | “I can't reach Eddie's backend, so I can't look up that device. Nothing changed.” |
@@ -155,6 +156,22 @@ On yes Eddie adds one device allow rule per keep pattern, then the device block 
 Because the block rule is always last, a failure never leaves the device blocked. “Undo” after a lockdown removes all of its rules at once. The dashboard's rule list shows the block as `block * · TV · by voice`.
 
 Not yet checked on hardware: a real Fire Stick or TV under lockdown, including whether the keep patterns cover each app's sign-in and playback.
+
+## Kid mode (#119)
+
+Mark a device as a child's in the dashboard's device list (the `devices` link, bottom right: each row's `adult` / `child` button). Then “turn on kid mode”, “kid mode on” or “lock down the kids' devices” locks down every child's device not already locked down, and “turn off kid mode” or “unlock the kids' devices” unlocks them. Both read back the devices first and wait for a spoken yes. The dashboard's `kid mode` switch does the same after its own confirm dialog.
+
+The kid-safe keep list is `voice/kid_safe.json` (seeded with YouTube Kids and PBS Kids, both defined in `voice/services.json` with `"kids": true`); edit it to change what kid mode allows, then restart the worker. DNS can't tell the YouTube Kids app from YouTube: YouTube Kids keeps `youtubei.googleapis.com` and the video CDNs, which the YouTube app also uses, but not `youtube.com`.
+
+| Request | Eddie says |
+|---|---|
+| On | “Turn on kid mode? Kids' Tablet and an unnamed Amazon device will only reach YouTube Kids and PBS Kids, plus Eddie's essentials like sign-in and updates. Say yes to confirm or no to cancel.” |
+| Yes, every rule stored and loaded | “Kid mode is on. Kids' Tablet and an unnamed Amazon device are locked down to YouTube Kids and PBS Kids, plus Eddie's essentials; Eddie's DNS has loaded the rules. I haven't seen their traffic blocked yet, and it only applies while they use Eddie for DNS.” |
+| Off | “Turn off kid mode? Kids' Tablet will get full internet through Eddie again. Say yes to confirm or no to cancel.” On yes, each device's `*` block goes first, then its kid-safe allow rules; its other rules stay. |
+| No child's device | “No device is marked as a child's yet. Open devices on the dashboard and set one to child, then ask again. Nothing changed.” |
+| Already on (or off) | “Kid mode is already on for Kids' Tablet. Nothing changed.” |
+
+A device that fails or isn't loaded by DNS gets its own sentence (the lockdown table's wording), and kid mode isn't called on. Kid mode is on when every child's device has a `*` block rule; it has no stored state of its own. A device marked as a child's while kid mode is on isn't covered until kid mode is turned on again, and marking a locked device as an adult's doesn't unlock it (the dashboard asks first). Tests: `tests/test_voice_kid_mode.py`. Not yet checked on hardware: a real tablet in kid mode.
 
 The registered risky actions are `allow` (#13) and `lockdown` (#17), both parsed in `route`: a typed wildcard needs the raw text's dots, and lockdown looks the device up first. `block` and `home_mode` are registered for the model's write tools (#108) only; spoken “block x.com” and “turn on home mode” still run directly. `RISKY_COMMANDS` stays empty until email (#37) lands. Closing the dashboard overlay by hand does not notify the worker; the 15 second expiry still applies.
 
@@ -177,7 +194,7 @@ Risky actions (service and wildcard allows, lockdown, and every write the local 
 
 Replies must match the whole utterance after lowercasing and removing punctuation, so “yes, but not the TV” is unclear, not a yes. Typed asks use the same router. While an action is pending the bridge emits `voice_state: confirming` with `kind`, `prompt` and `expires_in_ms` (never the action's arguments); the dashboard shows “say yes or no” until the next reply, dismissal or expiry. No pending action, reply or transcript is persisted or logged.
 
-The registered risky actions are `allow` (#13), `lockdown` (#17), and `approve` / `deny` for new devices (#98), all parsed in `route`: a typed wildcard needs the raw text's dots, and lockdown and new devices look the device up first. `block` and `home_mode` are registered for the model's write tools (#108) only; spoken “block x.com” and “turn on home mode” still run directly. `RISKY_COMMANDS` stays empty until email (#37) lands. Closing the dashboard overlay by hand does not notify the worker; the 15 second expiry still applies.
+The registered risky actions are `allow` (#13), `lockdown` (#17), `kid_mode` (#119), and `approve` / `deny` for new devices (#98), all parsed in `route`: a typed wildcard needs the raw text's dots, and lockdown and new devices look the device up first. `block` and `home_mode` are registered for the model's write tools (#108) only; spoken “block x.com” and “turn on home mode” still run directly. `RISKY_COMMANDS` stays empty until email (#37) lands. Closing the dashboard overlay by hand does not notify the worker; the 15 second expiry still applies.
 
 
 ## Noisy-room voice and ready cue (#38)

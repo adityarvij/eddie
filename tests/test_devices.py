@@ -1,5 +1,6 @@
 import asyncio
 import os
+import sqlite3
 import tempfile
 import time
 import unittest
@@ -103,7 +104,7 @@ class DeviceMapTests(unittest.TestCase):
     def test_refresh_keeps_first_seen_and_label_and_follows_a_new_ip(self):
         self.map.key('172.20.10.5')
         self.refresh(1_000)
-        devices.set_label(self.conn, FIRE_STICK, 'Fire Stick')
+        devices.update(self.conn, FIRE_STICK, {'label': 'Fire Stick'})
         self.arp = {'172.20.10.8': FIRE_STICK}
         self.map.key('172.20.10.8')
         self.refresh(2_000)
@@ -132,7 +133,7 @@ class DeviceMapTests(unittest.TestCase):
         self.refresh()
         self.assertEqual('Amazon device', self.map.name(FIRE_STICK))
         self.assertIsNone(self.map.name(PHONE))  # private address: nothing better than its key
-        devices.set_label(self.conn, FIRE_STICK, 'Fire Stick')
+        devices.update(self.conn, FIRE_STICK, {'label': 'Fire Stick'})
         self.assertEqual('Amazon device', self.map.name(FIRE_STICK))
         self.refresh()
         self.assertEqual('Fire Stick', self.map.name(FIRE_STICK))
@@ -148,9 +149,37 @@ class DeviceMapTests(unittest.TestCase):
         self.map.key('172.20.10.5')
         self.map.key('172.20.10.3')
         self.refresh(now_ms=0)
-        devices.set_label(self.conn, FIRE_STICK, 'Fire Stick')
+        devices.update(self.conn, FIRE_STICK, {'label': 'Fire Stick'})
         self.assertEqual(1, store.prune(self.conn, 7, now_ms=8 * day))
         self.assertEqual([FIRE_STICK], list(self.stored()))
+
+    def test_prune_keeps_a_childs_device_without_a_label(self):
+        self.map.key('172.20.10.5')
+        self.refresh(now_ms=0)
+        devices.update(self.conn, FIRE_STICK, {'kid': True})
+        store.prune(self.conn, 7, now_ms=8 * 86_400_000)
+        self.assertEqual([FIRE_STICK], list(self.stored()))
+
+    def test_kid_and_label_change_independently(self):
+        self.map.key('172.20.10.5')
+        self.refresh()
+        devices.update(self.conn, FIRE_STICK, {'label': 'Tablet'})
+        row = devices.update(self.conn, FIRE_STICK, {'kid': True})
+        self.assertEqual(('Tablet', True), (row['label'], row['kid']))
+        row = devices.update(self.conn, FIRE_STICK, {'label': None})
+        self.assertEqual((None, True), (row['label'], row['kid']))
+
+    def test_an_old_database_gets_the_kid_column(self):
+        path = os.path.join(self.tmp.name, 'old.db')
+        old = sqlite3.connect(path)
+        old.execute("CREATE TABLE devices (mac TEXT PRIMARY KEY, ip TEXT, hostname TEXT, vendor TEXT, label TEXT,"
+                    " first_seen INTEGER, last_seen INTEGER)")
+        old.execute("INSERT INTO devices (mac, label) VALUES ('aa:bb:cc:dd:ee:01', 'TV')")
+        old.commit()
+        old.close()
+        conn = store.connect(path)
+        self.assertEqual([('TV', 0)], conn.execute("SELECT label, kid FROM devices").fetchall())
+        conn.close()
 
 
 class DNSDeviceTests(unittest.IsolatedAsyncioTestCase):
@@ -290,6 +319,19 @@ class DevicesAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(4, (await self.listed(hours=48))[FIRE_STICK]['trackers'])
         laptop = (await self.listed())['172.20.10.9']
         self.assertEqual((0, []), (laptop['trackers'], laptop['recent_blocks']))  # flagged isn't blocked
+        # What it looked up, whatever the answer, so people can tell which device it is.
+        self.assertEqual(['device-metrics-us.amazon.com', 'ads.example', 'unagi-na.amazon.com'], stick['recent_domains'])
+
+    async def test_a_device_can_be_marked_as_a_childs(self):
+        await self.http.put(f'/devices/{FIRE_STICK}', json={'label': 'Tablet'})
+        self.assertFalse((await self.listed())[FIRE_STICK]['kid'])
+        r = await self.http.put(f'/devices/{FIRE_STICK}', json={'kid': True})
+        self.assertEqual((200, True, 'Tablet'), (r.status_code, r.json()['kid'], r.json()['label']))  # label untouched
+        self.assertTrue((await self.listed())[FIRE_STICK]['kid'])
+        await self.http.put(f'/devices/{FIRE_STICK}', json={'kid': False})
+        self.assertFalse((await self.listed())[FIRE_STICK]['kid'])
+        self.assertEqual(422, (await self.http.put(f'/devices/{FIRE_STICK}', json={})).status_code)
+        self.assertEqual(422, (await self.http.put(f'/devices/{FIRE_STICK}', json={'kid': 'yes'})).status_code)
 
     async def test_labeled_device_shows_its_label(self):
         r = await self.http.put(f'/devices/{FIRE_STICK.upper()}', json={'label': 'Fire Stick'})

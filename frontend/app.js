@@ -10,7 +10,7 @@ function addEvent(event) {
   total++; const action = String(event.action || event.decision || 'allow').toLowerCase(); if (action === 'block' || action === 'blocked') blocked++; if(['allow','allowed'].includes(action)) allowedCount++; if (event.broker) brokerCount++; updateCounts();
   const device = typeof event.device === 'object' ? event.device.name || event.device.ip || 'Unknown device' : event.device || event.device_name || event.client_ip || 'Unknown device';
   deviceSet.add(String(device)); $('requests').textContent = total.toLocaleString(); $('blocked').textContent = blocked.toLocaleString(); $('devices').textContent = deviceSet.size;
-  renderEvent(event, device, action);
+  renderEvent(event, device, action); flashDevice(event.device_mac);
 }
 // A feed line: a coloured status tag ([approved], [blocked], [flagged], [approved (ai)]) then the text.
 const TAGS = { allow: 'approved', block: 'blocked', flag: 'flagged', spoof: 'spoofed', ai: 'ai', rule: 'rule', bypass: 'bypass?', geo: 'new country?', rollback: 'rolled back?', acr: 'acr blocked' };
@@ -61,6 +61,7 @@ const ruleLine = rule => `${rule.action} ${rule.pattern} · ${rule.device || 'al
 function renderRules(list) {
   $('rules-count').textContent = list.length;
   modes.spoofing = list.filter(rule => rule.action === 'spoof').length; renderModes();
+  lockedMacs = new Set(list.filter(rule => rule.pattern === '*' && rule.action === 'block' && rule.device_mac).map(rule => rule.device_mac)); if (deviceList.length) renderDevices(deviceList);
   const items = list.slice(0, 5).map(rule => { const li = document.createElement('li'); li.textContent = ruleLine(rule); return li; });
   if (list.length > 5) { const more = document.createElement('li'); more.textContent = `+${list.length - 5} more`; items.push(more); }
   $('rules-list').replaceChildren(...items);
@@ -69,26 +70,92 @@ async function loadRules() {
   try { const r = await fetch('/api/rules'); if (!r.ok) throw Error(); renderRules(await r.json()); }
   catch { $('rules-count').textContent = 'unavailable'; $('rules-list').replaceChildren(); modes.spoofing = 0; renderModes(); }
 }
-// Device panel (#35): each device's name, distinct domains blocked and the latest of them, from eddie.db.
+// Devices (#35, #119): the "devices" link bottom right opens one row per device: its name, editable,
+// "---" until someone adds one; child or adult; then its IP, maker and what it looked up lately, so people
+// can tell which is which. A row lights up while its device looks something up.
 // New (pending) and denied devices (#98) come first, with approve / deny buttons that ask before acting.
 const STATUS_TEXT = { pending: 'new', denied: 'denied' };
-function renderDevices(list) {
-  $('device-count').textContent = list.length;
-  list = [...list.filter(d => STATUS_TEXT[d.status]), ...list.filter(d => !STATUS_TEXT[d.status])];
-  const items = list.slice(0, 5).map(d => {
-    const li = document.createElement('li'); li.textContent = `${STATUS_TEXT[d.status] ? `[${STATUS_TEXT[d.status]}] ` : ''}${d.name} · ${d.trackers} tracker${d.trackers === 1 ? '' : 's'} blocked`;
-    if (STATUS_TEXT[d.status]) {
-      li.className = d.status;
-      for (const decision of d.status === 'pending' ? ['approve', 'deny'] : ['approve']) {
-        const button = document.createElement('button'); button.textContent = decision; button.onclick = () => decideDevice(d, decision); li.append(button);
-      }
+let deviceList = [], lockedMacs = new Set(), editingName = false, kidPending = null;
+const deviceLabel = d => d.label || `--- (${d.ip || d.mac})`;
+const listNames = list => list.map(deviceLabel).join(', ');
+function deviceRow(d) {
+  const li = document.createElement('li'); li.className = `device-row${STATUS_TEXT[d.status] ? ' ' + d.status : ''}`; li.dataset.mac = d.mac;
+  const name = document.createElement('input'); name.value = d.label || ''; name.placeholder = '---'; name.maxLength = 40;
+  name.title = 'add a title'; name.setAttribute('aria-label', `name for ${d.ip || d.mac}: add a title`);
+  name.onfocus = () => { editingName = true; name.placeholder = 'add a title'; };
+  name.onblur = () => { editingName = false; name.placeholder = '---'; saveName(d, name.value); };
+  name.onkeydown = e => { if (e.key === 'Enter') name.blur(); if (e.key === 'Escape') { name.value = d.label || ''; name.blur(); } };
+  const kid = document.createElement('button'); kid.className = 'kid-toggle'; kid.textContent = d.kid ? 'child' : 'adult';
+  kid.setAttribute('aria-pressed', String(!!d.kid)); kid.title = d.kid ? "A child's device: kid mode locks it down. Click to mark it as an adult's." : "Click to mark it as a child's device for kid mode.";
+  kid.onclick = () => setKid(d, !d.kid);
+  const where = [d.ip || d.mac, d.vendor, d.hostname].filter(Boolean).join(' · ');
+  const info = document.createElement('small');
+  info.textContent = `${where}${lockedMacs.has(d.mac) ? ' · locked down' : ''} · ${d.trackers} tracker${d.trackers === 1 ? '' : 's'} blocked`;
+  li.append(name, kid, info);
+  if ((d.recent_domains || []).length) { const seen = document.createElement('small'); seen.textContent = `looked up: ${d.recent_domains.join(', ')}`; li.append(seen); }
+  if (STATUS_TEXT[d.status]) {
+    const decide = document.createElement('div'), tag = document.createElement('span'); decide.className = 'decide'; tag.textContent = `[${STATUS_TEXT[d.status]}]`; decide.append(tag);
+    for (const decision of d.status === 'pending' ? ['approve', 'deny'] : ['approve']) {
+      const button = document.createElement('button'); button.textContent = decision; button.onclick = () => decideDevice(d, decision); decide.append(button);
     }
-    const recent = (d.recent_blocks || []).map(b => b.domain);
-    if (recent.length) { const small = document.createElement('small'); small.textContent = `recent: ${recent.join(', ')}`; li.append(small); }
-    return li;
-  });
-  if (list.length > 5) { const more = document.createElement('li'); more.textContent = `+${list.length - 5} more`; items.push(more); }
-  $('device-list').replaceChildren(...items);
+    li.append(decide);
+  }
+  return li;
+}
+function renderDevices(list) {
+  deviceList = list; $('device-count').textContent = list.length; renderKidMode();
+  if (editingName) return;  // don't wipe a name being typed; it re-renders once the name is saved
+  list = [...list.filter(d => STATUS_TEXT[d.status]), ...list.filter(d => !STATUS_TEXT[d.status])];
+  $('device-list').replaceChildren(...list.map(deviceRow));
+}
+// Light up a device's row while it looks something up: the easiest way to tell which device is which.
+function flashDevice(key) {
+  if ($('devices').hidden || !key) return; key = String(key).replace(/^ip:/, '');
+  const row = $('device-list').children && [...$('device-list').children].find(li => li.dataset.mac === key); if (!row) return;
+  row.classList.add('seen'); clearTimeout(row.seenTimer); row.seenTimer = setTimeout(() => row.classList.remove('seen'), 900);
+}
+async function updateDevice(d, change) {
+  const r = await control('/api/devices/update', {mac: d.mac, ...change}); const data = await r.json(); if (!r.ok) throw Error(data.message); return data;
+}
+async function saveName(d, value) {
+  value = value.trim(); if (value === (d.label || '')) return renderDevices(deviceList);
+  try { await updateDevice(d, {label: value || null}); notice(value ? `Named ${value}. Voice can find it as "${value}".` : `Name cleared; it shows as ---.`); }
+  catch (e) { notice(`Name not saved: ${e.message || 'the traffic API did not answer.'}`); }
+  loadDevices();
+}
+async function setKid(d, kid) {
+  if (!kid && lockedMacs.has(d.mac) && !confirm(`${deviceLabel(d)} is locked down. Marking it as an adult's doesn't unlock it, and kid mode won't cover it any more. Mark it as an adult's anyway?`)) return;
+  try {
+    await updateDevice(d, {kid});
+    const kids = deviceList.filter(x => x.kid && x.mac !== d.mac);
+    notice(kid ? (kids.some(x => lockedMacs.has(x.mac)) && !lockedMacs.has(d.mac)
+      ? `${deviceLabel(d)} is a child's device. Kid mode doesn't cover it until you turn kid mode on again.` : `${deviceLabel(d)} is a child's device.`)
+      : `${deviceLabel(d)} is an adult's device.`);
+  } catch (e) { notice(`Not changed: ${e.message || 'the traffic API did not answer.'}`); }
+  loadDevices();
+}
+// Kid mode: on when every child's device is locked down (a device "*" block rule), shown only from stored rules.
+function renderKidMode() {
+  const kids = deviceList.filter(d => d.kid), locked = kids.filter(d => lockedMacs.has(d.mac)), button = $('kid-mode');
+  const on = kids.length > 0 && locked.length === kids.length;
+  button.textContent = kidPending !== null ? `kid mode: turning ${kidPending ? 'on' : 'off'}…`
+    : `kid mode: ${!kids.length ? 'off' : on ? 'on' : locked.length ? `on for ${locked.length} of ${kids.length}` : 'off'}`;
+  button.disabled = kidPending !== null || !kids.length; button.setAttribute('aria-pressed', String(on)); button.setAttribute('aria-busy', String(kidPending !== null));
+  $('kid-note').textContent = !kids.length ? "set a device to child to use kid mode" : `children's devices: ${listNames(kids)}`;
+}
+async function toggleKidMode() {
+  const kids = deviceList.filter(d => d.kid), locked = kids.filter(d => lockedMacs.has(d.mac)), on = locked.length < kids.length;
+  const ask = on ? `Turn on kid mode? ${listNames(kids.filter(d => !lockedMacs.has(d.mac)))} will only reach the kid-safe list, plus Eddie's essentials like sign-in and updates.`
+    : `Turn off kid mode? ${listNames(locked)} will get full internet through Eddie again.`;
+  if (!kids.length || kidPending !== null || !confirm(ask)) return;
+  kidPending = on; renderKidMode();
+  try { const r = await control('/api/kid-mode', {on}); const data = await r.json(); if (!r.ok) throw Error(data.message); notice(data.message); }
+  catch (e) { notice(`Kid mode not confirmed: ${e.message || 'the bridge did not answer.'}`); }
+  finally { kidPending = null; loadRules(); loadDevices(); }
+}
+function toggleDevices(open) {
+  $('devices').hidden = !open; $('open-devices').setAttribute('aria-expanded', String(open));
+  if (open) { loadRules(); loadDevices(); }
 }
 // The answer shown is the API's: stored, and whether DNS has loaded it.
 async function decideDevice(d, decision) {
@@ -103,7 +170,7 @@ async function decideDevice(d, decision) {
 }
 async function loadDevices() {
   try { const r = await fetch('/api/devices'); if (!r.ok) throw Error(); const data = await r.json(); renderDevices(data.devices || []); applyModes(data); }
-  catch { $('device-count').textContent = 'unavailable'; $('device-list').replaceChildren(); }
+  catch { $('device-count').textContent = 'unavailable'; if (!editingName) $('device-list').replaceChildren(); }
 }
 // Mode toggles show only state the backend acknowledged: a click shows "turning on…" until the API
 // answers, and offline mode says when DNS hasn't loaded the change. Home mode is a backend flag only.
@@ -231,7 +298,7 @@ function consumeEvent(event) {
   if (event.type === 'new_device') {
     // Stored as new; "quarantine on" is the setting, not proof DNS is blocking it yet.
     const seen = timeOf(event).textContent, extra = [event.vendor, event.hostname].filter(Boolean).join(', ');
-    const text = `A device I've never seen joined at ${seen}: ${event.device}${extra && extra !== event.device ? ` (${extra})` : ''}. ${event.quarantine ? 'Quarantine is on until you approve it.' : 'Approve or deny it in the device panel.'}`;
+    const text = `A device I've never seen joined at ${seen}: ${event.device}${extra && extra !== event.device ? ` (${extra})` : ''}. ${event.quarantine ? 'Quarantine is on until you approve it.' : 'Approve or deny it under devices.'}`;
     feedNote('rule', text, event); notice(text); loadDevices();
     return;
   }
@@ -316,7 +383,7 @@ dialog.addEventListener('cancel', event => { event.preventDefault(); closeByUser
 dialog.addEventListener('close', () => { clearTimeout(exitTimer); dialog.classList.remove('closing'); toggleLogs(false); });
 $('close').onclick = closeByUser;
 dialog.addEventListener('click', e => { if (e.target === dialog) { const r=dialog.getBoundingClientRect(); if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom) closeByUser(); } });
-document.addEventListener('keydown', e => { if (e.code === 'Space' && !['INPUT','TEXTAREA','BUTTON'].includes(document.activeElement.tagName)) { e.preventDefault(); wake(true); } });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('devices').hidden && !dialog.open && e.target.tagName !== 'INPUT') { toggleDevices(false); return; } if (e.code === 'Space' && !['INPUT','TEXTAREA','BUTTON'].includes(document.activeElement.tagName)) { e.preventDefault(); wake(true); } });
 // A paired device (the iPad) opens the link the Eddie computer prints; the token stays in the
 // URL fragment, which is never sent in a request line and is not written to browser storage.
 const pairToken = new URLSearchParams(String(location.hash || '').slice(1)).get('pair');
@@ -329,6 +396,9 @@ function connectTraffic() { let ws; try { ws=new WebSocket(trafficUrl); } catch 
 $('home-mode').onclick = () => setMode('home_mode', !modes.home_mode);
 $('offline-mode').onclick = () => setMode('offline', !modes.offline);
 $('quarantine-mode').onclick = () => setMode('quarantine', !modes.quarantine);
+$('kid-mode').onclick = toggleKidMode;
+$('open-devices').onclick = () => toggleDevices($('devices').hidden);
+$('close-devices').onclick = () => { toggleDevices(false); $('open-devices').focus(); };
 connectTraffic();
 loadRules();
 refreshPanels();

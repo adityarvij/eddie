@@ -8,7 +8,7 @@ and a blocked, beaconing lookup of a smart-TV ACR domain an acr_detected event (
 /rules writes user rules to eddie.db (EDDIE_DB, the DNS server's database) and
 waits for the DNS server to load them before answering; see docs/EVENTS.md.
 /devices lists the devices the DNS server recorded there, with lookup counts
-from its query log, and stores user labels (devices.py).
+from its query log, and stores user labels and the kid flag (devices.py).
 /questions holds "block this likely tracker?" questions from AI tracker verdicts
 in memory, and an answer writes a rule like /rules does (questions.py, #79).
 /geo/alerts takes the DNS server's geo_alert events (geoip.py, #102) and
@@ -47,7 +47,7 @@ from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, StrictBool, field_validator
 
 from . import acr, away, baselines, beacons, bypass, decision, demo_week, devices, inferences, insights, labels, occupancy, offline, quarantine, questions, rollback, rules, store
 from .events import Action, AIVerdictEvent, GeoAlertEvent, ModeUpdate, NewDeviceEvent, OfflineUpdate, QuarantineUpdate, QueryEvent
@@ -519,8 +519,9 @@ async def roll_back(found: rollback.Rollback) -> None:
                      "applied": out["applied"]})
 
 
-class LabelIn(BaseModel):
-    label: str | None  # None or "" clears it
+class DeviceIn(BaseModel):
+    label: str | None = None  # None or "" clears it
+    kid: StrictBool | None = None  # a child's device, for kid mode (#119)
 
     @field_validator("label")
     @classmethod
@@ -579,11 +580,16 @@ async def deny_device(key: str):
 
 
 @app.put("/devices/{key}")
-async def label_device(key: str, body: LabelIn):
+async def update_device(key: str, body: DeviceIn):
     key = key.strip().lower()
     if not rules.DEVICE.fullmatch(key):
         raise HTTPException(422, "Expected a MAC address or client IP.")
-    row = devices.set_label(rules_db(), key, body.label)
+    changes = body.model_dump(include=body.model_fields_set)
+    if changes.get("kid") is None:
+        changes.pop("kid", None)
+    if not changes:
+        raise HTTPException(422, "Expected a label, kid, or both.")
+    row = devices.update(rules_db(), key, changes)
     if row is None:
         raise HTTPException(404, f"Eddie hasn't seen a device {key}.")
     return {**row, "name": devices.display_name(key, row["label"], row["hostname"], row["vendor"])}

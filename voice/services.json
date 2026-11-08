@@ -1,5 +1,5 @@
 {
-  "_comment": "Services voice can allow by name (#13). Patterns use the POST /rules syntax: a.com is that host only, *.a.com is a.com and every subdomain. No pattern may cover a domain on the shipped blocklists (tests/test_voice_allow.py), so Netflix and YouTube list their hosts instead of *.netflix.com and *.youtube.com, and Prime Video leaves out aiv-delivery.net and pv-cdn.net. Best-effort from public knowledge of each app, not checked against captured traffic.",
+  "_comment": "Services voice can allow by name (#13). Patterns use the POST /rules syntax: a.com is that host only, *.a.com is a.com and every subdomain. No pattern may cover a domain on the shipped blocklists (tests/test_voice_allow.py), so Netflix and YouTube list their hosts instead of *.netflix.com and *.youtube.com, and Prime Video leaves out aiv-delivery.net and pv-cdn.net. Best-effort from public knowledge of each app, not checked against captured traffic. \"kids\": true marks a kid-safe service (#119): plain lockdown leaves those out, kid_safe.json picks what kid mode keeps. DNS can't tell the YouTube Kids app from YouTube when both use youtubei.googleapis.com and googlevideo.com, so YouTube Kids keeps those hosts but not youtube.com itself.",
   "netflix": {
     "name": "Netflix",
     "aliases": ["netflix"],
@@ -21,5 +21,18 @@
     "name": "Apple TV",
     "aliases": ["apple tv", "apple tv plus"],
     "patterns": ["*.tv.apple.com", "play.itunes.apple.com", "*.hls.itunes.apple.com"]
+  },
+  "youtube_kids": {
+    "name": "YouTube Kids",
+    "aliases": ["youtube kids", "you tube kids"],
+    "kids": true,
+    "patterns": ["youtubekids.com", "www.youtubekids.com", "youtubei.googleapis.com",
+                 "*.googlevideo.com", "*.ytimg.com", "*.ggpht.com"]
+  },
+  "pbs_kids": {
+    "name": "PBS Kids",
+    "aliases": ["pbs kids", "p b s kids"],
+    "kids": true,
+    "patterns": ["pbskids.org", "*.pbskids.org", "*.pbs.org"]
   }
 }

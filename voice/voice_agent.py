@@ -197,13 +197,14 @@ def resolve_it():
     return None
 
 
-def add_rule(pattern, action, saved=None, device=None):
+def add_rule(pattern, action, saved=None, device=None, by='voice'):
     """POST a rule (global, or for one device key); returns applied, raising unless
-    the backend stored this rule.
+    the backend stored this rule. by is its created_by: voice, or dashboard for kid
+    mode switched from the dashboard (#119).
 
     The acknowledged rule is appended to saved, for remember_rules.
     """
-    body = {'pattern': pattern, 'action': action, 'created_by': 'voice'}
+    body = {'pattern': pattern, 'action': action, 'created_by': by}
     if device is not None:
         body['device_mac'] = device
     result = request('/rules', body, timeout=RULE_TIMEOUT)
@@ -352,8 +353,14 @@ LOCKDOWN = _command(r'lock ?down')
 LOCKDOWN_ARTICLE = re.compile(r'(?:the|my|our) ')
 # Services a locked-down device keeps by default (#17): every streaming service
 # voice knows. The allowlist's essentials (sign-in, updates, time) survive anyway.
-LOCKDOWN_KEEP = list(SERVICES)
+LOCKDOWN_KEEP = [key for key, service in SERVICES.items() if not service.get('kids')]
+# What a child's device keeps (#119): in kid mode, and when "lock down <device>" names a
+# device marked as a child's on the dashboard. voice/kid_safe.json is the list to edit.
+KID_KEEP = json.loads(Path(__file__).with_name('kid_safe.json').read_text())['keep']
+if not KID_KEEP or set(KID_KEEP) - SERVICES.keys():
+    raise ValueError('voice/kid_safe.json keep must list services.json keys')
 LOCKDOWN_UNREACHABLE = "I can't reach Eddie's backend, so I can't look up that device. Nothing changed."
+UNNAMED = '---'  # how the dashboard's device list shows a device nobody has named yet
 
 
 def words(text):
@@ -378,20 +385,41 @@ def find_devices(spoken, devices):
     return exact or [d for d in labelled if f' {spoken} ' in f" {words(d['label'])} "]
 
 
-def lockdown_request(article, spoken, keep=LOCKDOWN_KEEP):
+def named(device):
+    return bool(device.get('label') and words(device['label']))
+
+
+def known_names(devices):
+    """The devices voice can find by name, and how many have none: the dashboard shows those as ---."""
+    names = sorted({d['label'] for d in devices if named(d)})
+    unnamed = sum(not named(d) for d in devices)
+    rest = (f"{unnamed} more {'have' if unnamed > 1 else 'has'} no name yet and "
+            f"show{'' if unnamed > 1 else 's'} as {UNNAMED}")
+    if names:
+        return f" The devices I know by name are {join(names)}{f'; {rest}' if unnamed else ''}."
+    if unnamed:
+        return f" None of your devices has a name yet; {'they show' if unnamed > 1 else 'it shows'} as {UNNAMED}."
+    return ''
+
+
+def keep_text(keep):
+    names = [SERVICES[key]['name'] for key in keep]
+    return f"{join(names)}, plus Eddie's essentials" if names else "Eddie's essentials"
+
+
+def lockdown_request(article, spoken, keep=None):
     """Confirmation.request args to lock a device down to the keep services (SERVICES
-    keys), or the spoken reply when the device is unknown, ambiguous or already locked
-    down (nothing changes then)."""
+    keys; by default KID_KEEP for a device marked as a child's, else LOCKDOWN_KEEP), or
+    the spoken reply when the device is unknown, ambiguous or already locked down
+    (nothing changes then). Only named devices can be found, so "lock down ---" can't."""
     try:
         devices = request('/devices')['devices']
     except Exception:
         return LOCKDOWN_UNREACHABLE
     found = find_devices(spoken, devices)
     if not found:
-        names = sorted({d['label'] for d in devices if d.get('label')})
-        known = f" The devices I know by name are {join(names)}." if names else ''
-        return (f"I don't know a device called {spoken}.{known} Label it on the dashboard's device panel, "
-                "then ask again. Nothing changed.")
+        return (f"I don't know a device called {spoken}.{known_names(devices)} Name it in the dashboard's "
+                "device list, then ask again. Nothing changed.")
     if len({d['mac'] for d in found}) > 1:
         return f"Which one: {join([d['label'] for d in found], 'or')}? Nothing changed."
     device = found[0]
@@ -402,9 +430,11 @@ def lockdown_request(article, spoken, keep=LOCKDOWN_KEEP):
         return LOCKDOWN_UNREACHABLE
     if locked:
         return f'{name[0].upper()}{name[1:]} is already locked down. Nothing changed.'
-    names = [SERVICES[key]['name'] for key in keep]
-    reach = f"{join(names)}, plus Eddie's essentials" if names else "Eddie's essentials"
-    prompt = f"Lock down {name}? It'll only reach {reach} like sign-in and updates."
+    child = keep is None and device.get('kid')
+    if keep is None:
+        keep = KID_KEEP if child else LOCKDOWN_KEEP
+    why = "It's marked as a child's, so it'll" if child else "It'll"
+    prompt = f"Lock down {name}? {why} only reach {keep_text(keep)} like sign-in and updates."
     return 'lockdown', {'device': device['mac'], 'name': name, 'keep': list(keep)}, prompt
 
 
@@ -419,54 +449,174 @@ def join(names, last='and'):
 
 def delete_rules(rules):
     """Delete acknowledged rules newest first, popping each one the backend removed
-    (or no longer has). Stops at the first failure; what's left is still stored."""
+    (or no longer has). Stops at the first failure; what's left is still stored.
+    Returns whether DNS loaded the last delete (it loads whole revisions)."""
+    applied = False
     while rules:
         try:
             result = request(f"/rules/{rules[-1]['id']}", method='DELETE', timeout=RULE_TIMEOUT)
         except urllib.error.HTTPError as error:
             error.close()
             if error.code != 404:
-                return
+                return applied
         except Exception:
-            return
+            return applied
         else:
             if result.get('deleted') is not True or result.get('id') != rules[-1]['id']:
-                return
+                return applied
+            applied = result.get('applied') is True
         rules.pop()
+    return applied
 
 
-def lockdown_device(device, name, keep):
-    """RISKY_ACTIONS['lockdown']: device allow rules for every keep pattern, then the
-    device's "*" block rule last, so a device is never blocked without its keep list.
+def lock_device(device, name, keep, by='voice'):
+    """Device allow rules for every keep pattern, then the device's "*" block rule last,
+    so a device is never blocked without its keep list. Returns (status, spoken text),
+    status applied, saved (DNS hasn't loaded it) or failed.
 
     On any failure the saved rules are deleted again; ones that can't be stay on
-    undo_stack. Success means the rules are saved and loaded, never that traffic
-    was seen blocked.
+    undo_stack (voice only: by='dashboard' rules aren't voice's to undo). Success
+    means the rules are saved and loaded, never that traffic was seen blocked.
     """
     patterns = [pattern for key in keep for pattern in SERVICES[key]['patterns']]
+    remember = remember_rules if by == 'voice' else lambda what, saved: None
     rules, applied = [], False
     try:
         for pattern in patterns:
-            add_rule(pattern, 'allow', rules, device)
-        applied = add_rule('*', 'block', rules, device)
+            add_rule(pattern, 'allow', rules, device, by)
+        applied = add_rule('*', 'block', rules, device, by)
     except Exception:
         saved = len(rules)
         delete_rules(rules)
-        remember_rules(f'leftover lockdown rules for {name}', rules)
+        remember(f'leftover lockdown rules for {name}', rules)
         if saved == 0:
-            return f"I couldn't lock down {name}; the backend didn't save any rules. Nothing changed."
+            return 'failed', f"I couldn't lock down {name}; the backend didn't save any rules. Nothing changed."
         if not rules:
-            return (f"I only saved {saved} of {len(patterns) + 1} lockdown rules for {name} before the backend "
-                    "stopped answering, so I removed them again. Nothing is locked down.")
-        return (f"I only saved {saved} of {len(patterns) + 1} lockdown rules for {name}, and couldn't remove "
-                f"{len(rules)} of them. Nothing is locked down, but those allow rules are still saved; "
-                "say undo to remove them.")
-    remember_rules(f'lockdown rules for {name}', rules)
+            return 'failed', (f"I only saved {saved} of {len(patterns) + 1} lockdown rules for {name} before the "
+                              "backend stopped answering, so I removed them again. Nothing is locked down.")
+        fix = 'say undo to remove them.' if by == 'voice' else 'turning kid mode off removes them.'
+        return 'failed', (f"I only saved {saved} of {len(patterns) + 1} lockdown rules for {name}, and couldn't "
+                          f"remove {len(rules)} of them. Nothing is locked down, but those allow rules are still "
+                          f"saved; {fix}")
+    remember(f'lockdown rules for {name}', rules)
     if not applied:
-        return (f"I saved the lockdown rules for {name}, but Eddie's DNS hasn't loaded them yet, "
-                "so nothing is blocked yet.")
-    return (f"{name[0].upper()}{name[1:]} is locked down. The rules are saved and Eddie's DNS has loaded them. "
-            "I haven't seen its traffic blocked yet, and it only applies while it uses Eddie for DNS.")
+        return 'saved', (f"I saved the lockdown rules for {name}, but Eddie's DNS hasn't loaded them yet, "
+                         "so nothing is blocked yet.")
+    return 'applied', (f"{name[0].upper()}{name[1:]} is locked down. The rules are saved and Eddie's DNS has "
+                       "loaded them. I haven't seen its traffic blocked yet, and it only applies while it uses "
+                       "Eddie for DNS.")
+
+
+def lockdown_device(device, name, keep):
+    """RISKY_ACTIONS['lockdown']: lock_device's spoken result."""
+    return lock_device(device, name, keep)[1]
+
+
+def unlock_device(device, name, keep, by='voice'):
+    """Remove a device's lockdown: its "*" block rule first, so it's never left blocked
+    without its keep list, then its allow rules for the keep patterns. Rules for the
+    device that kid mode didn't make stay. Returns (status, spoken text) like lock_device."""
+    patterns = {pattern for key in keep for pattern in SERVICES[key]['patterns']}
+    try:
+        mine = [row for row in request('/rules') if row.get('device_mac') == device]
+    except Exception:
+        return 'failed', f"I can't reach Eddie's backend, so {name} is still locked down."
+    keeps = [row for row in mine if row.get('action') == 'allow' and row.get('pattern') in patterns]
+    blocks = [row for row in mine if row.get('action') == 'block' and row.get('pattern') == '*']
+    rules = keeps + blocks  # delete_rules works from the end: the "*" blocks go first
+    applied = delete_rules(rules)
+    if any(row in rules for row in blocks):
+        return 'failed', f"I couldn't unlock {name}; the backend didn't confirm it. It's still locked down."
+    left = f" {len(rules)} of its kid-safe allow rules are still saved." if rules else ''
+    if not applied:
+        return 'saved', f"I removed {name}'s lockdown, but Eddie's DNS hasn't loaded the change yet.{left}"
+    return 'applied', f"{name[0].upper()}{name[1:]} is unlocked, and Eddie's DNS has loaded the change.{left}"
+
+
+# Kid mode (#119): every device marked as a child's on the dashboard, locked down to KID_KEEP
+# ("turn on kid mode", "lock down the kids' devices") or unlocked ("turn off kid mode").
+KID_MODE = re.compile(
+    r'(?:(?:ok|okay|eddie|please) )*(?:(?:can|could|would|will) you (?:please )?)?(?:go ahead and )?'
+    r'(?:(?:turn|switch) (?P<on>on|off) (?:the )?kids? mode|(?:turn|switch) (?:the )?kids? mode (?P<on2>on|off)'
+    r'|(?P<verb>enable|disable|start|stop) (?:the )?kids? mode|kids? mode (?P<on3>on|off)'
+    r'|(?P<lock>lock ?down|unlock) (?:the |my |our |all (?:of )?(?:the |my |our )?)?(?:kids?|childrens?|childs) devices)'
+    r'(?: (?:please|for me|now))*')
+KID_UNREACHABLE = "I can't reach Eddie's backend, so I can't look up the children's devices. Nothing changed."
+
+
+def kid_mode_target(raw):
+    """True to turn kid mode on, False for off, None if this isn't a kid mode command."""
+    match = KID_MODE.fullmatch(words(raw))
+    if not match:
+        return None
+    if switch := match['on'] or match['on2'] or match['on3']:
+        return switch == 'on'
+    if match['verb']:
+        return match['verb'] in ('enable', 'start')
+    return match['lock'] != 'unlock'
+
+
+def kid_name(device):
+    if named(device):
+        return device['label']
+    return f"an unnamed {device['vendor']} device" if device.get('vendor') else 'an unnamed device'
+
+
+def kid_mode_request(on):
+    """Confirmation.request args to turn kid mode on or off for every child's device not
+    already that way, or the spoken reply when there's nothing to change."""
+    try:
+        devices = request('/devices')['devices']
+        locked = {row.get('device_mac') for row in request('/rules')
+                  if row.get('pattern') == '*' and row.get('action') == 'block'}
+    except Exception:
+        return KID_UNREACHABLE
+    kids = [d for d in devices if d.get('kid')]
+    if not kids:
+        return ("No device is marked as a child's yet. Open devices on the dashboard and set one to child, "
+                "then ask again. Nothing changed.")
+    todo = [d for d in kids if (d['mac'] in locked) != on]
+    if not todo:
+        return f"Kid mode is already {'on' if on else 'off'} for {join([kid_name(d) for d in kids])}. Nothing changed."
+    targets = [{'device': d['mac'], 'name': kid_name(d)} for d in todo]
+    names = join([t['name'] for t in targets])
+    names = names[0].upper() + names[1:]
+    if on:
+        prompt = f"Turn on kid mode? {names} will only reach {keep_text(KID_KEEP)} like sign-in and updates."
+    else:
+        prompt = f"Turn off kid mode? {names} will get full internet through Eddie again."
+    return 'kid_mode', {'on': on, 'devices': targets}, prompt
+
+
+def set_kid_mode(on, devices, by='voice'):
+    """RISKY_ACTIONS['kid_mode']: lock each child's device down to KID_KEEP, or unlock it.
+    Speaks only what the backend acknowledged, never that traffic was seen blocked."""
+    change = lock_device if on else unlock_device
+    results = [(d['name'], *change(d['device'], d['name'], KID_KEEP, by)) for d in devices]
+    done = [name for name, status, _ in results if status == 'applied']
+    trouble = [text for _, status, text in results if status != 'applied']
+    one, lead = len(done) == 1, ''
+    if done and on:
+        lead = (f"{join(done)} {'is' if one else 'are'} locked down to {keep_text(KID_KEEP)}; "
+                "Eddie's DNS has loaded the rules.")
+    elif done:
+        lead = f"{join(done)} {'has' if one else 'have'} full internet through Eddie again; Eddie's DNS has loaded the change."
+    lead = lead[:1].upper() + lead[1:]
+    if not trouble:
+        state = f"Kid mode is {'on' if on else 'off'}. {lead}"
+        if on:
+            state += (f" I haven't seen {'its' if one else 'their'} traffic blocked yet, and it only applies while "
+                      f"{'it uses' if one else 'they use'} Eddie for DNS.")
+        return state
+    return ' '.join(filter(None, [lead, *trouble]))
+
+
+def kid_mode_change(on, by='dashboard'):
+    """Kid mode from the dashboard, whose own confirm dialog was the yes: the spoken-style result."""
+    command = kid_mode_request(on)
+    if isinstance(command, str):
+        return command
+    return set_kid_mode(**command[1], by=by)
 
 
 # "allow the new device" / "deny the new device" (#98): the newest device /devices
@@ -731,13 +881,14 @@ NO = {'no', 'nope', 'no thanks', 'cancel', 'cancel it', 'stop', 'dont', 'never m
 # Risky actions run only from Confirmation.reply after an explicit yes. Each maps
 # kind -> callable(**args) returning the spoken result only after backend
 # acknowledgment. RISKY_COMMANDS parse normalized text -> (kind, args, prompt).
-# Broad allows (a service or a wildcard), lockdown and new devices are parsed in route,
+# Broad allows (a service or a wildcard), lockdown, kid mode and new devices are parsed in route,
 # not RISKY_COMMANDS: allows need the raw text's dots, the others a /devices lookup.
 # block and home_mode are only requested by the local model's write tools
 # (ollama_agent.py); spoken "block x.com" and "turn on home mode" run directly.
 # question answers an API question read out on wake (#79).
 RISKY_ACTIONS = {'allow': allow_patterns, 'lockdown': lockdown_device, 'block': block_action,
                  'home_mode': home_mode_action, 'away': set_away_mode, 'question': answer_question,
+                 'kid_mode': set_kid_mode,
                  'approve': lambda **args: decide_new_device('approve', **args),
                  'deny': lambda **args: decide_new_device('deny', **args)}
 RISKY_COMMANDS = [away_command]
@@ -855,6 +1006,10 @@ def route(text):
     allow = allow_target(raw)
     if allow and allow[0] in ('service', 'wildcard'):
         return confirmation.request(*allow_request(*allow))
+    kid_mode = kid_mode_target(raw)
+    if kid_mode is not None:
+        command = kid_mode_request(kid_mode)
+        return command if isinstance(command, str) else confirmation.request(*command)
     lockdown = lockdown_target(raw)
     if lockdown and lockdown[1]:
         command = lockdown_request(*lockdown)
@@ -896,7 +1051,7 @@ def route(text):
             return NOT_RESOLVED
         if allow:
             return ALLOW_UNRESOLVED
-        return "I haven't changed anything. I can block or allow a domain, allow a service like Netflix, lock down a device, allow or deny a new device, undo my last rule, or turn home or away mode on or off; email isn't connected yet."
+        return "I haven't changed anything. I can block or allow a domain, allow a service like Netflix, lock down a device, allow or deny a new device, undo my last rule, or turn home, away or kid mode on or off; email isn't connected yet."
     if re.search(r'\bwhat (?:do|does|can|could) (?:\w+|my \w+|the \w+) (?:know|tell|guess|figure out|learn) about (?:me|us|my house|my home|our house)\b', text):
         try:
             report = what_they_know(report_hours(raw))

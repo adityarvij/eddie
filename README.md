@@ -66,7 +66,7 @@ Dashboard at http://localhost:5173, API at http://localhost:8000. The traffic AP
 - **Shareable receipt** — exportable proof of what was blocked
 
 ### Household
-- **Kid mode** — lock down a child's tablet by voice
+- **Kid mode** (#119, built) — mark a device as a child's in the dashboard's device list, then "turn on kid mode" (or the dashboard switch) locks every child's device down to the kid-safe list after a yes
 - **Guest mode** — Airbnb/short-term rental: guests see that the house isn't watching them
 - **Multiple voices** — recognize household members, with per-person permissions
 
@@ -225,7 +225,7 @@ Settings: `EDDIE_DHCP_LEASES` (dnsmasq leases file for device hostnames; default
 ### SQLite schema
 
 ```sql
-CREATE TABLE devices (mac TEXT PRIMARY KEY, ip TEXT, hostname TEXT, vendor TEXT, label TEXT, first_seen INTEGER, last_seen INTEGER);
+CREATE TABLE devices (mac TEXT PRIMARY KEY, ip TEXT, hostname TEXT, vendor TEXT, label TEXT, first_seen INTEGER, last_seen INTEGER, kid INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE queries (id INTEGER PRIMARY KEY, ts INTEGER, device_mac TEXT, domain TEXT, qtype TEXT, action TEXT, source TEXT, reason TEXT);
 CREATE TABLE rules (id INTEGER PRIMARY KEY, scope TEXT, device_mac TEXT, pattern TEXT, action TEXT, created_by TEXT, ts INTEGER);
 CREATE TABLE ai_verdicts (domain TEXT PRIMARY KEY, label TEXT, confidence REAL, reason TEXT, ts INTEGER);
@@ -268,7 +268,7 @@ Writes from anywhere but loopback need `Authorization: Bearer $EDDIE_API_TOKEN`,
 | Method | Path | Returns / does |
 |---|---|---|
 | GET | `/devices?hours=24` | Devices Eddie has seen, with name, vendor, lookup / blocked / flagged counts, distinct trackers blocked and the latest blocked domains (see docs/EVENTS.md) |
-| PUT | `/devices/{mac}` | `{label}` names a device ("Fire Stick"); `""` or `null` clears it |
+| PUT | `/devices/{mac}` | `{label?, kid?}`: `label` names a device ("Fire Stick"; `""` or `null` clears it), `kid` marks it as a child's for kid mode (#119) |
 | GET | `/events?since=&device=` | Recent query rows |
 | GET | `/summary?window=1h` | Totals: queries, blocked, top blocked domains, top companies, per device, data broker and ad exchange counts |
 | GET | `/what-they-know?hours=24` | "What they know about you" facts `{fact, evidence, confidence}` + spoken text, from `eddie.db` (else the in-memory feed); `?demo=true` returns the labelled seeded demo week instead (see docs/EVENTS.md) |
@@ -496,7 +496,7 @@ With a Fire Stick you'll mainly see Safety, What's on screen, Identity linking a
 
 ## Voice implementation update
 
-The offline wake/capture/transcription worker and deterministic summary/home-mode tool router are implemented. Whisper, shared wake features, Vosk and Piper Lessac assets are pinned by SHA-256 in `voice/assets.json` and installed with `python scripts/provision_voice.py` (#39), which also runs a hardware check; `scripts/run_voice.sh` verifies them offline before starting. The dedicated Hey Eddie ONNX model still needs training; the explicit offline Vosk prototype is available now via `./scripts/run_voice.sh`. Live-room microphone accuracy remains unverified. Ollama tool calling (#29: `get_summary`, `get_recent_blocks`, `explain_domain`, `what_they_know`) answers questions, with every spoken number checked against tool results. Plain-English rules (#108) give the model `block`, `allow`, `lockdown_device` and `set_mode`, but a call only becomes a schema-checked read-back waiting for a spoken yes; email is not connected to the model. The keyword router handles block, allow, undo and "lock down <device>" (#17), and service allows and lockdown wait for a spoken yes (one pending action, 15 s expiry, discarded on dismissal); all are unit tested. See [voice setup](voice/README.md), [architecture and remaining work](docs/ARCHITECTURE.md), and [contributor instructions](AGENTS.md). The Mac is the development host; final deployment stays portable to Linux. Away mode (#109) is a keyword command too, and waits for a spoken yes to turn on or off.
+The offline wake/capture/transcription worker and deterministic summary/home-mode tool router are implemented. Whisper, shared wake features, Vosk and Piper Lessac assets are pinned by SHA-256 in `voice/assets.json` and installed with `python scripts/provision_voice.py` (#39), which also runs a hardware check; `scripts/run_voice.sh` verifies them offline before starting. The dedicated Hey Eddie ONNX model still needs training; the explicit offline Vosk prototype is available now via `./scripts/run_voice.sh`. Live-room microphone accuracy remains unverified. Ollama tool calling (#29: `get_summary`, `get_recent_blocks`, `explain_domain`, `what_they_know`) answers questions, with every spoken number checked against tool results. Plain-English rules (#108) give the model `block`, `allow`, `lockdown_device` and `set_mode`, but a call only becomes a schema-checked read-back waiting for a spoken yes; email is not connected to the model. The keyword router handles block, allow, undo, "lock down <device>" (#17) and kid mode on or off (#119), and service allows, lockdown and kid mode wait for a spoken yes (one pending action, 15 s expiry, discarded on dismissal); all are unit tested. See [voice setup](voice/README.md), [architecture and remaining work](docs/ARCHITECTURE.md), and [contributor instructions](AGENTS.md). The Mac is the development host; final deployment stays portable to Linux. Away mode (#109) is a keyword command too, and waits for a spoken yes to turn on or off.
 
 The voice view now features a larger active Eddie, spoken interaction without a text box, and an Open logs control beneath Eddie that opens a drawer for recent network activity.
 

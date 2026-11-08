@@ -465,7 +465,8 @@ this needs `EDDIE_DB` (off answers 503).
 {"hours": 24, "devices": [
   {"mac": "f0:4f:7c:11:22:33", "ip": "172.20.10.5", "name": "Fire Stick", "label": "Fire Stick",
    "hostname": null, "vendor": "Amazon", "first_seen": 1762531200123, "last_seen": 1762534800456,
-   "queries": 412, "blocked": 160, "flagged": 12, "trackers": 14,
+   "kid": false, "queries": 412, "blocked": 160, "flagged": 12, "trackers": 14,
+   "recent_domains": ["device-metrics-us.amazon.com", "api-global.netflix.com", "unagi-na.amazon.com"],
    "recent_blocks": [{"domain": "device-metrics-us.amazon.com", "ts": 1762534800456},
                      {"domain": "unagi-na.amazon.com", "ts": 1762534790001}]}
 ]}
@@ -480,6 +481,8 @@ this needs `EDDIE_DB` (off answers 503).
 | `queries` / `blocked` / `flagged` | lookups in the window: all, blocked by Eddie, forwarded while unknown |
 | `trackers` | distinct domains blocked in the window (each counted once however often it was asked for) |
 | `recent_blocks` | up to three of those domains, newest last block first, with that block's `ts` |
+| `recent_domains` | up to three domains the device looked up in the window, whatever the answer, newest first: the dashboard shows them so people can tell which device is which |
+| `kid` | `true` when the device is marked as a child's (#119): kid mode locks it down. Kept like a label when the device goes quiet |
 
 Sorted most blocked first. A device's first lookups can be logged under its
 IP before the first ARP read (about a second), so a short-lived IP row may
@@ -487,7 +490,11 @@ appear next to the MAC row.
 
 `PUT /devices/{mac}` with `{"label": "Fire Stick"}` names a device Eddie has
 seen (`404` otherwise); `""` or `null` clears it. Labels are at most 40
-printable characters. Answers with the stored device and its `name`.
+printable characters. `{"kid": true}` marks it as a child's device and
+`false` unmarks it (#119); a body may carry either or both, and leaves out
+the other untouched (`{}` or a non-boolean `kid` is 422). Marking a device
+writes no rules: kid mode does that. Answers with the stored device, its
+`kid` and its `name`.
 
 Each device also has `status` (`approved`, `pending` or `denied`; `null` for an
 IP-keyed device), and the response has top-level `quarantine` and
@@ -622,10 +629,12 @@ Relays to the traffic API (`EDDIE_API_URL`, default `http://127.0.0.1:8000`), so
 | `POST /api/offline-mode` `{offline: bool}` | `POST /offline-mode` | answers with `{offline, applied}`; `applied: false` is passed through |
 | `POST /api/quarantine` `{quarantine: bool}` | `POST /quarantine` | answers with `{quarantine, applied}` |
 | `POST /api/devices/decide` `{mac, decision: "approve" \| "deny"}` | `POST /devices/{mac}/{decision}` | answers with the API's `{mac, name, status, applied}`; anything but a MAC and approve/deny is 400 |
+| `POST /api/devices/update` `{mac, label?, kid?}` | `PUT /devices/{mac}` | names a device or marks it as a child's (#119); `mac` is a MAC or client IP; answers with the API's stored device; 400 for anything else, 422 for a bad name, 404 for a device Eddie hasn't seen |
+| `POST /api/kid-mode` `{on: bool}` | `GET /devices`, `GET /rules`, then `POST` / `DELETE /rules` per child's device | runs kid mode with the page's confirm dialog as the yes (`voice_agent.kid_mode_change`, rules `created_by: dashboard`); answers `{message}`, the same wording voice speaks, which says whether DNS loaded the rules |
 
 The mode POSTs forward only that one boolean (anything else is 400) and wait up to 5 s for the API.
 
-Control auth (#40): POSTs need a `Host` that is an IP, `localhost` or `.local`, and a same-origin `Origin` if one is sent (403 otherwise). From the Eddie computer (loopback) no token is needed. From another device, only `POST /api/voice/ask` (`{text}`), `POST /api/mode`, `POST /api/offline-mode`, `POST /api/quarantine`, `POST /api/devices/decide` and the two `/api/questions` POSTs are allowed, with `Authorization: Bearer <pairing token>`; a missing or wrong token gets 401 `{message}`. `/api/voice/start`, `/api/voice/stop`, `/api/voice/dismiss` and `/api/events` answer 403 from other devices whatever the token.
+Control auth (#40): POSTs need a `Host` that is an IP, `localhost` or `.local`, and a same-origin `Origin` if one is sent (403 otherwise). From the Eddie computer (loopback) no token is needed. From another device, only `POST /api/voice/ask` (`{text}`), `POST /api/mode`, `POST /api/offline-mode`, `POST /api/quarantine`, `POST /api/devices/decide`, `POST /api/devices/update`, `POST /api/kid-mode` and the two `/api/questions` POSTs are allowed, with `Authorization: Bearer <pairing token>`; a missing or wrong token gets 401 `{message}`. `/api/voice/start`, `/api/voice/stop`, `/api/voice/dismiss` and `/api/events` answer 403 from other devices whatever the token.
 
 Wake lifecycle: `wake`, `voice_state: listening`, `voice_state: thinking`, optional `transcript`, `agent_reply`, `speaking`, `speech_end`, then `voice_state: listening` again for a follow-up without the wake phrase. If no speech starts within 4 seconds of listening, the worker emits `voice_state: dismissed` and the dashboard closes Eddie and returns to the live feed; the next request needs the wake phrase. No transcript is persisted. Capture or inference failure yields `voice_status: error`.
 
