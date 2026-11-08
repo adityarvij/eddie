@@ -128,7 +128,8 @@ class DemoWeek(unittest.TestCase):
         now = int(datetime(2026, 11, 7, 23, 0).timestamp() * 1000)
         r = occupancy.report(demo_week.events(now), 168, now)
         self.assertTrue(r['full_range'] and r['enough'])
-        self.assertIn('on weekdays from 6 AM to 6 PM', r['text'])
+        # Evening TV starts 7 PM give or take 15 minutes; the seeded jitter differs by time zone (DST changes the week's length).
+        self.assertRegex(r['text'], r'on weekdays from 6 AM to [67] PM')
         self.assertEqual({demo_week.TV, demo_week.TABLET}, {d['device'] for d in r['devices']})
 
 
