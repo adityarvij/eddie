@@ -157,8 +157,9 @@ class DeclineAndTimeout(LockdownBase):
 class Devices(LockdownBase):
     def test_unknown_device_asks_and_changes_nothing(self):
         reply = voice_agent.respond('lock down the fridge')
-        self.assertEqual(reply, "I don't know a device called fridge. The devices I know by name are Fire Stick and TV. "
-                                "Label it on the dashboard's device panel, then ask again. Nothing changed.")
+        self.assertEqual(reply, "I don't know a device called fridge. The devices I know by name are Fire Stick and TV; "
+                                "1 more has no name yet and shows as ---. Name it in the dashboard's device list, "
+                                "then ask again. Nothing changed.")
         self.assertIsNone(voice_agent.confirmation.status())
         self.assertEqual([], self.backend.posts)
 

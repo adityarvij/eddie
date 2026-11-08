@@ -19,6 +19,9 @@ const timers=[];
 const context={document:{getElementById:get,createElement:()=>new Element(),addEventListener(){},activeElement:{tagName:'BODY'}},window:{},location:{search:'',hostname:'localhost'},URLSearchParams,Date,console,
   setTimeout(fn,ms){timers.push({fn,ms});return timers.length;},clearTimeout(){},fetch(){},AbortController,EventSource:class{},WebSocket:class{constructor(){socket=this;}}};
 const source=fs.readFileSync('frontend/app.js','utf8');
+// getElementById returns the first match, so a repeated id makes one element overwrite another.
+const pageIds=[...fs.readFileSync('frontend/index.html','utf8').matchAll(/\sid="([^"]+)"/g)].map(m=>m[1]);
+assert.deepEqual(pageIds.filter((id,i)=>pageIds.indexOf(id)!==i),[],'every id in index.html is unique');
 for (const a of ['block','allow','ignore']) { const b = new Element(); b.dataset.answer = a; get('question-actions').append(b); }
 vm.runInNewContext(source,context);
 socket.onmessage({data:JSON.stringify({domain:'example.org',device:'TV',action:'allow',ts:Date.now()})});
@@ -139,7 +142,7 @@ context.window.eddie.renderReport({demo:false,hours:24,facts:[]});
 assert.equal(get('report-demo').hidden,true);
 assert.equal(get('report-title').textContent,'what they know · last 24h');
 
-// Device panel (#35): name, distinct trackers blocked and the latest blocked domains.
+// Devices (#35, #119): one row per device, opened from the link bottom right.
 (async () => {
   const flush = () => new Promise(resolve => setImmediate(resolve));
   const calls = [];
@@ -149,16 +152,90 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
 
   socket.onmessage({data:JSON.stringify({type:'snapshot',events:[],totals:{seen:0,blocked:0},home_mode:false})});
   await answer('/api/devices', 200, {hours:24, devices:[
-    {mac:'f0:4f:7c:11:22:33', name:'Fire Stick', trackers:14, blocked:160, recent_blocks:[{domain:'device-metrics-us.amazon.com',ts:2},{domain:'unagi-na.amazon.com',ts:1}]},
-    {mac:'172.20.10.9', name:'172.20.10.9', trackers:1, blocked:1, recent_blocks:[{domain:'ads.example',ts:1}]},
-    ...['a','b','c','d'].map(n => ({mac:n, name:n, trackers:0, blocked:0, recent_blocks:[]}))]});
-  assert.equal(get('device-count').textContent, 6);
-  const rows = get('device-list').children;
-  assert.equal(rows[0].textContent, 'Fire Stick · 14 trackers blocked');
-  assert.equal(rows[0].children[0].textContent, 'recent: device-metrics-us.amazon.com, unagi-na.amazon.com');
-  assert.equal(rows[1].textContent, '172.20.10.9 · 1 tracker blocked');
-  assert.equal(rows[2].children.length, 0, 'no recent line without blocks');
-  assert.equal(rows.at(-1).textContent, '+1 more');
+    {mac:'f0:4f:7c:11:22:33', ip:'172.20.10.5', label:'Fire Stick', name:'Fire Stick', vendor:'Amazon', kid:false, trackers:14, blocked:160,
+     recent_domains:['device-metrics-us.amazon.com', 'netflix.com'], recent_blocks:[]},
+    {mac:'172.20.10.9', ip:'172.20.10.9', label:null, name:'172.20.10.9', kid:true, trackers:1, blocked:1, recent_domains:[], recent_blocks:[]},
+    {mac:'aa:bb:cc:dd:ee:07', ip:'172.20.10.7', label:null, name:'aa:bb:cc:dd:ee:07', status:'pending', kid:false, trackers:0, blocked:0, recent_domains:[]}]});
+  assert.equal(get('device-count').textContent, 3);
+  let rows = get('device-list').children;
+  assert.equal(rows[0].dataset.mac, 'aa:bb:cc:dd:ee:07', 'a new device comes first, with its decision buttons');
+  assert.equal(rows[0].children.at(-1).textContent, '[new]approvedeny');
+  const [name, kid, info, looked] = rows[1].children;
+  assert.equal(name.value, 'Fire Stick');
+  assert.equal(name.placeholder, '---');
+  assert.equal(rows[2].children[0].value, '', 'an unnamed device shows ---, never its vendor or IP as a name');
+  assert.equal(rows[2].children[0].placeholder, '---');
+  name.onfocus(); assert.equal(name.placeholder, 'add a title'); name.value = 'Fire Stick'; name.onblur();
+  assert.equal(name.placeholder, '---');
+  assert.ok(!calls.some(c => c.path === '/api/devices/update'), 'an unchanged name is not sent');
+  assert.equal(kid.textContent, 'adult');
+  assert.equal(rows[2].children[1].textContent, 'child');
+  assert.equal(rows[2].children[1].attrs['aria-pressed'], 'true');
+  assert.equal(info.textContent, '172.20.10.5 · Amazon · 14 trackers blocked', 'the IP goes under the name');
+  assert.equal(looked.textContent, 'looked up: device-metrics-us.amazon.com, netflix.com');
+  assert.equal(rows[2].children.length, 3, 'no looked-up line without lookups');
+  assert.equal(get('kid-mode').textContent, 'kid mode: off');
+  assert.equal(get('kid-note').textContent, "children's devices: --- (172.20.10.9)");
+  // Kid mode reads only stored rules: a device "*" block rule is a locked-down device.
+  context.renderRules([{id:3, pattern:'*', action:'block', device_mac:'172.20.10.9', device:'172.20.10.9', created_by:'voice'}]);
+  assert.equal(get('kid-mode').textContent, 'kid mode: on');
+  assert.equal(get('kid-mode').attrs['aria-pressed'], 'true');
+  rows = get('device-list').children;
+  assert.equal(rows[2].children[2].textContent, '172.20.10.9 · locked down · 1 tracker blocked');
+
+  // Naming: Enter or leaving the field saves it; the toast says how voice finds it.
+  const unnamed = rows[2].children[0];
+  unnamed.onfocus(); unnamed.value = ' Kids tablet '; unnamed.onblur();
+  assert.deepEqual(JSON.parse(calls.find(c => c.path === '/api/devices/update').init.body), {mac:'172.20.10.9', label:'Kids tablet'});
+  await answer('/api/devices/update', 200, {mac:'172.20.10.9', label:'Kids tablet', kid:true});
+  assert.equal(get('notice').textContent, 'Named Kids tablet. Voice can find it as "Kids tablet".');
+  await answer('/api/devices', 200, {hours:24, devices:[]});
+  context.renderDevices([{mac:'172.20.10.9', ip:'172.20.10.9', label:'Kids tablet', kid:true, trackers:0, recent_domains:[]},
+                         {mac:'f0:4f:7c:11:22:33', ip:'172.20.10.5', label:'Fire Stick', kid:false, trackers:0, recent_domains:[]}]);
+  rows = get('device-list').children;
+  // A name being typed survives a refresh.
+  rows[1].children[0].onfocus(); context.renderDevices([]); assert.equal(get('device-list').children.length, 2); assert.equal(get('device-count').textContent, 0);
+  context.renderDevices([{mac:'172.20.10.9', ip:'172.20.10.9', label:'Kids tablet', kid:true, trackers:0, recent_domains:[]},
+                         {mac:'f0:4f:7c:11:22:33', ip:'172.20.10.5', label:'Fire Stick', kid:false, trackers:0, recent_domains:[]}]);
+  rows[1].children[0].onblur();
+
+  // Child or adult: one click, sent as kid; a newly marked child isn't covered until kid mode runs again.
+  context.confirm = () => true;
+  rows[1].children[1].onclick();
+  assert.deepEqual(JSON.parse(calls.find(c => c.path === '/api/devices/update').init.body), {mac:'f0:4f:7c:11:22:33', kid:true});
+  await answer('/api/devices/update', 200, {mac:'f0:4f:7c:11:22:33', kid:true});
+  assert.equal(get('notice').textContent, "Fire Stick is a child's device. Kid mode doesn't cover it until you turn kid mode on again.");
+  await answer('/api/devices', 200, {hours:24, devices:[
+    {mac:'172.20.10.9', ip:'172.20.10.9', label:'Kids tablet', kid:true, trackers:0, recent_domains:[]},
+    {mac:'f0:4f:7c:11:22:33', ip:'172.20.10.5', label:'Fire Stick', kid:true, trackers:0, recent_domains:[]}]});
+  assert.equal(get('kid-mode').textContent, 'kid mode: on for 1 of 2');
+  assert.equal(get('kid-mode').attrs['aria-pressed'], 'false');
+
+  // The kid mode button asks first, then shows the bridge's own words, never its own claim.
+  let asked = '';
+  context.confirm = text => { asked = text; return false; };
+  get('kid-mode').onclick();
+  assert.equal(asked, "Turn on kid mode? Fire Stick will only reach the kid-safe list, plus Eddie's essentials like sign-in and updates.");
+  assert.ok(!calls.some(c => c.path === '/api/kid-mode'), 'no request without a yes');
+  context.confirm = () => true;
+  get('kid-mode').onclick();
+  assert.equal(get('kid-mode').textContent, 'kid mode: turning on…');
+  assert.deepEqual(JSON.parse(calls.find(c => c.path === '/api/kid-mode').init.body), {on:true});
+  await answer('/api/kid-mode', 200, {message:"I saved the lockdown rules for Fire Stick, but Eddie's DNS hasn't loaded them yet, so nothing is blocked yet."});
+  assert.equal(get('notice').textContent, "I saved the lockdown rules for Fire Stick, but Eddie's DNS hasn't loaded them yet, so nothing is blocked yet.");
+  await answer('/api/rules', 200, [{id:3, pattern:'*', action:'block', device_mac:'172.20.10.9', created_by:'voice'}]);
+  await answer('/api/devices', 200, {hours:24, devices:[]});
+  assert.equal(get('kid-mode').textContent, 'kid mode: off');
+  assert.equal(get('kid-mode').disabled, true, 'no child device: nothing to switch');
+
+  // The devices link opens and closes the list.
+  get('open-devices').onclick();
+  assert.equal(get('devices-sheet').hidden, false);
+  assert.equal(get('open-devices').attrs['aria-expanded'], 'true');
+  await answer('/api/rules', 200, []); await answer('/api/devices', 200, {hours:24, devices:[]});
+  context.flashDevice('ip:172.20.10.9');  // a lookup lights up its row; no row, nothing happens
+  get('close-devices').onclick();
+  assert.equal(get('devices-sheet').hidden, true);
 
   // Modes: the initial state comes from the backend; until then the toggles can't be pressed.
   assert.equal(get('home-mode').disabled, true);
@@ -260,7 +337,7 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   assert.equal(get('device-count').textContent, 'unavailable');
   assert.equal(get('home-mode').attrs['aria-label'], 'home mode: unavailable');
   assert.equal(get('offline-mode').disabled, true);
-  console.log('Frontend device panel and mode toggle checks passed');
+  console.log('Frontend devices, kid mode and mode toggle checks passed');
 
   // Ask before blocking (#79): the card shows the API's question and says blocked only on applied: true.
   const q = {id:1, device:'Laptop', domains:[{domain:'px.example', reason:'Fingerprinting'}], prompt:'A new likely tracker on Laptop: px.example. Block it?', ts:1};
