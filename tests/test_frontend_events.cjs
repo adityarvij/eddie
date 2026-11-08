@@ -490,3 +490,31 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   socket.onmessage({data:JSON.stringify({type:'mode', home_mode:false, home_manual:true, home_applied:true})});
   console.log('Frontend guest mode checks passed');
 })().catch(error => { console.error(error); process.exit(1); });
+
+// EDDIE_SPEAKER=ipad: a reply clip waits for the first tap, then plays through Web Audio.
+(async () => {
+  const fetched = [], started = [];
+  class AudioContext {
+    constructor() { this.state = 'suspended'; this.destination = {}; }
+    resume() { this.state = 'running'; }
+    createBuffer() { return 'silence'; }
+    createBufferSource() { return {connect() {}, start() { if (this.buffer !== 'silence') started.push(this.buffer); }}; }
+    async decodeAudioData(bytes) { return {decoded: bytes}; }
+  }
+  context.window.AudioContext = AudioContext;
+  const otherFetch = context.fetch;  // the checks above are still running against it
+  context.fetch = (path, init) => !String(path).startsWith('/api/voice/audio/') ? otherFetch(path, init)
+    : (fetched.push(path), Promise.resolve({ok: true, arrayBuffer: async () => 'wav'}));
+  context.consumeEvent({type: 'speech_audio', id: 'abc'});
+  assert.equal(get('voice-unlock').hidden, false, 'a reply before any tap asks for one');
+  assert.deepEqual(fetched, [], 'nothing is fetched until sound is allowed');
+  get('voice-unlock').onclick();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(get('voice-unlock').hidden, true);
+  assert.deepEqual(fetched, ['/api/voice/audio/abc'], 'the waiting reply plays after the tap');
+  assert.deepEqual(started, [{decoded: 'wav'}]);
+  context.consumeEvent({type: 'speech_audio', id: 'def'});
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(fetched.at(-1), '/api/voice/audio/def', 'later replies play straight away');
+  console.log('Frontend dashboard voice checks passed');
+})().catch(error => { console.error(error); process.exit(1); });

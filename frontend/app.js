@@ -355,6 +355,43 @@ function renderAcr() {
   $('acr').hidden = !list.length; $('acr-count').textContent = list.length;
   $('acr-list').replaceChildren(...list.slice(0, 3).map(e => { const li = document.createElement('li'); li.textContent = e.reason; return li; }));
 }
+// EDDIE_SPEAKER=ipad|both: Eddie's reply arrives as a WAV clip to play here. Safari plays sound only after a
+// tap, so the first tap anywhere unlocks it; a reply that comes before then shows "tap to hear Eddie".
+let voiceContext = null, pendingVoice = '';
+function unlockVoice() {
+  const Context = window.AudioContext || window.webkitAudioContext;
+  if (!Context) return;
+  // Web Audio follows the iPad's Silent mode unless the page asks for playback, like a music app (Safari 16.4+).
+  if (typeof navigator !== 'undefined' && navigator.audioSession) navigator.audioSession.type = 'playback';
+  if (!voiceContext) voiceContext = new Context();
+  if (voiceContext.state !== 'running') {
+    voiceContext.resume();
+    // Older iPads also want a sound started inside the tap itself.
+    const silence = voiceContext.createBufferSource();
+    silence.buffer = voiceContext.createBuffer(1, 1, 22050);
+    silence.connect(voiceContext.destination);
+    silence.start();
+  }
+  $('voice-unlock').hidden = true;
+  if (pendingVoice) { const id = pendingVoice; pendingVoice = ''; playVoice(id); }
+}
+async function playVoice(id) {
+  if (!id) return;
+  if (!voiceContext || voiceContext.state !== 'running') { pendingVoice = id; $('voice-unlock').hidden = false; return; }
+  try {
+    const response = await fetch('/api/voice/audio/' + encodeURIComponent(id));
+    if (!response.ok) return;
+    const source = voiceContext.createBufferSource();
+    source.buffer = await voiceContext.decodeAudioData(await response.arrayBuffer());
+    source.connect(voiceContext.destination);
+    source.start();
+  } catch {}
+}
+// Safari counts the end of a tap (touchend, click) as permission to play, not pointerdown.
+document.addEventListener('touchend', unlockVoice);
+document.addEventListener('click', unlockVoice);
+$('voice-unlock').onclick = unlockVoice;
+
 function consumeEvent(event) {
   if (event.type === 'role_state' || event.type === 'session_state') { if (event.pending !== true && event.acknowledged === true) applyModes(event); return; }
   if (event.type === 'ai_verdict') return feedNote('ai', `${event.domain}${event.reason ? ' — ' + event.reason : ''}`, event, AI_RESULTS[event.label] || [String(event.label), 'flag']);
@@ -432,6 +469,7 @@ function voiceEvent(event) {
   if (event.type === 'wake') wake();
   if (event.type === 'transcript' && event.text) { reopen(); $('assistant-title').textContent = event.text; }
   if (event.type === 'speaking') { reopen(); $('assistant-title').textContent = event.title || 'Here’s what I’m seeing.'; $('assistant-description').textContent = event.text || ''; setAssistantState('speaking'); speaking = true; }
+  if (event.type === 'speech_audio') playVoice(String(event.id || ''));
   if (event.type === 'speech_end') { setAssistantState('ready'); speaking = false; }
 }
 // "What they know" report: real facts, or the seeded demo week under a demo banner.
