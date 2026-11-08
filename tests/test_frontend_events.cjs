@@ -240,6 +240,7 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   // Modes: the initial state comes from the backend; until then the toggles can't be pressed.
   assert.equal(get('home-mode').disabled, true);
   await answer('/api/mode', 200, {home_mode:false, offline:false, offline_applied:true});
+  assert.equal(get('character').dataset.role, 'regular', 'regular Eddie has no roof');
   assert.equal(get('home-mode').attrs['aria-label'], 'home mode: off');
   assert.equal(get('home-mode').disabled, false);
   // A stored spoof rule (#99) turns the house into Pinocchio; the button still toggles home mode.
@@ -274,6 +275,7 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
 
   // A click shows pending, not the new state, until the bridge answers with the API's echo.
   get('home-mode').onclick();
+  assert.equal(get('character').dataset.role, 'regular', 'pending Home Mode does not add the roof');
   assert.equal(get('home-mode').attrs['aria-label'], 'home mode: turning on…');
   assert.equal(get('home-mode').disabled, true);
   assert.equal(get('home-mode').attrs['aria-busy'], 'true');
@@ -288,6 +290,7 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   assert.equal(get('home-mode').attrs['aria-pressed'], 'true');
   assert.equal(get('home-mode').attrs['aria-busy'], 'false');
   assert.equal(get('home-note').textContent, 'home mode: blocking camera uploads · turned on by hand');
+  assert.equal(get('character').dataset.role, 'home', 'acknowledged and applied Home Mode adds the roof');
 
   // A failed change keeps the last acknowledged state and says so.
   get('home-mode').onclick();
@@ -311,12 +314,15 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   socket.onmessage({data:JSON.stringify({type:'offline_mode', offline:true, applied:true})});
   assert.equal(get('offline-note').textContent, '');
   socket.onmessage({data:JSON.stringify({type:'mode', home_mode:false, home_manual:true, home_applied:true, reason:'manual'})});
+  assert.equal(get('character').dataset.role, 'regular', 'exiting Home Mode removes the roof');
   assert.equal(get('home-mode').attrs['aria-label'], 'home mode: off');
   assert.equal(get('home-note').textContent, 'home mode: off by hand, phones ignored');
   // Phone presence (#20): shown as on only once DNS has loaded it.
   socket.onmessage({data:JSON.stringify({type:'mode', home_mode:true, home_manual:false, home_applied:false, reason:'presence'})});
+  assert.equal(get('character').dataset.role, 'home', 'backend-acknowledged Home Mode adds the roof while DNS catches up');
   assert.equal(get('home-note').textContent, 'home mode on not yet applied by DNS');
   socket.onmessage({data:JSON.stringify({type:'mode', home_mode:true, home_manual:false, home_applied:true, reason:'presence'})});
+  assert.equal(get('character').dataset.role, 'home');
   assert.equal(get('home-note').textContent, 'home mode: blocking camera uploads · a household phone is home');
   socket.onmessage({data:JSON.stringify({type:'mode', home_mode:false, home_manual:false, home_applied:true, reason:'presence'})});
   assert.equal(get('home-note').textContent, '');
@@ -341,6 +347,7 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   timers.filter(t => t.ms === 30000).at(-1).fn();
   await answer('/api/devices', 502, {message:'Devices unavailable.'});
   await answer('/api/mode', 502, {message:'Modes unavailable.'});
+  assert.equal(get('character').dataset.role, 'regular', 'disconnect falls back to regular Eddie');
   assert.equal(get('device-count').textContent, 'unavailable');
   assert.equal(get('home-mode').attrs['aria-label'], 'home mode: unavailable');
   assert.equal(get('offline-mode').disabled, true);

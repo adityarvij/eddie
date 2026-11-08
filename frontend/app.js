@@ -225,6 +225,9 @@ function renderModes() {
   $('quarantine-note').classList.toggle('alert', qWaiting);
   const [home, homeAlert] = homeNote();
   $('home-note').textContent = home; $('home-note').classList.toggle('alert', homeAlert);
+  // Accessories represent acknowledged backend state only. Pending changes keep the last role,
+  // while unknown or disconnected state falls back to regular Eddie.
+  $('character').dataset.role = modes.home_mode === true ? 'home' : 'regular';
   const [away, alert] = awayNote();
   $('away-note').textContent = away; $('away-note').classList.toggle('alert', alert);
 }
