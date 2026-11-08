@@ -46,6 +46,7 @@ import logging
 import os
 import signal
 import sqlite3
+import threading
 import time
 
 from dnslib import AAAA, QTYPE, RCODE, RR, A, DNSRecord
@@ -330,6 +331,9 @@ class StoreWatcher:
     sensitivity revisions it loaded (rules.mark_loaded, offline.mark_loaded,
     away.mark_loaded, quarantine.mark_loaded, home.mark_loaded,
     sensitivity.mark_loaded): the API's proof that DNS is enforcing a change.
+
+    poll runs in a worker thread that cancelling watch_store can't stop, so
+    close takes the same lock: the connection is never closed mid-poll.
     """
 
     def __init__(self, path: str, engine: decision.Engine = decision.engine, mode: offline.Mode | None = None):
@@ -337,9 +341,21 @@ class StoreWatcher:
         self.engine = engine
         self.mode = mode or offline_mode
         self.seen = None
+        self.lock = threading.Lock()
+        self.closed = False
+
+    def close(self) -> None:
+        """Close the connection once any poll in progress has finished."""
+        with self.lock:
+            self.closed = True
+            self.conn.close()
 
     def poll(self) -> bool:
         """Reload if rules or verdicts changed since the last poll. True if it did."""
+        with self.lock:
+            return not self.closed and self._poll()
+
+    def _poll(self) -> bool:
         changed = self.conn.execute(
             "SELECT (SELECT count(*) || ':' || ifnull(max(id), 0) || ':' || ifnull(max(ts), 0) FROM rules),"
             " (SELECT count(*) || ':' || ifnull(max(ts), 0) FROM ai_verdicts),"
