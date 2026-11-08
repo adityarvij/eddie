@@ -1,0 +1,221 @@
+{
+  "entries": [
+    {
+      "topic": "Wi-Fi",
+      "keywords": [
+        "wifi",
+        "wifi password",
+        "internet",
+        "network",
+        "get online"
+      ],
+      "answer": "Join Eddie-Guest. The password is stay-with-eddie, all lower case with dashes.",
+      "audience": "guest"
+    },
+    {
+      "topic": "check-in",
+      "keywords": [
+        "checkin",
+        "arrive",
+        "arriving",
+        "door code",
+        "front door",
+        "lock the door",
+        "keys",
+        "check in"
+      ],
+      "answer": "The front door has a keypad. Your code is in your booking message, and the door locks itself after thirty seconds.",
+      "audience": "guest"
+    },
+    {
+      "topic": "checkout",
+      "keywords": [
+        "check out",
+        "checkout time",
+        "leave",
+        "leaving"
+      ],
+      "answer": "Checkout is at 11 AM. Start the dishwasher, take the trash out, and just close the door behind you.",
+      "audience": "guest"
+    },
+    {
+      "topic": "thermostat",
+      "keywords": [
+        "heat",
+        "heating",
+        "temperature",
+        "warmer",
+        "cooler",
+        "too cold",
+        "too hot",
+        "air conditioning",
+        "ac"
+      ],
+      "answer": "The thermostat is in the hallway. Tap the arrows to set the temperature; 68 to 72 is comfortable. Please don't go above 75.",
+      "audience": "guest"
+    },
+    {
+      "topic": "TV remote",
+      "keywords": [
+        "remote",
+        "television",
+        "turn on the tv",
+        "use the tv",
+        "watch tv",
+        "fire stick",
+        "streaming"
+      ],
+      "answer": "Press the home button on the black remote. Netflix, YouTube and Prime are already signed in on the Fire TV.",
+      "audience": "guest"
+    },
+    {
+      "topic": "coffee maker",
+      "keywords": [
+        "coffee",
+        "espresso",
+        "make coffee",
+        "tea",
+        "kettle"
+      ],
+      "answer": "Pods are in the drawer under the machine. Fill the tank at the back, pop a pod in and press the big button. Tea and the kettle are next to it.",
+      "audience": "guest"
+    },
+    {
+      "topic": "dishwasher",
+      "keywords": [
+        "dish washer",
+        "dishes"
+      ],
+      "answer": "Pods are under the sink. Press Normal, then Start; it takes about two hours.",
+      "audience": "guest"
+    },
+    {
+      "topic": "washing machine",
+      "keywords": [
+        "washer",
+        "dryer",
+        "laundry",
+        "wash clothes"
+      ],
+      "answer": "The washer and dryer are in the closet off the kitchen. Detergent is on the shelf above. Use Quick Wash, then Normal Dry.",
+      "audience": "guest"
+    },
+    {
+      "topic": "trash",
+      "keywords": [
+        "garbage",
+        "recycling",
+        "bins",
+        "rubbish",
+        "take out the trash"
+      ],
+      "answer": "Trash goes in the gray bin and recycling in the blue one, both beside the garage. Pickup is Tuesday morning.",
+      "audience": "guest"
+    },
+    {
+      "topic": "hot water",
+      "keywords": [
+        "shower",
+        "hot shower",
+        "bath"
+      ],
+      "answer": "Turn the shower handle all the way left and give it about thirty seconds to warm up.",
+      "audience": "guest"
+    },
+    {
+      "topic": "towels",
+      "keywords": [
+        "towel",
+        "linens",
+        "sheets",
+        "blankets",
+        "pillows"
+      ],
+      "answer": "Fresh towels and sheets are in the hall closet next to the bathroom. Extra blankets are in the bedroom chest.",
+      "audience": "guest"
+    },
+    {
+      "topic": "parking",
+      "keywords": [
+        "park",
+        "car",
+        "driveway"
+      ],
+      "answer": "Park in the driveway, on the left side. Street parking is fine after 6 PM.",
+      "audience": "guest"
+    },
+    {
+      "topic": "house rules",
+      "keywords": [
+        "rules",
+        "quiet hours",
+        "smoking",
+        "pets",
+        "party"
+      ],
+      "answer": "Quiet hours are 10 PM to 8 AM. No smoking indoors and no parties, please.",
+      "audience": "guest"
+    },
+    {
+      "topic": "places nearby",
+      "keywords": [
+        "coffee shop",
+        "cafe",
+        "restaurant",
+        "grocery",
+        "groceries",
+        "pharmacy",
+        "recommendations",
+        "nearby"
+      ],
+      "answer": "There's a café and a grocery store two blocks east, and the pharmacy is next to the grocery store. Your host's favorite dinner spot is the noodle place on the corner.",
+      "audience": "guest"
+    },
+    {
+      "topic": "emergencies",
+      "keywords": [
+        "first aid",
+        "first aid kit",
+        "fire extinguisher",
+        "emergency",
+        "fuse box",
+        "power went out",
+        "emergency"
+      ],
+      "answer": "For an emergency, call 911. The first aid kit is under the bathroom sink, the fire extinguisher is beside the fridge, and the fuse box is in the garage.",
+      "audience": "guest"
+    },
+    {
+      "topic": "privacy",
+      "keywords": [
+        "recording",
+        "recording me",
+        "listening",
+        "spying",
+        "my data",
+        "cloud"
+      ],
+      "answer": "I only listen after you say Hey Eddie. Your voice is handled on this box, never sent to the cloud, and I don't keep recordings or transcripts. Guest mode also keeps the household's network history private.",
+      "audience": "guest"
+    },
+    {
+      "topic": "alarm code",
+      "keywords": [
+        "alarm",
+        "security code",
+        "security system"
+      ],
+      "answer": "Demo owner-only note: the alarm panel is by the garage door. Guests never hear this entry.",
+      "audience": "owner"
+    },
+    {
+      "topic": "spare key",
+      "keywords": [
+        "lockbox",
+        "hidden key"
+      ],
+      "answer": "Demo owner-only note: the spare key is with the neighbor. Guests never hear this entry.",
+      "audience": "owner"
+    }
+  ]
+}

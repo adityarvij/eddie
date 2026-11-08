@@ -354,6 +354,22 @@ function renderGuest() {
     box.onchange = () => saveGuest({allowed: box.checked ? [...guest.allowed, c] : guest.allowed.filter(x => x !== c)});
     label.append(box, name); return label;
   }) : []));
+  renderGuestCapabilities();
+}
+// Guest mode's own pane (#162/#165): the person flag next to home (filled while on; tapping it is the guest switch), and capabilities swapped for what guests may ask.
+// Topic names only, never the guide's answers. It opens by itself when a guest session starts.
+let guestShown = false;
+function guestTopics() { return guest?.active && guest.allowed.includes('house_guide') ? guest.topics || [] : []; }
+function renderGuestCapabilities() {
+  const active = guest?.active === true, topics = guestTopics(), item = text => { const li = document.createElement('li'); li.textContent = text; return li; };
+  const flag = $('guest-flag'), label = `guest mode: ${!guest ? 'unavailable' : active ? 'on' : 'off'}`;
+  flag.disabled = !guest; flag.setAttribute('aria-pressed', String(active)); flag.setAttribute('aria-label', label); flag.title = label;
+  $('capabilities-title').textContent = active ? 'guest mode · ask eddie' : 'what to ask eddie';
+  $('capabilities-owner').hidden = active; $('guest-capabilities').hidden = !active;
+  $('guest-intro').textContent = topics.length ? 'Say “Hey Eddie”, then ask about:' : guest?.allowed.includes('timers') ? 'Say “Hey Eddie”, then:' : 'Your host hasn’t turned anything on for guests yet.';
+  $('guest-topics').replaceChildren(...topics.map(item), ...(active && guest.allowed.includes('timers') ? [item('“Set a timer for 10 minutes.”')] : []), ...(active ? [item('“Stop recording.”')] : []));
+  if (active && !guestShown) showCapabilities(true);
+  guestShown = active || (guestShown && !guest);
 }
 async function loadGuest() { try { const r = await fetch('/api/guest'); if (!r.ok) throw Error(); guest = await r.json(); } catch { guest = null; } renderGuest(); }
 async function saveGuest(change) {
@@ -361,7 +377,7 @@ async function saveGuest(change) {
   catch (e) { notice(`Guest mode not saved: ${e.message || 'the bridge did not answer.'}`); }
   renderGuest();
 }
-$('guest-mode').onclick = () => guest && (guest.active || confirm("Turn on guest mode? Until you turn it off here, Eddie treats every voice as a guest: no traffic, reports, rules, modes or contacts, only what you tick below.")) && saveGuest({active: !guest.active});
+$('guest-flag').onclick = $('guest-mode').onclick = () => guest && (guest.active || confirm("Turn on guest mode? Until you turn it off here, Eddie treats every voice as a guest: no traffic, reports, rules, modes or contacts, only what you tick below.")) && saveGuest({active: !guest.active});
 // Counts move with traffic, so the panels refresh every 30 s as well as on (re)connect.
 function refreshPanels() { clearTimeout(refreshPanels.timer); refreshPanels.timer = setTimeout(refreshPanels, 30000); loadDevices(); loadModes(); loadQuestions(); loadGuest(); }
 // ACR blocker (#104): the latest acr_detected per device and domain, newest first.
@@ -452,7 +468,7 @@ function setAssistantState(state) {
   $('character').classList.toggle('talking', state === 'speaking');
   $('assistant-state').textContent = display === 'ready' ? 'WAITING FOR YOUR NEXT QUESTION' : display === 'confirming' ? 'SAY YES TO CONFIRM OR NO TO CANCEL' : 'EDDIE IS ' + display.toUpperCase();
 }
-function wake(preview = false) { userClosed = false; clearTimeout(exitTimer); dialog.classList.remove('closing'); is_eddie_active = true; clearTimeout(closeTimer); if (preview || !voiceReady) closeTimer = setTimeout(dismiss, 4000); if (!dialog.open) dialog.showModal(); $('assistant-title').textContent = "Hey, what's up?"; $('assistant-description').textContent = 'Ask me what your devices have been up to.'; setAssistantState('listening'); }
+function wake(preview = false) { userClosed = false; clearTimeout(exitTimer); dialog.classList.remove('closing'); is_eddie_active = true; clearTimeout(closeTimer); if (preview || !voiceReady) closeTimer = setTimeout(dismiss, 4000); if (!dialog.open) dialog.showModal(); const topics = guestTopics(); $('assistant-title').textContent = guest?.active ? 'Welcome! How can I help?' : "Hey, what's up?"; $('assistant-description').textContent = !guest?.active ? 'Ask me what your devices have been up to.' : topics.length ? `Ask me about ${topics.slice(0, 3).join(', ')} and more.` : 'I’m in guest mode.'; setAssistantState('listening'); }
 // Closing Eddie returns to the live feed, scrolled to the newest activity.
 function dismiss() {
   is_eddie_active = false;

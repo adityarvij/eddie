@@ -141,6 +141,7 @@ footer button span{margin-left:0}
 footer .modes-note:empty{display:none}
 /* capabilities: a small pane in the bottom right corner listing what to ask Eddie */
 .capabilities{position:fixed;right:20px;bottom:56px;z-index:4;width:min(320px,calc(100vw - 40px));max-height:min(70vh,520px);overflow:auto;background:#000;border:1px solid #333;padding:14px 16px;font:12px/1.7 'Courier New',monospace}
+.guest-intro{margin:8px 0 0;color:#fff}.capabilities #guest-topics li::before{content:'· ';color:#e8b931}
 .capabilities ul{list-style:none;margin:8px 0 0;padding:0;color:#aaa}
 /* Kid mode flag after the house: a baby's face with a curl and a pacifier, shown only while kid mode is on (even partly). */
 .kid-flag{width:44px;height:44px;margin:-12px 0 -12px -4px;padding:12px;color:#fff}

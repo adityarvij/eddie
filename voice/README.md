@@ -215,7 +215,7 @@ The registered risky actions are `allow` (#13) and `lockdown` (#17), both parsed
 
 ## Guest Mode permissions (#163)
 
-The owner turns Guest Mode on from the dashboard's devices sheet on the Eddie computer and ticks what guests may use (house guide, timers, TV, lights, thermostat; TV, lights and thermostat have no voice tool yet). While it's on, everyone who talks to or types at Eddie is a guest. Traffic, reports, rules, modes, devices and contacts get “That's only for the household, so I can't help with it in guest mode.”; an unticked category gets “Your host hasn't turned that on for guests, so I can't help with it.”; “stop recording” and “hello” always work; anything else gets “I'm in guest mode, so I can only help with what your host has turned on.” The local model isn't called. A guest's timers are kept apart from the household's and forgotten when Guest Mode goes off. Tested in `tests/test_voice_guest.py`; not checked by microphone.
+The owner turns Guest Mode on from the dashboard's devices sheet on the Eddie computer and ticks what guests may use (house guide, timers, TV, lights, thermostat; TV, lights and thermostat have no voice tool yet). While it's on, everyone who talks to or types at Eddie is a guest. Traffic, reports, rules, modes, devices and contacts get “That's only for the household.”; an unticked category gets “Your host hasn't turned that on for guests.”; “stop recording” and “hello” always work. The greeting is “Welcome, I'm Eddie, your concierge.” followed by what guests may do: the first three guest topics in the house guide (if the owner ticked house guide) and timers (if ticked), for example “You can ask me about Wi-Fi, check-in and checkout, or set a timer. Tap capabilities for the rest.”, or “Your host hasn't turned anything on for guests yet.” “What can I ask?”, “what can you help with?”, “help” and “what do you know about the house?” name up to six topics the same way. Anything else gets “I'm in guest mode.” plus that same list. Topic names come from the guide; answers are only spoken when asked. The local model isn't called. A guest's timers are kept apart from the household's and forgotten when Guest Mode goes off. Tested in `tests/test_voice_guest.py`; not checked by microphone.
 
 ## Timers and reminders (#122)
 
@@ -239,7 +239,7 @@ They persist in `EDDIE_TIMERS_FILE` (owner-only JSON, rewritten on each change).
 
 Guests can ask Eddie about the house: “What's the Wi-Fi password?”, “what time is checkout?”, “where are the towels?”, “can I park on the street?”, “how do I start the dishwasher?”. Eddie answers with the owner's own words from a local file, quoted as written. `voice/house_guide.py` does the lookup; the guide never reaches the local model or the traffic API, and needs no network.
 
-**Set it up.** Copy `voice/house_guide.example.json` to `voice/house_guide.json` (gitignored) and write your own entries. `EDDIE_HOUSE_GUIDE` points at another file. Edits take effect on the next question; no restart.
+**Set it up.** Copy `voice/house_guide.example.json` to `voice/house_guide.json` (gitignored) and write your own entries. For a demo, copy `voice/house_guide.demo.json` instead: a made-up stay with 16 guest topics on how things work (Wi-Fi, check-in, checkout, thermostat, TV remote, coffee maker, dishwasher, washing machine, trash, hot water, towels, parking, house rules, places nearby, emergencies, privacy) and two owner-only ones (alarm code, spare key). Its Wi-Fi network and password are invented. `EDDIE_HOUSE_GUIDE` points at another file. Edits take effect on the next question; no restart.
 
 ```json
 {"entries": [
@@ -260,6 +260,27 @@ Any other field, a missing topic or answer, or an unknown audience makes the fil
 **How it answers.** An utterance is a house question when it is phrased as a question (what, where, when, how, is, can I, tell me…) and names a guide keyword or a common house topic (Wi-Fi, checkout, towels, parking, laundry, thermostat, trash, hot tub…), or when it is just a topic's name (“the dishwasher”, the reply to “which one?”). The entry whose keywords cover the most words wins, so “washing machine” beats “dishwasher” in a question naming both. A tie asks “I have notes on dishwasher and washing machine. Which one?” No matching entry is “I don't know that one. Please ask the host.” It runs after timers and before home mode, block, allow and the model; “what does the TV know about me”, empty-house and privacy-tips questions skip it.
 
 **Owner-only entries.** Eddie can't tell voices apart, so the role comes from Guest Mode (#163): while it's off, anyone who asks hears owner entries too; while it's on, only guest entries, and only if the owner ticked house guide for guests (otherwise “Your host hasn't turned that on for guests”). A guest asking about an owner entry hears the same don't-know as for a topic that isn't there, and “which one?” never names an owner topic.
+
+**Guest mode demo.** On the Pi, `cp voice/house_guide.demo.json voice/house_guide.json`, then on the Eddie computer open devices, turn guest mode on and tick house guide and timers. Eddie puts on the bellhop hat, the header says GUEST MODE and the capabilities pane opens with the guest topics. Questions that the demo guide answers (each is checked in `tests/test_voice_guest.py`):
+
+| Say | Eddie answers from |
+|---|---|
+| “Hey Eddie” | the greeting and three topics |
+| “What can I ask you?” | six topics |
+| “What's the Wi-Fi password?” | Wi-Fi |
+| “How do I turn up the heat?” | thermostat |
+| “How do I turn on the TV?” | TV remote |
+| “How do I make coffee?” | coffee maker |
+| “Where's the nearest coffee shop?” | places nearby |
+| “When is checkout?” | checkout |
+| “How do I do laundry?” | washing machine |
+| “Is Eddie recording me?” | privacy |
+| “Where is the first aid kit?” | emergencies |
+| “Set a timer for 10 minutes.” | the guest's own timer |
+| “What's the alarm code?” | “I don't know that one; ask the host.” (owner-only) |
+| “What's the TV doing?” | “That's only for the household.” |
+
+Turn guest mode off and ask “what's the alarm code?” again to show the owner hearing it.
 
 Tested in `tests/test_voice_house_guide.py` (schema, lookup, ambiguity, missing answers, owner-only entries, the starter example, and that nothing is printed or logged). Not tried with real guests or on the Pi's microphone. **Gap:** a question the guide doesn't recognise as about the house (“where's the nearest coffee shop?”) still goes to the local model, which can answer from its own knowledge; guest routing is #166.
 

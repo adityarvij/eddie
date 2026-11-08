@@ -15,12 +15,15 @@ from unittest.mock import Mock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'frontend'))
 import serve
 import guest
+import house_guide
 import ollama_agent
 import timers
 import voice_agent
 
 OWNER_ONLY = guest.OWNER_ONLY_REPLY
 NOT_APPROVED = guest.NOT_APPROVED_REPLY
+NOTHING_ON = "Your host hasn't turned anything on for guests yet."
+DEMO_GUIDE = Path(__file__).resolve().parents[1] / 'voice' / 'house_guide.demo.json'
 
 
 class Profile(unittest.TestCase):
@@ -143,11 +146,11 @@ class GuestRouting(unittest.TestCase):
 
     def test_calendars_and_anything_else_get_the_guest_help(self):
         for text in ("What's on my calendar today?", 'who lives here'):
-            self.assertEqual(guest.HELP, voice_agent.respond(text), text)
+            self.assertEqual(f'{guest.HELP} {NOTHING_ON}', voice_agent.respond(text), text)
         voice_agent.ask_model.assert_not_called()
 
     def test_greeting_and_stop_recording_are_always_allowed(self):
-        self.assertEqual(f"Hey, I'm Eddie. {guest.HELP}", voice_agent.respond('hello'))
+        self.assertEqual(f"Welcome, I'm Eddie, your concierge. {NOTHING_ON}", voice_agent.respond('hello'))
         self.assertTrue(voice_agent.respond('stop recording') == 'Microphone turned off.')
         voice_agent.microphone_off.assert_called_once_with()
 
@@ -189,6 +192,65 @@ class GuestRouting(unittest.TestCase):
         self.assertEqual('Timer set for 10 minutes.', voice_agent.respond('set a timer for 10 minutes'))
         self.assertEqual(1, len(voice_agent.timer_store.pending()))
         self.assertTrue(voice_agent.respond('turn on away mode').startswith('Turn on away mode?'))
+
+
+class GuestConcierge(unittest.TestCase):
+    """Guest help built from the owner's approvals and the demo guide's guest topics."""
+
+    def setUp(self):
+        self.saved = voice_agent.profile, voice_agent.ask_model
+        voice_agent.profile = guest.Profile()
+        voice_agent.profile.update(active=True, allowed=['house_guide', 'timers'])
+        voice_agent.ask_model = Mock(side_effect=AssertionError('no model call for a guest'))
+        env = patch.dict(os.environ, {'EDDIE_HOUSE_GUIDE': str(DEMO_GUIDE)})
+        env.start()
+        self.addCleanup(env.stop)
+        self.request = Mock(side_effect=AssertionError('no backend call for a guest'))
+        patcher = patch.object(voice_agent, 'request', self.request)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def tearDown(self):
+        voice_agent.profile, voice_agent.ask_model = self.saved
+        voice_agent.confirmation.cancel()
+        voice_agent.forget_conversation()
+
+    def test_greeting_names_the_first_topics_and_timers(self):
+        self.assertEqual("Welcome, I'm Eddie, your concierge. You can ask me about Wi-Fi, check-in and checkout, "
+                         "or set a timer. Tap capabilities for the rest.", voice_agent.respond('hey eddie'))
+        voice_agent.profile.update(allowed=['timers'])
+        self.assertEqual("Welcome, I'm Eddie, your concierge. You can set a timer.", voice_agent.respond('hello'))
+
+    def test_what_can_i_ask_lists_more_topics_but_never_owner_ones(self):
+        for text in ('what can I ask you', 'What can you help me with?', 'help', 'what do you know about the house'):
+            reply = voice_agent.respond(text)
+            self.assertTrue(reply.startswith('You can ask me about Wi-Fi, check-in, checkout, thermostat, TV remote and '
+                                             'coffee maker'), (text, reply))
+            self.assertNotIn('alarm', reply)
+            self.assertNotIn('spare key', reply)
+
+    def test_unknown_asks_point_at_what_guests_can_do(self):
+        self.assertEqual(f"{guest.HELP} You can ask me about Wi-Fi, check-in and checkout, or set a timer. "
+                         "Tap capabilities for the rest.", voice_agent.respond("what's on my calendar"))
+
+    def test_demo_questions_are_answered_from_the_guide(self):
+        entries = {e['topic']: e['answer'] for e in house_guide.load(DEMO_GUIDE)}
+        for question, topic in [("What's the Wi-Fi password?", 'Wi-Fi'), ('how do I turn up the heat', 'thermostat'),
+                                ('how do I turn on the TV', 'TV remote'), ('how do I make coffee', 'coffee maker'),
+                                ("where's the nearest coffee shop", 'places nearby'), ('when is checkout', 'checkout'),
+                                ('what day is trash pickup', 'trash'), ('how do I do laundry', 'washing machine'),
+                                ('is Eddie recording me', 'privacy'), ('where is the first aid kit', 'emergencies'),
+                                ('how do I get in the front door', 'check-in'), ('can I have a party', 'house rules')]:
+            self.assertEqual(entries[topic], voice_agent.respond(question), question)
+        for question in ("what's the alarm code", "where's the spare key"):
+            self.assertEqual(house_guide.DONT_KNOW, voice_agent.respond(question), question)
+
+    def test_demo_guide_never_takes_over_household_commands(self):
+        voice_agent.profile.update(active=False)
+        for said in ("What's been going on?", "what's the TV doing", 'give me a summary', 'block tiktok.com',
+                     'lock down the TV', 'turn on home mode', 'what does Amazon know about me', 'any suggestions',
+                     'set a timer for 10 minutes', 'stop recording', 'allow netflix', 'undo that'):
+            self.assertIsNone(house_guide.answer(said, 'owner'), said)
 
 
 class GuestModelTools(unittest.TestCase):
@@ -281,6 +343,14 @@ class Bridge(unittest.TestCase):
         self.assertEqual(1, len(voice_agent.guest_timers.pending()), 'changing approvals keeps them')
         self.call({'active': False})
         self.assertEqual([], voice_agent.guest_timers.pending())
+
+    def test_topics_are_guest_topic_names_only(self):
+        with patch.dict(os.environ, {'EDDIE_HOUSE_GUIDE': str(DEMO_GUIDE)}):
+            topics = self.call()[1]['topics']
+            self.assertEqual(topics, self.call({'active': True})[1]['topics'])
+        self.assertEqual(['Wi-Fi', 'check-in', 'checkout'], topics[:3])
+        self.assertNotIn('alarm code', topics)
+        self.assertNotIn('stay-with-eddie', json.dumps(topics), 'never an answer')
 
     def test_not_a_paired_control(self):
         self.assertNotIn('/api/guest', serve.PAIRED_CONTROLS)

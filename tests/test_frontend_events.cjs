@@ -515,6 +515,32 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   await answer('/api/guest', 200, {active:true, allowed:[], approvable:['house_guide','timers'], owner_only:['traffic']});
   assert.equal(get('character').dataset.hatTip, 'once', 'the next guest session tips the hat again');
   socket.onmessage({data:JSON.stringify({type:'mode', home_mode:false, home_manual:true, home_applied:true})});
+  // Guest mode's pane: a badge, and capabilities become the guest topics (names only), opened once per session.
+  assert.deepEqual([get('guest-flag').attrs['aria-pressed'], get('guest-flag').title], ['true', 'guest mode: on'], 'the person flag is filled');
+  assert.equal(get('capabilities').hidden, false, 'a new guest session opens what guests can ask');
+  assert.equal(get('capabilities-title').textContent, 'guest mode · ask eddie');
+  assert.deepEqual([get('capabilities-owner').hidden, get('guest-capabilities').hidden], [true, false]);
+  assert.match(get('guest-intro').textContent, /turned anything on/, 'nothing approved says so');
+  assert.deepEqual(get('guest-topics').children.map(li => li.textContent), ['“Stop recording.”']);
+  get('capabilities-close').onclick();
+  context.loadGuest();
+  await answer('/api/guest', 200, {active:true, allowed:['house_guide','timers'], approvable:['house_guide','timers'], owner_only:['traffic'], topics:['Wi-Fi','checkout','thermostat','coffee maker']});
+  assert.equal(get('capabilities').hidden, true, 'a poll does not reopen the pane');
+  assert.equal(get('guest-intro').textContent, 'Say “Hey Eddie”, then ask about:');
+  assert.deepEqual(get('guest-topics').children.map(li => li.textContent), ['Wi-Fi','checkout','thermostat','coffee maker','“Set a timer for 10 minutes.”','“Stop recording.”']);
+  get('assistant').showModal = () => {};  // the stand-in DOM has no dialog
+  context.wake(true);
+  assert.equal(get('assistant-title').textContent, 'Welcome! How can I help?');
+  assert.equal(get('assistant-description').textContent, 'Ask me about Wi-Fi, checkout, thermostat and more.');
+  context.loadGuest();
+  await answer('/api/guest', 200, {active:true, allowed:['timers'], approvable:['house_guide','timers'], owner_only:['traffic'], topics:['Wi-Fi']});
+  assert.deepEqual(get('guest-topics').children.map(li => li.textContent), ['“Set a timer for 10 minutes.”','“Stop recording.”'], 'topics only when the house guide is approved');
+  context.confirm = () => true; get('guest-flag').onclick();  // the header flag is the same switch
+  await answer('/api/guest', 200, {active:false, allowed:['timers'], approvable:['house_guide','timers'], owner_only:['traffic'], topics:['Wi-Fi']});
+  assert.deepEqual([get('guest-flag').attrs['aria-pressed'], get('capabilities-owner').hidden, get('guest-capabilities').hidden], ['false', false, true]);
+  assert.equal(get('capabilities-title').textContent, 'what to ask eddie');
+  context.wake(true);
+  assert.equal(get('assistant-title').textContent, "Hey, what's up?");
   console.log('Frontend guest mode checks passed');
 })().catch(error => { console.error(error); process.exit(1); });
 

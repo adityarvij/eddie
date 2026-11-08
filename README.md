@@ -92,7 +92,8 @@ Dashboard at http://localhost:5173, API at http://localhost:8000. The traffic AP
 5. Simulated living-room camera on the dashboard: uploading with a live frame → Adi's phone joins the Wi-Fi → "Upload blocked: home mode" → phone leaves → uploads resume. Preferred if router mode works: a real phone camera streaming to YouTube Live, cut mid-stream by home mode (see "Home mode demo with a real stream")
 6. Pull the internet → Eddie still works (proves local)
 7. "Hey Eddie, email Will the report" → assistant action
-8. Pitch: buyer (privacy-conscious homes, Airbnb hosts) and why now
+8. Guest mode: the owner turns it on from devices → Eddie puts on his bellhop hat and the guest topics show up → a guest asks “what's the Wi-Fi password?”, “how do I turn up the heat?”, “is Eddie recording me?” → “what's the TV doing?” and “what's the alarm code?” stay with the household. Uses `voice/house_guide.demo.json`; the full list is in voice/README.md, "Guest mode demo"
+9. Pitch: buyer (privacy-conscious homes, Airbnb hosts) and why now
 
 Rehearse Sunday morning and record a backup video.
 
