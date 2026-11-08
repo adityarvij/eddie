@@ -15,6 +15,9 @@ quarantine.py) and wait for DNS to load it like rules.
 eddie.db and waits for DNS to load it the same way (offline.py).
 POST /mode {"away": ...} does the same for away mode (away.py), after
 ranking which devices it covers from the query log.
+/ingest also runs each event through the device's baseline in eddie.db and
+pushes new_domain and baseline_state events (baselines.py); /baselines and
+/devices/{key}/baseline read and reset them.
 
 Writes (POST, PUT, DELETE) from anywhere but loopback need EDDIE_API_TOKEN as
 a bearer token (#96). Browsers may only write or open /ws/events from this
@@ -27,6 +30,7 @@ import hmac
 import ipaddress
 import itertools
 import json
+import logging
 import os
 import sqlite3
 import time
@@ -38,7 +42,7 @@ from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocket
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 
-from . import away, beacons, bypass, demo_week, devices, inferences, insights, labels, occupancy, offline, quarantine, rules, store
+from . import away, baselines, beacons, bypass, demo_week, devices, inferences, insights, labels, occupancy, offline, quarantine, rules, store
 from .events import Action, AIVerdictEvent, ModeUpdate, NewDeviceEvent, OfflineUpdate, QuarantineUpdate, QueryEvent
 
 # In memory for now; SQLite (store.py) replaces this once the DNS side lands.
@@ -53,6 +57,8 @@ timing = {"beacons": beacons.Beacons(), "idle": beacons.Idle()}  # beacon_s and 
 suspicions = bypass.Suspicions()  # bypass_suspected events (#97)
 bypass_recent: deque[dict] = deque(maxlen=50)
 ids = itertools.count(1)
+baseline_settings = baselines.settings_from_env()  # (lookups, ms) to learn before new_domain events
+log = logging.getLogger("eddie.api")
 db: dict[str, sqlite3.Connection | None] = {"conn": None}
 APPLY_TIMEOUT = 2.0  # seconds to wait for DNS to load a rule or offline change (it polls every 0.2 s)
 APPLY_POLL = 0.02
@@ -151,8 +157,30 @@ async def ingest(body: QueryEvent | list[QueryEvent]):
         if suspect := suspicions.observe(row):
             bypass_recent.append(suspect)
             await broadcast(suspect)
+    for notice in baseline_events([ev for ev in events if ev.ts >= cutoff]):
+        await broadcast(notice)
     await broadcast({"type": "totals", **totals})
     return {"ok": True, "count": len(events)}
+
+
+def baseline_events(events: list[QueryEvent]) -> list[dict]:
+    """Add the batch to each device's baseline in one transaction; the events that causes.
+
+    Nothing with EDDIE_DB=off. A database error loses the batch's baseline
+    updates, never the feed.
+    """
+    if os.environ.get("EDDIE_DB", "eddie.db") == "off" or not events:
+        return []
+    conn = rules_db()
+    out = []
+    try:
+        with conn:
+            for ev in events:
+                out += baselines.observe(conn, ev.model_dump(), *baseline_settings)
+    except sqlite3.Error as exc:
+        log.warning("baseline update failed (%s), %d events skipped", exc, len(events))
+        return []
+    return out
 
 
 @app.post('/ai/verdict')
@@ -449,6 +477,45 @@ async def label_device(key: str, body: LabelIn):
     if row is None:
         raise HTTPException(404, f"Eddie hasn't seen a device {key}.")
     return {**row, "name": devices.display_name(key, row["label"], row["hostname"], row["vendor"])}
+
+
+def baseline_key(key: str) -> str:
+    key = baselines.key_of(key.strip().lower())
+    if not rules.DEVICE.fullmatch(key):
+        raise HTTPException(422, "Expected a MAC address or client IP.")
+    return key
+
+
+def named_baseline(conn: sqlite3.Connection, key: str) -> dict | None:
+    row = baselines.state(conn, key, int(time.time() * 1000), *baseline_settings)
+    return row and {**row, "device": devices.name_of(conn, key)}
+
+
+@app.get("/baselines")
+async def list_baselines():
+    conn = rules_db()
+    return [named_baseline(conn, key) for key in baselines.all_keys(conn)]
+
+
+@app.get("/devices/{key}/baseline")
+async def get_baseline(key: str):
+    key = baseline_key(key)
+    row = named_baseline(rules_db(), key)
+    if row is None:
+        raise HTTPException(404, f"No baseline for {key} yet.")
+    return row
+
+
+@app.delete("/devices/{key}/baseline")
+async def reset_baseline(key: str):
+    key = baseline_key(key)
+    conn = rules_db()
+    deleted = baselines.reset(conn, key)
+    if deleted is None:
+        raise HTTPException(404, f"No baseline for {key} yet.")
+    await broadcast({"type": "baseline_state", "ts": int(time.time() * 1000), "device_mac": key,
+                     "device": devices.name_of(conn, key), "state": "reset", "domains": 0})
+    return {"device_mac": key, "reset": True, "domains_deleted": deleted}
 
 
 @app.websocket("/ws/events")
