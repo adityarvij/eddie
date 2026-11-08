@@ -146,12 +146,12 @@ function renderKidMode() {
   // The heading's kid flag, like the house for home mode: shown while any child's device is locked down.
   const flag = $('kid-flag'), label = on ? 'kid mode on' : `kid mode on for ${locked.length} of ${kids.length}`;
   flag.hidden = !locked.length; flag.setAttribute('aria-label', label); flag.setAttribute('title', label);
+  // No backend reports kid mode, so Eddie dresses for it from the same stored rules, whenever the flag shows.
+  modes.kid_mode = locked.length > 0; renderEddieVisual();
 }
 async function toggleKidMode() {
   const kids = deviceList.filter(d => d.kid), locked = kids.filter(d => lockedMacs.has(d.mac)), on = locked.length < kids.length;
-  const ask = on ? `Turn on kid mode? ${listNames(kids.filter(d => !lockedMacs.has(d.mac)))} will only reach the kid-safe list, plus Eddie's essentials like sign-in and updates.`
-    : `Turn off kid mode? ${listNames(locked)} will get full internet through Eddie again.`;
-  if (!kids.length || kidPending !== null || !confirm(ask)) return;
+  if (!kids.length || kidPending !== null) return;
   kidPending = on; renderKidMode();
   try { const r = await control('/api/kid-mode', {on}); const data = await r.json(); if (!r.ok) throw Error(data.message); notice(data.message); }
   catch (e) { notice(`Kid mode not confirmed: ${e.message || 'the bridge did not answer.'}`); }
@@ -202,9 +202,10 @@ function acknowledgedRole(state = modes) {
   if (!visualConnected) return 'regular';
   const explicit = state.session_role || state.role;
   if (['regular', 'home', 'kid', 'concierge', 'away'].includes(explicit)) return explicit;
+  // Outfit order: kid, then guest, away and home; guest and home mode can both be on.
+  if (state.kid_mode === true) return 'kid';
   if (guest?.active === true) return 'concierge';
   if (state.away?.on === true || state.away === true) return 'away';
-  if (state.kid_mode === true) return 'kid';
   if (state.home_mode === true) return 'home';
   return 'regular';
 }
@@ -223,7 +224,6 @@ function applyModes(state) {
   if (typeof state.quarantine === 'boolean') { modes.quarantine = state.quarantine; modes.quarantine_applied = state.quarantine_applied === true; }
   if (typeof state.away === 'boolean') modes.away = {on: state.away, until: state.away_until || null, applied: state.away_applied === true,
     devices: state.away_devices || [], exempt: state.away_exempt || []};
-  if (typeof state.kid_mode === 'boolean') modes.kid_mode = state.kid_mode;
   const hasRole = ['session_role', 'role', 'session'].some(key => Object.prototype.hasOwnProperty.call(state, key));
   const role = state.session_role || state.session?.role || state.role;
   if (hasRole && state.pending !== true && state.acknowledged !== false) modes.session_role = role === 'regular' ? null : ['home', 'kid', 'concierge', 'away'].includes(role) ? role : null;
@@ -283,7 +283,7 @@ function renderModes() {
 function renderMic() { $('mic-on').hidden = !voiceReady; $('mic').hidden = voiceReady; $('mic').textContent = 'start mic'; }
 async function loadModes() {
   try { const r = await fetch('/api/mode'); if (!r.ok) throw Error(); applyModes(await r.json()); }
-  catch { modes.home_mode = modes.offline = modes.away = modes.kid_mode = modes.session_role = null; renderModes(); }
+  catch { modes.home_mode = modes.offline = modes.away = modes.session_role = null; renderModes(); }
 }
 async function setMode(key, on) {
   if (modePending[key] !== undefined) return;
@@ -340,7 +340,7 @@ async function undoAnswer() {
 for (const b of $('question-actions').children) b.onclick = () => answerQuestion(b.dataset.answer);
 $('question-undo').onclick = undoAnswer;
 // Guest Mode (#163): the owner's switch and what guests may use, shown only as the bridge saved it.
-// Only the Eddie computer may change it; a paired iPad gets the bridge's 403 as a notice.
+// The Eddie computer or the paired iPad changes it, with no dialog; a refusal is the notice.
 const GUEST_LABELS = {house_guide: 'house guide', timers: 'timers', tv: 'tv', lights: 'lights', thermostat: 'thermostat'};
 function renderGuest() {
   renderEddieVisual();
@@ -377,7 +377,7 @@ async function saveGuest(change) {
   catch (e) { notice(`Guest mode not saved: ${e.message || 'the bridge did not answer.'}`); }
   renderGuest();
 }
-$('guest-flag').onclick = $('guest-mode').onclick = () => guest && (guest.active || confirm("Turn on guest mode? Until you turn it off here, Eddie treats every voice as a guest: no traffic, reports, rules, modes or contacts, only what you tick below.")) && saveGuest({active: !guest.active});
+$('guest-flag').onclick = $('guest-mode').onclick = () => guest && saveGuest({active: !guest.active});
 // Counts move with traffic, so the panels refresh every 30 s as well as on (re)connect.
 function refreshPanels() { clearTimeout(refreshPanels.timer); refreshPanels.timer = setTimeout(refreshPanels, 30000); loadDevices(); loadModes(); loadQuestions(); loadGuest(); }
 // ACR blocker (#104): the latest acr_detected per device and domain, newest first.
@@ -428,6 +428,7 @@ function consumeEvent(event) {
   if (event.type === 'role_state' || event.type === 'session_state') { if (event.pending !== true && event.acknowledged === true) applyModes(event); return; }
   if (event.type === 'ai_verdict') return feedNote('ai', `${event.domain}${event.reason ? ' — ' + event.reason : ''}`, event, AI_RESULTS[event.label] || [String(event.label), 'flag']);
   if (event.type === 'mode') return applyModes(event);
+  if (event.type === 'guest') { guest = event; return renderGuest(); }
   if (event.type === 'question') { question = event; return renderQuestion(); }
   if (event.type === 'question_resolved') { if (question?.id === event.id) { question = null; renderQuestion(); } return; }
   if (event.type === 'offline_mode') return applyModes({offline: event.offline, offline_applied: event.applied});

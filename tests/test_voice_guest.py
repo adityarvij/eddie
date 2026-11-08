@@ -296,8 +296,66 @@ class GuestModelTools(unittest.TestCase):
         self.assertTrue(ollama_agent.Agent(chat=model).ask('quit listening') == 'Microphone turned off.')
 
 
+class SpokenSwitch(unittest.TestCase):
+    """The owner says "turn on guest mode": on at once, no yes/no. Off is the dashboard's alone."""
+
+    def setUp(self):
+        self.saved = voice_agent.profile, voice_agent.ask_model
+        voice_agent.profile = guest.Profile()
+        voice_agent.ask_model = Mock(side_effect=AssertionError('no model for a guest mode switch'))
+
+    def tearDown(self):
+        voice_agent.profile, voice_agent.ask_model = self.saved
+        voice_agent.confirmation.cancel()
+        voice_agent.forget_conversation()
+
+    def test_owner_turns_it_on_by_voice(self):
+        for text in ('turn on guest mode', 'Hey Eddie, turn on guest mode please', 'guest mode on',
+                     'Eddie, enable guest mode', 'switch guest mode on'):
+            voice_agent.profile = guest.Profile()
+            self.assertTrue(voice_agent.respond(text).startswith('Guest mode turned on.'), text)
+            self.assertEqual('guest', voice_agent.profile.role(), text)
+        self.assertIsNone(voice_agent.confirmation.status(), 'no yes/no')
+
+    def test_reply_says_what_guests_may_do_and_how_to_turn_it_off(self):
+        voice_agent.profile.update(allowed=['timers'])
+        self.assertEqual('Guest mode turned on. You can set a timer. Turn it off with the guest flag on the dashboard.',
+                         voice_agent.respond('turn on guest mode'))
+
+    def test_saved_to_the_profile_file(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        path = Path(folder.name) / 'guest.json'
+        voice_agent.profile = guest.Profile(path)
+        voice_agent.respond('turn on guest mode')
+        self.assertTrue(guest.Profile(path).active)
+
+    def test_a_pending_yes_does_not_carry_over_to_guests(self):
+        voice_agent.confirmation.request('home_mode', {'enabled': True}, 'Turn home mode on?')
+        voice_agent.respond('turn on guest mode')
+        self.assertIsNone(voice_agent.confirmation.status())
+
+    def test_an_unsaved_profile_changes_nothing(self):
+        with patch.object(voice_agent.profile, 'save', side_effect=OSError('read-only')):
+            self.assertEqual("I couldn't turn on guest mode. Nothing changed for guests.", voice_agent.respond('turn on guest mode'))
+        self.assertEqual('owner', voice_agent.profile.role())
+
+    def test_off_by_voice_never_runs(self):
+        self.assertEqual('Guest mode is already off.', voice_agent.respond('turn off guest mode'))
+        voice_agent.respond('turn on guest mode')
+        for text in ('turn off guest mode', 'disable guest mode', 'turn on guest mode'):
+            self.assertEqual(OWNER_ONLY, voice_agent.respond(text), text)
+        self.assertEqual('guest', voice_agent.profile.role())
+
+    def test_negations_and_questions_do_not_switch_it(self):
+        for text in ("don't turn on guest mode", 'is guest mode on', 'what is guest mode', 'why turn on guest mode'):
+            voice_agent.ask_model = Mock(return_value=None)
+            voice_agent.respond(text)
+            self.assertEqual('owner', voice_agent.profile.role(), text)
+
+
 class Bridge(unittest.TestCase):
-    """GET/POST /api/guest: the owner's switch, on the Eddie computer only."""
+    """GET/POST /api/guest: the owner's switch, on the Eddie computer or the paired iPad."""
 
     def setUp(self):
         self.saved = voice_agent.profile, voice_agent.guest_timers
@@ -352,8 +410,20 @@ class Bridge(unittest.TestCase):
         self.assertNotIn('alarm code', topics)
         self.assertNotIn('stay-with-eddie', json.dumps(topics), 'never an answer')
 
-    def test_not_a_paired_control(self):
-        self.assertNotIn('/api/guest', serve.PAIRED_CONTROLS)
+    def test_spoken_switch_reaches_the_dashboard_at_once(self):
+        events = []
+        with patch.object(serve, 'emit', events.append), patch.object(serve.subprocess, 'run'), \
+                patch.object(serve.sys, 'platform', 'darwin'), patch.dict(os.environ, {'EDDIE_PIPER_MODEL': ''}):
+            serve.answer('hello')
+            self.assertFalse([e for e in events if e['type'] == 'guest'], 'no event when nothing switched')
+            serve.answer('turn on guest mode')
+        sent = [e for e in events if e['type'] == 'guest']
+        self.assertEqual(1, len(sent))
+        self.assertTrue(sent[0]['active'])
+        self.assertIn('topics', sent[0])
+
+    def test_a_paired_control(self):
+        self.assertIn('/api/guest', serve.PAIRED_CONTROLS)
 
 
 if __name__ == '__main__':

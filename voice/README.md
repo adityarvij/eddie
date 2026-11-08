@@ -192,16 +192,15 @@ Not yet checked on hardware: a real Fire Stick or TV under lockdown, including w
 
 ## Kid mode (#119)
 
-Mark a device as a child's in the dashboard's device list (the `devices` link, bottom right: each row's `adult` / `child` button). Then “turn on kid mode”, “kid mode on” or “lock down the kids' devices” locks down every child's device not already locked down, and “turn off kid mode” or “unlock the kids' devices” unlocks them. Both ask “Turn on kid mode? Yes or no?” (or off) and wait for a spoken yes. The dashboard's `kid mode` switch does the same after its own confirm dialog.
+Mark a device as a child's in the dashboard's device list (the `devices` link, bottom right: each row's `adult` / `child` button). Then “turn on kid mode”, “kid mode on” or “lock down the kids' devices” locks down every child's device not already locked down, and “turn off kid mode” or “unlock the kids' devices” unlocks them. Both run at once, with no yes/no, like home and guest mode; the dashboard's `kid mode` switch does the same. A guest gets the household refusal.
 
 The kid-safe keep list is `voice/kid_safe.json` (seeded with YouTube Kids and PBS Kids, both defined in `voice/services.json` with `"kids": true`); edit it to change what kid mode allows, then restart the worker. DNS can't tell the YouTube Kids app from YouTube: YouTube Kids keeps `youtubei.googleapis.com` and the video CDNs, which the YouTube app also uses, but not `youtube.com`.
 
 | Request | Eddie says |
 |---|---|
-| On | “Turn on kid mode? Yes or no?” |
-| Yes, every rule stored and loaded | “Kid mode turned on.” |
-| Yes, stored but not loaded by DNS | “Kid mode saved as on, but Eddie's DNS hasn't loaded it yet.” |
-| Off | “Turn off kid mode? Yes or no?”, then “Kid mode turned off.” On yes, each device's `*` block goes first, then its kid-safe allow rules; its other rules stay. |
+| On, every rule stored and loaded | “Kid mode turned on.” |
+| On, stored but not loaded by DNS | “Kid mode saved as on, but Eddie's DNS hasn't loaded it yet.” |
+| Off | “Kid mode turned off.” Each device's `*` block goes first, then its kid-safe allow rules; its other rules stay. |
 | No child's device | “No device is marked as a child's yet; set one on the dashboard.” |
 | Already on (or off) | “Kid mode is already on.” |
 
@@ -215,7 +214,7 @@ The registered risky actions are `allow` (#13) and `lockdown` (#17), both parsed
 
 ## Guest Mode permissions (#163)
 
-The owner turns Guest Mode on from the dashboard's devices sheet on the Eddie computer and ticks what guests may use (house guide, timers, TV, lights, thermostat; TV, lights and thermostat have no voice tool yet). While it's on, everyone who talks to or types at Eddie is a guest. Traffic, reports, rules, modes, devices and contacts get “That's only for the household.”; an unticked category gets “Your host hasn't turned that on for guests.”; “stop recording” and “hello” always work. The greeting is “Welcome, I'm Eddie, your concierge.” followed by what guests may do: the first three guest topics in the house guide (if the owner ticked house guide) and timers (if ticked), for example “You can ask me about Wi-Fi, check-in and checkout, or set a timer. Tap capabilities for the rest.”, or “Your host hasn't turned anything on for guests yet.” “What can I ask?”, “what can you help with?”, “help” and “what do you know about the house?” name up to six topics the same way. Anything else gets “I'm in guest mode.” plus that same list. Topic names come from the guide; answers are only spoken when asked. The local model isn't called. A guest's timers are kept apart from the household's and forgotten when Guest Mode goes off. Tested in `tests/test_voice_guest.py`; not checked by microphone.
+The owner turns Guest Mode on by saying “turn on guest mode” (also “guest mode on”, “enable guest mode”; no yes/no, like home mode) or from the dashboard (the guest flag in the header, on the Eddie computer or the paired iPad), and ticks what guests may use (house guide, timers, TV, lights, thermostat; TV, lights and thermostat have no voice tool yet). Eddie answers “Guest mode turned on.”, what guests may do, and that the guest flag turns it off. Turning it off is dashboard-only: by voice the owner hears “Guest mode is already off.” and, once it's on, a guest saying “turn off guest mode” gets the household refusal, since Eddie can't tell voices apart. While it's on, everyone who talks to or types at Eddie is a guest. Traffic, reports, rules, modes, devices and contacts get “That's only for the household.”; an unticked category gets “Your host hasn't turned that on for guests.”; “stop recording” and “hello” always work. The greeting is “Welcome, I'm Eddie, your concierge.” followed by what guests may do: the first three guest topics in the house guide (if the owner ticked house guide) and timers (if ticked), for example “You can ask me about Wi-Fi, check-in and checkout, or set a timer. Tap capabilities for the rest.”, or “Your host hasn't turned anything on for guests yet.” “What can I ask?”, “what can you help with?”, “help” and “what do you know about the house?” name up to six topics the same way. Anything else gets “I'm in guest mode.” plus that same list. Topic names come from the guide; answers are only spoken when asked. The local model isn't called. A guest's timers are kept apart from the household's and forgotten when Guest Mode goes off. Tested in `tests/test_voice_guest.py`; not checked by microphone.
 
 ## Timers and reminders (#122)
 
@@ -261,7 +260,7 @@ Any other field, a missing topic or answer, or an unknown audience makes the fil
 
 **Owner-only entries.** Eddie can't tell voices apart, so the role comes from Guest Mode (#163): while it's off, anyone who asks hears owner entries too; while it's on, only guest entries, and only if the owner ticked house guide for guests (otherwise “Your host hasn't turned that on for guests”). A guest asking about an owner entry hears the same don't-know as for a topic that isn't there, and “which one?” never names an owner topic.
 
-**Guest mode demo.** On the Pi, `cp voice/house_guide.demo.json voice/house_guide.json`, then on the Eddie computer open devices, turn guest mode on and tick house guide and timers. Eddie puts on the bellhop hat, the header says GUEST MODE and the capabilities pane opens with the guest topics. Questions that the demo guide answers (each is checked in `tests/test_voice_guest.py`):
+**Guest mode demo.** On the Pi, `cp voice/house_guide.demo.json voice/house_guide.json`, then on the Eddie computer or the paired iPad tap the guest flag and tick house guide and timers. Eddie puts on the bellhop hat, the header says GUEST MODE and the capabilities pane opens with the guest topics. Questions that the demo guide answers (each is checked in `tests/test_voice_guest.py`):
 
 | Say | Eddie answers from |
 |---|---|
