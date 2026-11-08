@@ -4,7 +4,6 @@ A USB speakerphone often plays only 48 kHz (the EMEET M1A on the Pi), and the ra
 PortAudio opens there doesn't convert, so Piper's 22,050 Hz voice and the 16 kHz cues fail with
 "Invalid sample rate". macOS converts on its own, so there the audio plays at its own rate.
 """
-import numpy as np
 
 
 def output_rate(sd, rate):
@@ -21,6 +20,7 @@ def output_rate(sd, rate):
 
 def resample(samples, rate, target):
     """Linear interpolation; plenty for speech and chimes going up to 48 kHz. Keeps the dtype."""
+    import numpy as np  # here, not at import: serve.py and timers load this in the backend's numpy-free env
     samples = np.asarray(samples)
     if rate == target or not len(samples):
         return samples
