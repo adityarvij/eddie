@@ -519,7 +519,7 @@ Built (#134): every `/what-they-know` fact carries one of these ten as `category
 - **Category privacy score:** the household gets a score per category (Safety B, Health D, Kids A) instead of one number, so people see what's actually exposed.
 - **ACR blocker (#104, built):** a dedicated check for smart-TV content recognition, shown as "Your TV was sending what's on screen every 15 seconds. Blocked." Seeded ACR domains that beacon are blocked at DNS, and the dashboard shows an `acr_detected` card with the interval Eddie measured. See docs/EVENTS.md. Not yet seen on a real smart TV on this network.
 - **Mic watch:** correlate speaker uploads with whether anyone spoke; flag uploads with no wake word.
-- **Cross-device map:** a visual of which companies see which of your devices, and how many devices each company can link.
+- **Cross-device map (#107, built):** a visual of which companies see which of your devices, and how many devices each company can link. The dashboard's **who sees what** panel shows it from `GET /tracker-map`, with ad-ID sync domains in red and a button to block each one. See docs/EVENTS.md.
 - **Data broker spotlight:** separate counter for known data brokers and ad exchanges, since that's where data gets sold on.
 - **Forget timer (built, #111):** sensitive categories (health, beliefs, kids) are summarised and the raw logs deleted after 24 hours, so Eddie never becomes the leak.
 

@@ -28,6 +28,8 @@ through DELETE /rules if it looks like it did (#101, rollback.py).
 /ingest also runs each event through the device's baseline in eddie.db and
 pushes new_domain and baseline_state events (baselines.py); /baselines and
 /devices/{key}/baseline read and reset them.
+/tracker-map says which tracking companies each device looked up (#107), and
+/tracker-map/block blocks one of their ad-ID sync domains through /rules.
 
 Writes (POST, PUT, DELETE) from anywhere but loopback need EDDIE_API_TOKEN as
 a bearer token (#96). Browsers may only write or open /ws/events from this
@@ -321,6 +323,45 @@ def summary(window: Literal["15m", "1h", "24h"] = "1h"):
             "companies": insights.company_counts(events), "company_window_seconds": 3600,
             "window": window, "devices": insights.device_counts(events, insights.WINDOWS_MS[window]),
             "brokers": insights.broker_counts(events, insights.WINDOWS_MS[window])}
+
+
+class SyncBlockIn(BaseModel):
+    domain: str  # an ad-ID sync domain from GET /tracker-map
+
+
+def sync_rule(conn: sqlite3.Connection, domain: str) -> dict | None:
+    """The every-device block rule already covering an ad-ID sync domain, if any."""
+    return next((r for r in rules.all_rules(conn) if r["action"] == "block" and r["device_mac"] is None
+                 and r["pattern"] in (domain, f"*.{domain}")), None)
+
+
+@app.get("/tracker-map")
+async def tracker_map(window: Literal["1h", "24h"] = "24h"):
+    """Which companies see which devices (#107). Each id_sync entry says whether a block rule
+    covers it; a rule is stored intent, not proof DNS is enforcing it."""
+    result = insights.tracker_map(list(feed()), insights.WINDOWS_MS[window])
+    try:
+        conn = rules_db()
+    except HTTPException:
+        conn = None  # EDDIE_DB=off: the map still shows, with no rule state
+    for row in result["companies"]:
+        for sync in row["id_sync"]:
+            rule = conn and sync_rule(conn, sync["domain"])
+            sync["rule_id"] = rule["id"] if rule else None
+    return {"window": window, **result}
+
+
+@app.post("/tracker-map/block")
+async def block_id_sync(body: SyncBlockIn):
+    """Block an ad-ID sync domain and its subdomains on every device, through POST /rules."""
+    domain = body.domain.strip().lower().rstrip(".")
+    if labels.id_sync(domain) != domain:
+        raise HTTPException(422, "Only ad-ID sync domains from the tracker map can be blocked here.")
+    conn = rules_db()
+    if existing := sync_rule(conn, domain):
+        return {**named(conn, existing), "existing": True, "applied": None}
+    return {**await add_rule(rules.RuleIn(pattern=f"*.{domain}", action="block", created_by="dashboard")),
+            "existing": False}
 
 
 def report_limit_hours() -> int:
