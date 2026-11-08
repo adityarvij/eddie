@@ -13,7 +13,7 @@ function addEvent(event) {
   renderEvent(event, device, action);
 }
 // A feed line: a coloured status tag ([approved], [blocked], [flagged], [approved (ai)]) then the text.
-const TAGS = { allow: 'approved', block: 'blocked', flag: 'flagged', spoof: 'spoofed', ai: 'ai', rule: 'rule', bypass: 'bypass?' };
+const TAGS = { allow: 'approved', block: 'blocked', flag: 'flagged', spoof: 'spoofed', ai: 'ai', rule: 'rule', bypass: 'bypass?', rollback: 'rolled back?' };
 // What the DNS engine does with each AI label (decision.py), coloured like that result. The AI never
 // blocks: a tracker is flagged, and so is an unsure domain, which says unsure to tell them apart.
 const AI_RESULTS = { needed: ['approved', 'allow'], unsure: ['unsure', 'flag'], tracker: ['flagged', 'flag'] };
@@ -186,6 +186,12 @@ function consumeEvent(event) {
   if (event.type === 'away_mode') return applyModes(event);
   // A suspicion, never proof: the reason says what was looked up and never that a device is covered.
   if (event.type === 'bypass_suspected') { feedNote('bypass', event.reason, event); notice(event.reason); return; }
+  if (event.type === 'rule_rolled_back') {
+    // A guess from traffic, never proof: the reason says so; applied false means DNS hasn't confirmed the block is gone.
+    const text = event.applied ? event.reason : `${event.reason} Eddie's DNS hasn't confirmed the block is gone yet.`;
+    feedNote('rollback', text, event); notice(text); loadRules();
+    return;
+  }
   if (event.type === 'rule_change') {
     // Stored, not enforced: the event is sent before DNS acknowledges it, so never say "blocked".
     const text = `Rule ${event.change === 'removed' ? 'removed' : 'added'}: ${ruleLine(event)}`;

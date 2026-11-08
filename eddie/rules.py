@@ -24,7 +24,7 @@ NUMERIC_TLD = re.compile(r".*\.[0-9]+")
 EVERYTHING = "*"
 # A device key from /devices: its MAC, or its client IP while the MAC is unknown.
 DEVICE = re.compile(r"[0-9a-z:._-]{1,64}")
-COLUMNS = ("id", "scope", "device_mac", "pattern", "action", "created_by", "ts")
+COLUMNS = ("id", "scope", "device_mac", "pattern", "action", "created_by", "ts", "pinned")
 
 
 class RuleIn(BaseModel):
@@ -32,6 +32,7 @@ class RuleIn(BaseModel):
     action: Literal["allow", "block", "spoof"]
     device_mac: str | None = None  # None for a rule that covers every device
     created_by: Literal["user", "voice", "agent"] = "user"
+    pinned: bool = False  # never rolled back as a likely breakage (#101, rollback.py)
 
     @field_validator("pattern")
     @classmethod
@@ -61,7 +62,9 @@ class RuleIn(BaseModel):
 
 
 def _row(row) -> dict:
-    return dict(zip(COLUMNS, row))
+    out = dict(zip(COLUMNS, row))
+    out["pinned"] = bool(out["pinned"])
+    return out
 
 
 def _state(conn: sqlite3.Connection, key: str) -> int:
@@ -95,17 +98,22 @@ def all_rules(conn: sqlite3.Connection) -> list[dict]:
     return [_row(r) for r in conn.execute(f"SELECT {', '.join(COLUMNS)} FROM rules ORDER BY id DESC")]
 
 
+def get(conn: sqlite3.Connection, rule_id: int) -> dict | None:
+    row = conn.execute(f"SELECT {', '.join(COLUMNS)} FROM rules WHERE id = ?", (rule_id,)).fetchone()
+    return row and _row(row)
+
+
 def add(conn: sqlite3.Connection, rule: RuleIn, now_ms: int | None = None) -> tuple[dict, int]:
     """Store the rule. Returns (stored row, revision to wait for)."""
     ts = int(time.time() * 1000) if now_ms is None else now_ms
     scope = "device" if rule.device_mac else "global"
     with conn:
         cur = conn.execute(
-            "INSERT INTO rules (scope, device_mac, pattern, action, created_by, ts) VALUES (?, ?, ?, ?, ?, ?)",
-            (scope, rule.device_mac, rule.pattern, rule.action, rule.created_by, ts))
+            "INSERT INTO rules (scope, device_mac, pattern, action, created_by, ts, pinned) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (scope, rule.device_mac, rule.pattern, rule.action, rule.created_by, ts, int(rule.pinned)))
         rev = _bump(conn)
     return {"id": cur.lastrowid, "scope": scope, "device_mac": rule.device_mac, "pattern": rule.pattern,
-            "action": rule.action, "created_by": rule.created_by, "ts": ts}, rev
+            "action": rule.action, "created_by": rule.created_by, "ts": ts, "pinned": rule.pinned}, rev
 
 
 def remove(conn: sqlite3.Connection, rule_id: int) -> tuple[dict | None, int]:
@@ -117,3 +125,10 @@ def remove(conn: sqlite3.Connection, rule_id: int) -> tuple[dict | None, int]:
         conn.execute("DELETE FROM rules WHERE id = ?", (rule_id,))
         rev = _bump(conn)
     return _row(row), rev
+
+
+def pin(conn: sqlite3.Connection, rule_id: int) -> dict | None:
+    """Mark the rule pinned. No revision bump: DNS enforces a pinned rule exactly the same."""
+    with conn:
+        conn.execute("UPDATE rules SET pinned = 1 WHERE id = ?", (rule_id,))
+    return get(conn, rule_id)

@@ -15,6 +15,8 @@ quarantine.py) and wait for DNS to load it like rules.
 eddie.db and waits for DNS to load it the same way (offline.py).
 POST /mode {"away": ...} does the same for away mode (away.py), after
 ranking which devices it covers from the query log.
+Each new block rule is watched for signs it broke a device and deleted
+through DELETE /rules if it looks like it did (#101, rollback.py).
 /ingest also runs each event through the device's baseline in eddie.db and
 pushes new_domain and baseline_state events (baselines.py); /baselines and
 /devices/{key}/baseline read and reset them.
@@ -42,7 +44,7 @@ from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocket
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 
-from . import away, baselines, beacons, bypass, demo_week, devices, inferences, insights, labels, occupancy, offline, quarantine, rules, store
+from . import away, baselines, beacons, bypass, demo_week, devices, inferences, insights, labels, occupancy, offline, quarantine, rollback, rules, store
 from .events import Action, AIVerdictEvent, ModeUpdate, NewDeviceEvent, OfflineUpdate, QuarantineUpdate, QueryEvent
 
 # In memory for now; SQLite (store.py) replaces this once the DNS side lands.
@@ -56,6 +58,8 @@ ai_verdicts: dict[str, dict] = {}
 timing = {"beacons": beacons.Beacons(), "idle": beacons.Idle()}  # beacon_s and idle on each event (#24)
 suspicions = bypass.Suspicions()  # bypass_suspected events (#97)
 bypass_recent: deque[dict] = deque(maxlen=50)
+watcher = rollback.Watcher()  # new block rules that may have broken a device (#101)
+rollbacks: set[asyncio.Task] = set()  # rollbacks waiting for DNS, so ingest doesn't
 ids = itertools.count(1)
 baseline_settings = baselines.settings_from_env()  # (lookups, ms) to learn before new_domain events
 log = logging.getLogger("eddie.api")
@@ -157,6 +161,10 @@ async def ingest(body: QueryEvent | list[QueryEvent]):
         if suspect := suspicions.observe(row):
             bypass_recent.append(suspect)
             await broadcast(suspect)
+        for found in watcher.observe(row):
+            task = asyncio.create_task(roll_back(found))
+            rollbacks.add(task)
+            task.add_done_callback(rollbacks.discard)
     for notice in baseline_events([ev for ev in events if ev.ts >= cutoff]):
         await broadcast(notice)
     await broadcast({"type": "totals", **totals})
@@ -406,6 +414,7 @@ async def list_rules():  # async: the shared connection stays on the event loop 
 async def add_rule(body: rules.RuleIn):
     conn = rules_db()
     row, rev = rules.add(conn, body)
+    watcher.watch(row)
     await rule_change(conn, "added", row)
     return {**row, "applied": await wait_applied(conn, rev)}
 
@@ -416,8 +425,32 @@ async def delete_rule(rule_id: int):
     row, rev = rules.remove(conn, rule_id)
     if row is None:
         raise HTTPException(404, f"No rule {rule_id}.")
+    watcher.forget(rule_id)
     await rule_change(conn, "removed", row)
     return {**row, "deleted": True, "applied": await wait_applied(conn, rev)}
+
+
+@app.post("/rules/{rule_id}/pin")
+async def pin_rule(rule_id: int):
+    """Keep a rule however its device behaves: it is never rolled back (#101)."""
+    conn = rules_db()
+    row = rules.pin(conn, rule_id)
+    if row is None:
+        raise HTTPException(404, f"No rule {rule_id}.")
+    watcher.forget(rule_id)
+    return named(conn, row)
+
+
+async def roll_back(found: rollback.Rollback) -> None:
+    """Delete the rule through DELETE /rules, then say why. A guess, never proof (rollback.py)."""
+    current = rules.get(rules_db(), found.rule["id"])
+    if current is None or current["pinned"] or current["ts"] != found.rule["ts"]:
+        return  # deleted, pinned meanwhile, or the id now holds another rule: nothing to roll back
+    out = await delete_rule(found.rule["id"])
+    await broadcast({"type": "rule_rolled_back", "ts": int(time.time() * 1000),
+                     "rule": named(rules_db(), found.rule), "device_mac": found.device_mac,
+                     "device": found.device, "sign": found.sign, "reason": found.reason,
+                     "applied": out["applied"]})
 
 
 class LabelIn(BaseModel):
