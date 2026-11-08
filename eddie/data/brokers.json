@@ -1,0 +1,246 @@
+{
+ "33across.com": {
+  "company": "33Across",
+  "kind": "ad exchange"
+ },
+ "3lift.com": {
+  "company": "TripleLift",
+  "kind": "ad exchange"
+ },
+ "4dex.io": {
+  "company": "Adagio",
+  "kind": "data broker"
+ },
+ "ad.gt": {
+  "company": "Audigent",
+  "kind": "data broker"
+ },
+ "agkn.com": {
+  "company": "TransUnion",
+  "kind": "data broker"
+ },
+ "applovin.com": {
+  "company": "AppLovin",
+  "kind": "data broker"
+ },
+ "bidr.io": {
+  "company": "Beeswax",
+  "kind": "data broker"
+ },
+ "blis.com": {
+  "company": "Blis",
+  "kind": "data broker"
+ },
+ "blismedia.com": {
+  "company": "Blis",
+  "kind": "data broker"
+ },
+ "boomtrain.com": {
+  "company": "Zeta Global",
+  "kind": "data broker"
+ },
+ "clearbit.com": {
+  "company": "APIHub",
+  "kind": "data broker"
+ },
+ "company-target.com": {
+  "company": "Demandbase",
+  "kind": "data broker"
+ },
+ "criteo.com": {
+  "company": "Criteo",
+  "kind": "data broker"
+ },
+ "criteo.net": {
+  "company": "Criteo",
+  "kind": "data broker"
+ },
+ "demandbase.com": {
+  "company": "Demandbase",
+  "kind": "data broker"
+ },
+ "dotomi.com": {
+  "company": "Conversant",
+  "kind": "data broker"
+ },
+ "exelator.com": {
+  "company": "The Nielsen Company",
+  "kind": "data broker"
+ },
+ "fastclick.net": {
+  "company": "Conversant",
+  "kind": "data broker"
+ },
+ "imrworldwide.com": {
+  "company": "The Nielsen Company",
+  "kind": "data broker"
+ },
+ "intentiq.com": {
+  "company": "Almondnet Group",
+  "kind": "data broker"
+ },
+ "ispot.tv": {
+  "company": "iSpot.tv",
+  "kind": "data broker"
+ },
+ "kargo.com": {
+  "company": "Kargo",
+  "kind": "ad exchange"
+ },
+ "lexisnexis.com": {
+  "company": "RELX Group",
+  "kind": "data broker"
+ },
+ "liadm.com": {
+  "company": "LiveIntent",
+  "kind": "data broker"
+ },
+ "lijit.com": {
+  "company": "Sovrn Holdings",
+  "kind": "ad exchange"
+ },
+ "loopme.me": {
+  "company": "Brightcom",
+  "kind": "data broker"
+ },
+ "marphezis.com": {
+  "company": "Brightcom",
+  "kind": "data broker"
+ },
+ "maxmind.com": {
+  "company": "MaxMind",
+  "kind": "data broker"
+ },
+ "mczbf.com": {
+  "company": "Conversant",
+  "kind": "data broker"
+ },
+ "media.net": {
+  "company": "Media.net Advertising",
+  "kind": "data broker"
+ },
+ "media6degrees.com": {
+  "company": "Dstillery",
+  "kind": "data broker"
+ },
+ "onaudience.com": {
+  "company": "OnAudience",
+  "kind": "data broker"
+ },
+ "opecloud.com": {
+  "company": "TripleLift",
+  "kind": "ad exchange"
+ },
+ "openx.net": {
+  "company": "OpenX",
+  "kind": "ad exchange"
+ },
+ "openxcdn.net": {
+  "company": "OpenX",
+  "kind": "ad exchange"
+ },
+ "outbrain.com": {
+  "company": "Outbrain",
+  "kind": "data broker"
+ },
+ "outbrainimg.com": {
+  "company": "Outbrain",
+  "kind": "data broker"
+ },
+ "pippio.com": {
+  "company": "LiveRamp",
+  "kind": "data broker"
+ },
+ "presage.io": {
+  "company": "Ogury",
+  "kind": "data broker"
+ },
+ "pro-market.net": {
+  "company": "Almondnet Group",
+  "kind": "data broker"
+ },
+ "pubmatic.com": {
+  "company": "PubMatic",
+  "kind": "ad exchange"
+ },
+ "pubnation.com": {
+  "company": "OpenX",
+  "kind": "ad exchange"
+ },
+ "reson8.com": {
+  "company": "Resonate Networks",
+  "kind": "data broker"
+ },
+ "revcontent.com": {
+  "company": "RevContent",
+  "kind": "data broker"
+ },
+ "rezync.com": {
+  "company": "Zeta Global",
+  "kind": "data broker"
+ },
+ "rfihub.com": {
+  "company": "Zeta Global",
+  "kind": "data broker"
+ },
+ "rlcdn.com": {
+  "company": "LiveRamp",
+  "kind": "data broker"
+ },
+ "rqtrk.eu": {
+  "company": "Roq.ad",
+  "kind": "data broker"
+ },
+ "rubiconproject.com": {
+  "company": "Magnite",
+  "kind": "ad exchange"
+ },
+ "scorecardresearch.com": {
+  "company": "comScore",
+  "kind": "data broker"
+ },
+ "semasio.net": {
+  "company": "Semasio",
+  "kind": "data broker"
+ },
+ "sharethrough.com": {
+  "company": "Sharethrough",
+  "kind": "ad exchange"
+ },
+ "sojern.com": {
+  "company": "Sojern",
+  "kind": "data broker"
+ },
+ "stackadapt.com": {
+  "company": "Collective Roll",
+  "kind": "data broker"
+ },
+ "taboola.com": {
+  "company": "Taboola",
+  "kind": "data broker"
+ },
+ "tynt.com": {
+  "company": "33Across",
+  "kind": "ad exchange"
+ },
+ "vrtcal.com": {
+  "company": "VRTCAL Markets",
+  "kind": "data broker"
+ },
+ "yieldmo.com": {
+  "company": "YieldMo",
+  "kind": "ad exchange"
+ },
+ "zemanta.com": {
+  "company": "Outbrain",
+  "kind": "data broker"
+ },
+ "zetaglobal.net": {
+  "company": "Zeta Global",
+  "kind": "data broker"
+ },
+ "zoominfo.com": {
+  "company": "Zoom Information",
+  "kind": "data broker"
+ }
+}

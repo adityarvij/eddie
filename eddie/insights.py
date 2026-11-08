@@ -62,3 +62,25 @@ def device_counts(events: list[dict], window_ms: int, now_ms: int | None = None)
         top = sorted(row['blocked_companies'].items(), key=lambda kv: (-kv[1], kv[0]))[:3]
         row['blocked_companies'] = [{'company': company, 'blocked': n} for company, n in top]
     return sorted(devices.values(), key=lambda row: (-row['requests'], row['device']))
+
+
+def broker_counts(events: list[dict], window_ms: int, now_ms: int | None = None, limit: int = 10) -> dict:
+    """Lookups of known data broker and ad exchange domains in the window, per device and company."""
+    now_ms = int(time.time() * 1000) if now_ms is None else now_ms
+    totals = {'requests': 0, 'blocked': 0}
+    devices, companies = {}, {}
+    for event in events:
+        if not 0 <= now_ms - event['ts'] < window_ms:
+            continue
+        entry = labels.broker(event['domain'])
+        if entry is None:
+            continue
+        blocked = event['action'] == 'block'
+        device = devices.setdefault(event['device'], {'device': event['device'], 'requests': 0, 'blocked': 0})
+        company = companies.setdefault(entry['company'], {**entry, 'requests': 0, 'blocked': 0})
+        for row in (totals, device, company):
+            row['requests'] += 1
+            row['blocked'] += blocked
+    order = lambda key: (lambda row: (-row['requests'], row[key]))
+    return {**totals, 'devices': sorted(devices.values(), key=order('device')),
+            'companies': sorted(companies.values(), key=order('company'))[:limit]}
