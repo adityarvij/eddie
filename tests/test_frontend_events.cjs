@@ -410,4 +410,26 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   get('tracker-map-close').onclick();
   assert.equal(get('tracker-map').hidden, true);
   console.log('Frontend tracker map checks passed');
+
+  // Guest Mode (#163): shown only as the bridge saved it; the bridge's refusal is the toast.
+  for (let i; (i = calls.findIndex(c => c.path === '/api/guest')) >= 0;) calls.splice(i, 1);  // earlier panel refreshes
+  context.loadGuest();
+  await answer('/api/guest', 200, {active:false, allowed:[], approvable:['house_guide','timers'], owner_only:['traffic']});
+  assert.equal(get('guest-mode').textContent, 'guest mode: off');
+  assert.deepEqual(get('guest-allowed').children.map(l => [l.children[0].checked, l.children[1].textContent]), [[false,'house guide'],[false,'timers']]);
+  let guestAsk = '';
+  context.confirm = text => { guestAsk = text; return true; };
+  get('guest-mode').onclick();
+  assert.match(guestAsk, /every voice as a guest/);
+  assert.equal(get('guest-mode').textContent, 'guest mode: off', 'not shown as on before the bridge saves it');
+  await answer('/api/guest', 200, {active:true, allowed:[], approvable:['house_guide','timers'], owner_only:['traffic']});
+  assert.equal(get('guest-mode').textContent, 'guest mode: on');
+  assert.equal(get('notice').textContent, 'Guest mode is on.');
+  const timersBox = get('guest-allowed').children[1].children[0];
+  timersBox.checked = true; timersBox.onchange();
+  assert.deepEqual(JSON.parse(calls.find(c => c.path === '/api/guest').init.body), {allowed:['timers']});
+  await answer('/api/guest', 403, {message:'This control only works on the Eddie computer.'});
+  assert.equal(get('notice').textContent, 'Guest mode not saved: This control only works on the Eddie computer.');
+  assert.equal(get('guest-allowed').children[1].children[0].checked, false, 'a refused change is not shown');
+  console.log('Frontend guest mode checks passed');
 })().catch(error => { console.error(error); process.exit(1); });

@@ -68,7 +68,7 @@ Dashboard at http://localhost:5173, API at http://localhost:8000. The traffic AP
 ### Household
 - **Kid mode** (#119, built) — mark a device as a child's in the dashboard's device list, then "turn on kid mode" (or the dashboard switch) locks every child's device down to the kid-safe list after a yes
 - **Guest mode** — Airbnb/short-term rental: guests see that the house isn't watching them
-- **House guide** (#165, built) — guests ask about Wi-Fi, checkout, towels or parking and Eddie quotes the owner's local `voice/house_guide.json`; owner-only entries are never spoken (concierge roles, #163, aren't built yet)
+- **House guide** (#165, built) — guests ask about Wi-Fi, checkout, towels or parking and Eddie quotes the owner's local `voice/house_guide.json`; owner-only entries are spoken only while Guest Mode (#163) is off
 - **Multiple voices** — recognize household members, with per-person permissions
 
 ### Personal assistant

@@ -292,8 +292,31 @@ async function undoAnswer() {
 }
 for (const b of $('question-actions').children) b.onclick = () => answerQuestion(b.dataset.answer);
 $('question-undo').onclick = undoAnswer;
+// Guest Mode (#163): the owner's switch and what guests may use, shown only as the bridge saved it.
+// Only the Eddie computer may change it; a paired iPad gets the bridge's 403 as a notice.
+const GUEST_LABELS = {house_guide: 'house guide', timers: 'timers', tv: 'tv', lights: 'lights', thermostat: 'thermostat'};
+let guest = null;
+function renderGuest() {
+  const button = $('guest-mode');
+  button.disabled = !guest; button.setAttribute('aria-pressed', String(!!guest?.active));
+  button.textContent = `guest mode: ${!guest ? '…' : guest.active ? 'on' : 'off'}`;
+  $('guest-note').textContent = !guest ? '' : `${guest.active ? 'every voice is a guest. ' : ''}guests may use:`;
+  $('guest-allowed').replaceChildren(...(guest ? guest.approvable.map(c => {
+    const label = document.createElement('label'), box = document.createElement('input'), name = document.createElement('span');
+    box.type = 'checkbox'; box.checked = guest.allowed.includes(c); name.textContent = GUEST_LABELS[c] || c;
+    box.onchange = () => saveGuest({allowed: box.checked ? [...guest.allowed, c] : guest.allowed.filter(x => x !== c)});
+    label.append(box, name); return label;
+  }) : []));
+}
+async function loadGuest() { try { const r = await fetch('/api/guest'); if (!r.ok) throw Error(); guest = await r.json(); } catch { guest = null; } renderGuest(); }
+async function saveGuest(change) {
+  try { const r = await control('/api/guest', change); const data = await r.json(); if (!r.ok) throw Error(data.message); guest = data; if ('active' in change) notice(`Guest mode is ${data.active ? 'on' : 'off'}.`); }
+  catch (e) { notice(`Guest mode not saved: ${e.message || 'the bridge did not answer.'}`); }
+  renderGuest();
+}
+$('guest-mode').onclick = () => guest && (guest.active || confirm("Turn on guest mode? Until you turn it off here, Eddie treats every voice as a guest: no traffic, reports, rules, modes or contacts, only what you tick below.")) && saveGuest({active: !guest.active});
 // Counts move with traffic, so the panels refresh every 30 s as well as on (re)connect.
-function refreshPanels() { clearTimeout(refreshPanels.timer); refreshPanels.timer = setTimeout(refreshPanels, 30000); loadDevices(); loadModes(); loadQuestions(); }
+function refreshPanels() { clearTimeout(refreshPanels.timer); refreshPanels.timer = setTimeout(refreshPanels, 30000); loadDevices(); loadModes(); loadQuestions(); loadGuest(); }
 // ACR blocker (#104): the latest acr_detected per device and domain, newest first.
 const acrSeen = new Map();
 function renderAcr() {
@@ -475,4 +498,5 @@ $('open-devices').onclick = () => toggleDevices($('devices-sheet').hidden);
 $('close-devices').onclick = () => { toggleDevices(false); $('open-devices').focus(); };
 connectTraffic();
 loadRules();
+loadGuest();
 refreshPanels();

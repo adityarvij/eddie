@@ -10,6 +10,7 @@ import urllib.request
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import guest
 import house_guide
 import texting
 import timers
@@ -24,6 +25,11 @@ def request(path, body=None, timeout=3, method=None):
     req = urllib.request.Request(base + path, data=data, headers=headers, method=method)
     with urllib.request.urlopen(req, timeout=timeout) as response:
         return json.load(response)
+
+
+# Guest Mode (#163). In memory here; frontend/serve.py swaps in the file-backed profile.
+# Every tool below checks profile.check(category) before it runs.
+profile = guest.Profile()
 
 
 HOME_MODE_TOOL = {
@@ -966,6 +972,10 @@ RISKY_ACTIONS = {'allow': allow_patterns, 'lockdown': lockdown_device, 'block': 
                  'approve': lambda **args: decide_new_device('approve', **args),
                  'deny': lambda **args: decide_new_device('deny', **args)}
 RISKY_COMMANDS = [away_command]
+# Each risky action's permission category (#163); Confirmation checks it before asking and again before running.
+RISKY_CATEGORIES = {'allow': 'rules', 'lockdown': 'rules', 'block': 'rules', 'question': 'rules',
+                    'home_mode': 'modes', 'away': 'modes', 'kid_mode': 'modes', 'text': 'contacts',
+                    'approve': 'devices', 'deny': 'devices'}
 
 
 class Confirmation:
@@ -979,6 +989,9 @@ class Confirmation:
     def request(self, kind, args, prompt, seconds=None):
         if kind not in RISKY_ACTIONS:
             raise ValueError('Unknown risky action')
+        denied = profile.check(RISKY_CATEGORIES[kind])
+        if denied:
+            return denied
         with self.lock:
             replaced = self.pending is not None
             self.pending = {'kind': kind, 'args': dict(args), 'prompt': prompt,
@@ -1020,6 +1033,10 @@ class Confirmation:
                 pending['reprompted'] = True
                 return f"I need a yes or no. {pending['prompt']}"
             self.pending = None
+        # Guest Mode may have come on since the owner asked: a guest's yes never runs it.
+        denied = profile.check(RISKY_CATEGORIES[pending['kind']])
+        if denied:
+            return denied
         try:
             return str(RISKY_ACTIONS[pending['kind']](**pending['args']))
         except Exception:
@@ -1039,9 +1056,8 @@ intent_model = None
 phrase_inferences = None
 # Timers and reminders (#122). In memory here; frontend/serve.py swaps in the file-backed store and rings them.
 timer_store = timers.Timers()
-# Whose house-guide entries Eddie may speak (#165). Guest until concierge roles (#163) say who is
-# talking, so owner-only entries never reach a voice answer yet.
-house_guide_role = 'guest'
+# A guest's own timers and reminders (#163), in memory only, so a guest never hears or cancels the household's.
+guest_timers = timers.Timers()
 # Turns the microphone off (#128): callable() -> True if it was on. Set by frontend/serve.py;
 # None when there's no microphone to stop (tests, typed-only use).
 microphone_off = None
@@ -1102,60 +1118,70 @@ def route(text):
     raw = text.strip()
     text = re.sub(r'[^a-z0-9\s]', '', text.lower()).strip()
     text = re.sub(r'\s+', ' ', text)
+    # Each tool checks its permission category first (#163): in Guest Mode, anything not
+    # approved gets a fixed refusal before any lookup, so it never names a device or contact.
     if STOP_MIC.fullmatch(text):
-        return stop_microphone()
+        return profile.check('microphone_off') or stop_microphone()
     # A new risky command replaces any pending one; otherwise a pending action
     # consumes the reply, including missed speech.
     new_device = NEW_DEVICE.fullmatch(words(raw))
     if new_device:
-        command = new_device_request(new_device['verb'])
+        command = profile.check('devices') or new_device_request(new_device['verb'])
         return command if isinstance(command, str) else confirmation.request(*command)
     allow = allow_target(raw)
     if allow and allow[0] in ('service', 'wildcard'):
-        return confirmation.request(*allow_request(*allow))
+        return profile.check('rules') or confirmation.request(*allow_request(*allow))
     kid_mode = kid_mode_target(raw)
     if kid_mode is not None:
-        command = kid_mode_request(kid_mode)
+        command = profile.check('modes') or kid_mode_request(kid_mode)
         return command if isinstance(command, str) else confirmation.request(*command)
     lockdown = lockdown_target(raw)
     if lockdown and lockdown[1]:
-        command = lockdown_request(*lockdown)
+        command = profile.check('rules') or lockdown_request(*lockdown)
         return command if isinstance(command, str) else confirmation.request(*command)
-    command = text_request(raw)
-    if command:
+    if texting.VERB.fullmatch(raw):
+        command = profile.check('contacts') or text_request(raw)
         return command if isinstance(command, str) else confirmation.request(*command, seconds=TEXT_CONFIRM_SECONDS)
-    for parse in RISKY_COMMANDS:
+    for parse in RISKY_COMMANDS:  # away mode only
         command = parse(text)
         if command:
-            return command if isinstance(command, str) else confirmation.request(*command)
+            return (profile.check('modes') or command) if isinstance(command, str) else confirmation.request(*command)
     pending_reply = confirmation.reply(text)
     if pending_reply is not None:
         return pending_reply
     if not text:
         return "Didn't catch that. Try again."
-    reply = timers.handle(timer_store, raw)
+    # A guest gets a separate store, so the household's reminders are never read out or cancelled.
+    # Without permission the command runs against a throwaway store, only to know it was one.
+    store = timer_store if profile.role() == 'owner' else guest_timers
+    reply = timers.handle(store if profile.allows('timers') else timers.Timers(), raw)
     if reply is not None:
-        return reply
+        return profile.check('timers') or reply
     if not (WHAT_THEY_KNOW.search(text) or EMPTY_HOUSE.search(text) or PRIVACY_TIPS.search(text)):
-        reply = house_guide.answer(raw, house_guide_role)
+        # The house guide (#165) speaks owner entries only to the owner (Guest Mode off). A guest
+        # needs house_guide approved; a refused guest question is matched against guest entries only.
+        reply = house_guide.answer(raw, profile.role())
         if reply is not None:
-            return reply
+            return profile.check('house_guide') or reply
     # Match the entire request so negations, questions and additional actions
     # cannot accidentally activate a privacy setting.
     on = re.fullmatch(r'(?:please )?(?:(?:turn|switch) on home mode|(?:turn|switch) home mode on|enable home mode|(?:i want|id like) home mode (?:on|enabled)|(?:can|could|would) you (?:turn on|enable) home mode)(?: please)?', text)
     off = re.fullmatch(r'(?:please )?(?:(?:turn|switch) off home mode|(?:turn|switch) home mode off|disable home mode|(?:i want|id like) home mode (?:off|disabled)|(?:can|could|would) you (?:turn off|disable) home mode)(?: please)?', text)
     if on or off:
-        return home_mode_reply(bool(on))
+        return profile.check('modes') or home_mode_reply(bool(on))
     block = block_target(raw)
     if block and block != ('domain', None):
-        return block_command(*block)
+        return profile.check('rules') or block_command(*block)
     if allow and allow[0] != 'unknown':
-        return allow_command(*allow)
+        return profile.check('rules') or allow_command(*allow)
     if UNDO.fullmatch(text):
-        return undo_command()
+        return profile.check('rules') or undo_command()
     # A change the commands above can't parse ("lock down the TV to Netflix") goes to the
     # local model, whose write tools only reach confirmation; without it, nothing changes.
     if block or allow or re.search(r'\b(block|allow|lock|undo|email|send|mode)\b', text):
+        denied = profile.check('rules')
+        if denied:
+            return denied
         reply = ask_model(raw) if ask_model is not None else None
         if reply is not None:
             return reply
@@ -1165,6 +1191,9 @@ def route(text):
             return ALLOW_UNRESOLVED
         return "I haven't changed anything. I can block or allow a domain, allow a service like Netflix, lock down a device, allow or deny a new device, undo my last rule, or turn home, away or kid mode on or off; email isn't connected yet."
     if WHAT_THEY_KNOW.search(text):
+        denied = profile.check('reports')
+        if denied:
+            return denied
         try:
             report = what_they_know(report_hours(raw))
         except Exception:
@@ -1177,15 +1206,28 @@ def route(text):
                 return " ".join(filter(None, (report.get('notice'), reply)))
         return str(report['text'])
     if EMPTY_HOUSE.search(text):
+        denied = profile.check('reports')
+        if denied:
+            return denied
         try:
             return str(burglars_eye(report_hours(raw))['text'])
         except Exception:
             return "I can't reach Eddie’s traffic backend, so I can't say when the house looked empty right now."
     if PRIVACY_TIPS.search(text):
+        denied = profile.check('devices')
+        if denied:
+            return denied
         try:
             return str(privacy_suggestions()['text'])
         except Exception:
             return "I can't read Eddie's device list right now, so I can't suggest privacy settings."
+    if profile.role() == 'guest':
+        # The local model's tools are all household data; guest concierge routing is #166.
+        if text in ('hello', 'hi', 'hey', 'hey eddie'):
+            return f"Hey, I'm Eddie. {guest.HELP}"
+        if re.search(r'\b(summary|update|happening|going|requests|blocked|doing|activity)\b', text):
+            return profile.check('traffic')
+        return guest.HELP
     if text in ('hello', 'hi', 'hey', 'hey eddie'):
         return "Hey, I'm Eddie. Ask me what's been going on, tell me to block a domain, or to turn home mode on or off."
     if intent_model is not None:
@@ -1198,7 +1240,7 @@ def route(text):
             return reply
     if re.search(r'\b(summary|update|happening|going|requests|blocked|doing|activity)\b', text):
         try:
-            return str(request('/summary')['text'])
+            return profile.check('traffic') or str(request('/summary')['text'])
         except Exception:
             return "I can't reach Eddie’s traffic backend, so I don't have a current summary."
     return "Try asking what's been going on, or say turn on home mode."
