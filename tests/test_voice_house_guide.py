@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'voice'))
+import guest
 import house_guide
 import voice_agent
 
@@ -118,21 +119,29 @@ class RouterTests(unittest.TestCase):
     def setUp(self):
         self.guide = GuideFile(EXAMPLE.read_text())
         self.guide.__enter__()
+        self.profile = voice_agent.profile
+        voice_agent.profile = guest.Profile()
 
     def tearDown(self):
         self.guide.__exit__()
         voice_agent.ask_model = None
-        voice_agent.house_guide_role = 'guest'
+        voice_agent.profile = self.profile
 
     def test_router_answers_from_the_guide_before_the_model(self):
         voice_agent.ask_model = lambda text: self.fail('the model must not see guide questions')
         self.assertEqual(voice_agent.respond("What's the Wi-Fi password?"), WIFI)
         self.assertEqual(voice_agent.respond('where is the hot tub'), house_guide.DONT_KNOW)
 
-    def test_router_speaks_only_guest_entries_until_roles_exist(self):
-        self.assertEqual(voice_agent.respond('what is the alarm code'), house_guide.DONT_KNOW)
-        voice_agent.house_guide_role = 'owner'
+    def test_owner_entries_only_while_guest_mode_is_off(self):
         self.assertEqual(voice_agent.respond('what is the alarm code'), SECRET)
+        voice_agent.profile.update(active=True, allowed=['house_guide'])
+        self.assertEqual(voice_agent.respond('what is the alarm code'), house_guide.DONT_KNOW)
+        self.assertEqual(voice_agent.respond("What's the Wi-Fi password?"), WIFI)
+
+    def test_guests_need_the_guide_approved(self):
+        voice_agent.profile.update(active=True)
+        for said in ("What's the Wi-Fi password?", 'what is the alarm code', 'where is the hot tub'):
+            self.assertEqual(voice_agent.respond(said), guest.NOT_APPROVED_REPLY, said)
 
     def test_traffic_questions_still_reach_the_backend(self):
         with patch('voice_agent.what_they_know', return_value={'text': 'From the backend.'}):

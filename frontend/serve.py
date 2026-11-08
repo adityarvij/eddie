@@ -20,6 +20,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT.parent / 'voice'))
+import guest
 import timers
 import voice_agent
 from voice_agent import confirmation, forget_conversation, kid_mode_change, question_announcement, request as api_request, respond
@@ -92,6 +93,10 @@ def authorized(header):
     scheme, _, value = (header or '').partition(' ')
     return scheme.lower() == 'bearer' and hmac.compare_digest(value.strip().encode(), token.encode())
 
+def ollama_agent_enabled(env=None):
+    """The generative voice agent is an explicit opt-in; MiniLM is independent."""
+    return (os.environ if env is None else env).get('EDDIE_AGENT', 'off') != 'off'
+
 def lan_ip():
     """This machine's address on its default route, or None when offline. Nothing is sent."""
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -154,9 +159,10 @@ def answer(text, reply=None, alarm=None):
 def ring_timers():
     """Ring timers and reminders as they come due (#122), whether or not the microphone is on."""
     while True:
-        for item in voice_agent.timer_store.take_due():
-            title, text = timers.announcement(item, datetime.now())
-            answer(text, reply=str, alarm=title)
+        for store in (voice_agent.timer_store, voice_agent.guest_timers):
+            for item in store.take_due():
+                title, text = timers.announcement(item, datetime.now())
+                answer(text, reply=str, alarm=title)
         time.sleep(1)
 
 def microphone_off():
@@ -176,8 +182,9 @@ def microphone():
             if event.get('type') == 'voice_status':
                 voice_state.update({key: value for key, value in event.items() if key != 'type'})
             emit(event)
-            if event.get('type') == 'wake':
+            if event.get('type') == 'wake' and voice_agent.profile.role() == 'owner':
                 # Ask before blocking (#79): an open question is read out once, as Eddie wakes.
+                # Never to a guest (#163): it names household devices and domains.
                 question = question_announcement()
                 if question:
                     answer(question, reply=str)
@@ -192,6 +199,28 @@ def microphone():
         if stopped.is_set():
             voice_state['status'] = 'off'
             emit({'type': 'voice_status', 'status': 'off'})
+
+def update_guest(body):
+    """(status, payload) for the owner's Guest Mode change (#163) from the Eddie computer.
+
+    Any switch drops a pending yes/no and the remembered domain, so neither carries over between
+    owner and guest; turning it off forgets the guest's timers.
+    """
+    if not isinstance(body, dict) or not set(body) <= {'active', 'allowed'} or not body:
+        return 400, {'message': 'Expected active and/or allowed.'}
+    was = voice_agent.profile.role()
+    try:
+        view = voice_agent.profile.update(body.get('active'), body.get('allowed'))
+    except ValueError as error:
+        return 400, {'message': str(error)}
+    except OSError:
+        return 500, {'message': 'Could not save the guest profile. Nothing changed for guests.'}
+    if view['active'] != (was == 'guest'):
+        confirmation.cancel()
+        forget_conversation()
+        if not view['active']:
+            voice_agent.guest_timers = timers.Timers()
+    return 200, view
 
 def undo_answer(question_id):
     """(status, payload) after deleting the rules a dashboard answer wrote, newest first.
@@ -245,6 +274,8 @@ class Handler(SimpleHTTPRequestHandler):
     def do_GET(self):
         if self.path == '/api/voice/status':
             return self.json_response(200, {'type': 'voice_status', **voice_state})
+        if self.path == '/api/guest':
+            return self.json_response(200, voice_agent.profile.view())
         if self.path in READ_RELAYS:
             path, failure = READ_RELAYS[self.path]
             try:
@@ -326,6 +357,9 @@ class Handler(SimpleHTTPRequestHandler):
             if voice_thread and voice_thread.is_alive():
                 dismissed.set()
             return self.json_response(200, {'ok': True})
+        if self.path == '/api/guest':
+            # Not in PAIRED_CONTROLS: only the Eddie computer changes what guests may use.
+            return self.json_response(*update_guest(body))
         if self.path == '/api/voice/ask':
             text = str(body.get('text', '')).strip()[:1000]
             if not text:
@@ -374,12 +408,14 @@ class Handler(SimpleHTTPRequestHandler):
             except Exception:
                 return self.json_response(502, {'message': 'The traffic API did not confirm the change.'})
         if self.path == '/api/devices/update':
-            # Name a device, or mark it as a child's or an adult's (#119): {mac, label?, kid?} -> PUT /devices/<mac>.
+            # Name a device, or mark it as a child's, phone, or security device: {mac, label?, kid?, phone?, security?} -> PUT /devices/<mac>.
             mac = body.get('mac') if isinstance(body, dict) else None
-            change = {k: body[k] for k in ('label', 'kid') if isinstance(body, dict) and k in body}
+            change = {k: body[k] for k in ('label', 'kid', 'phone', 'security') if isinstance(body, dict) and k in body}
             if (not device_key(mac) or not change or ('kid' in change and not isinstance(change['kid'], bool))
-                    or ('label' in change and not isinstance(change['label'], (str, type(None))))):
-                return self.json_response(400, {'message': 'Expected a device and a label or kid.'})
+                    or ('phone' in change and not isinstance(change['phone'], bool))
+                    or ('label' in change and not isinstance(change['label'], (str, type(None))))
+                    or ('security' in change and not isinstance(change['security'], bool))):
+                return self.json_response(400, {'message': 'Expected a device and a label, kid, phone or security.'})
             try:
                 return self.json_response(200, api_request(f'/devices/{mac}', change, timeout=5, method='PUT'))
             except urllib.error.HTTPError as error:
@@ -432,7 +468,9 @@ if __name__ == '__main__':
         print('Local question intents: MiniLM ONNX (offline).', flush=True)
     except Exception as error:
         print(f'Local question intents off: {error}.', flush=True)
-    if os.environ.get('EDDIE_AGENT', 'ollama') != 'off':
+    # MiniLM and the deterministic command parsers cover the supported voice path.
+    # Ollama is an explicit development opt-in because it is too slow on the Pi.
+    if ollama_agent_enabled():
         import ollama_agent
         import voice_agent
         try:
@@ -446,6 +484,10 @@ if __name__ == '__main__':
     voice_agent.timer_store = timers.Timers(None if timers_file == 'off' else timers_file)
     if voice_agent.timer_store.load_error:
         print(voice_agent.timer_store.load_error, flush=True)
+    guest_file = os.environ.get('EDDIE_GUEST_FILE', str(ROOT.parent / 'voice' / 'guest.json'))
+    voice_agent.profile = guest.Profile(None if guest_file == 'off' else guest_file)
+    if voice_agent.profile.load_error:
+        print(voice_agent.profile.load_error, flush=True)
     threading.Thread(target=ring_timers, daemon=True).start()
     print(f'Eddie dashboard: http://localhost:{args.port}', flush=True)
     if not is_local(args.host):

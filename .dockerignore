@@ -10,4 +10,5 @@ eddie.db-*
 eddie/data/geoip
 voice/timers.json*
 voice/contacts.json
+voice/guest.json*
 voice/house_guide.json

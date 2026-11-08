@@ -343,6 +343,10 @@ def burglars_eye(hours=None):
 HANDLERS = {'get_summary': get_summary, 'get_recent_blocks': get_recent_blocks,
             'explain_domain': explain_domain, 'what_they_know': what_they_know,
             'burglars_eye': burglars_eye}
+# Each tool's Guest Mode permission category (#163), checked before it runs. Write tools
+# are checked by voice_agent.confirmation.request.
+TOOL_CATEGORIES = {'get_summary': 'traffic', 'get_recent_blocks': 'traffic', 'explain_domain': 'traffic',
+                   'what_they_know': 'reports', 'burglars_eye': 'reports', 'stop_microphone': 'microphone_off'}
 
 NUMBER_WORDS = {'two': 2, 'three': 3, 'four': 4, 'five': 5, 'six': 6, 'seven': 7, 'eight': 8, 'nine': 9,
                 'ten': 10, 'eleven': 11, 'twelve': 12, 'thirteen': 13, 'fourteen': 14, 'fifteen': 15,
@@ -420,7 +424,7 @@ class Agent:
             if not calls:
                 return self.checked(str(message.get('content') or ''), results)
             if any(tool_name(call) == 'stop_microphone' for call in calls):
-                return voice_agent.stop_microphone()
+                return voice_agent.profile.check('microphone_off') or voice_agent.stop_microphone()
             writes = [call for call in calls if tool_name(call) in WRITE_SCHEMAS]
             if writes:
                 return self.write(writes)
@@ -466,6 +470,9 @@ class Agent:
         name, args = tool_name(call), tool_args(call)
         if name not in HANDLERS:
             return str(name), {'error': f'Unknown tool. Available: {", ".join(HANDLERS)}.'}
+        denied = voice_agent.profile.check(TOOL_CATEGORIES[name])
+        if denied:
+            return name, {'error': denied}
         if not isinstance(args, dict):
             return name, {'error': 'Arguments must be a JSON object.'}
         try:

@@ -172,7 +172,7 @@ class OfflineAPITests(unittest.IsolatedAsyncioTestCase):
             await self.http.post('/offline-mode', json={'offline': True})
         watcher = dns_server.StoreWatcher(self.path, decision.Engine(), self.mode)
         self.assertTrue(watcher.poll())
-        watcher.conn.close()
+        watcher.close()
         self.assertTrue(self.mode.on)
         self.assertTrue((await self.http.get('/mode')).json()['offline_applied'])
 

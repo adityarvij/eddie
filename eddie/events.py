@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 # spoof (#99): answered with Eddie's own IP so the stub server (spoof_server.py) replies.
 Action = Literal["allow", "block", "flag", "spoof"]
-Source = Literal["rule", "allowlist", "blocklist", "heuristic", "ai", "home_mode", "away_mode", "quarantine", "default"]
+Source = Literal["rule", "allowlist", "blocklist", "heuristic", "ai", "home_mode", "away_mode", "sensitivity", "quarantine", "default"]
 
 
 class QueryEvent(BaseModel):
@@ -57,6 +57,12 @@ class GeoAlertEvent(BaseModel):
 
 class QuarantineUpdate(BaseModel):
     quarantine: bool
+
+
+class SensitivityUpdate(BaseModel):
+    """Turn one sensitivity mode (#110, sensitivity.py) on or off."""
+    mode: Literal["health", "kids", "money", "beliefs"]
+    on: bool
 
 
 MAX_AWAY_MS = 30 * 86_400_000  # away mode's end time is at most 30 days ahead

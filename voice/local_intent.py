@@ -17,18 +17,47 @@ EXAMPLES = {
     'device_activity': (
         "what's the TV doing", "what's my TV been up to",
         'what do you think the Fire Stick is doing', 'show me the Roku activity',
+        'tell me about the Chromecast traffic', 'how active has the television been',
+        'is my streaming device talking to the internet', 'what has the set top box contacted',
+        'is my phone talking to anyone', 'what is my laptop connecting to',
     ),
     'summary': (
         "what's been going on", 'give me an overall summary',
         'how is the network doing', 'catch me up on the house',
+        'give me the big picture for my network', 'has anything happened today',
+        'tell me the highlights', 'what should I know about the network', 'give me a broad overview',
+        'show me the whole picture',
+        "what's new", 'any updates', 'how are things at home', 'give me a quick recap',
+        'what happened recently', 'anything going on lately', 'how is everything in the house',
+        'summarize what happened today',
     ),
     'recent_blocks': (
         'what got blocked recently', 'show me the latest blocks',
         'which trackers did you just stop', 'recent blocked requests',
+        'what sites have you stopped lately', 'show the newest denied traffic',
+        'have you blocked any trackers recently', 'list the last things you blocked',
+        'which websites did you block most recently',
+        'did you stop anything recently', 'which sites got blocked', 'what domains have you blocked',
+        'did Eddie block anything today',
     ),
     'why_blocked': (
         'why was example.com blocked', 'why did you block that domain',
         'explain why ads.example.com was stopped', 'what made that tracker get blocked',
+        'explain the block on example.com', 'why did you deny telemetry.example.com',
+        'what was wrong with tracker.example.com', 'give me the reason that domain was blocked',
+    ),
+    # Negative anchors make the similarity threshold useful near neighboring
+    # commands and question families. They never become a routable intent.
+    None: (
+        'block the Fire Stick', 'lock down the Roku', 'allow netflix.com',
+        'turn on home mode', 'undo that', 'set a timer for five minutes',
+        'what do companies know about me', 'when does the house look empty',
+        'give me privacy advice', 'how private is my network',
+        'tell me a joke', 'what time is it',
+        # TV control and listings share "TV" with device questions but aren't about traffic (#192).
+        'switch off the television', 'turn the TV on', "what's on television this evening",
+        'what channel is the game on', 'play Netflix on the TV', 'turn up the volume',
+        "what's the weather", 'thank you Eddie', 'good night',
     ),
 }
 
@@ -87,6 +116,10 @@ def answer(matcher, text, domain_context=None):
         return None
     # Imported lazily so provisioning checks and the command router do not load ONNX.
     import ollama_agent
+    import voice_agent
+    denied = voice_agent.profile.check('traffic')  # every intent reads traffic (#163)
+    if denied:
+        return denied
     try:
         if intent == 'summary':
             return ollama_agent.get_summary('1h').get('spoken_summary_last_hour')

@@ -276,7 +276,7 @@ class WatcherAckTests(unittest.TestCase):
             self.assertEqual(rev, away.loaded(conn))
             self.assertEqual('block', engine.evaluate(TELEMETRY, TV).action)
             self.assertFalse(watcher.poll())
-            watcher.conn.close()
+            watcher.close()
             conn.close()
 
 

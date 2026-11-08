@@ -51,7 +51,7 @@ import time
 
 from dnslib import AAAA, QTYPE, RCODE, RR, A, DNSRecord
 
-from . import away, decision, devices, geoip, home, lists, offline, quarantine, rules
+from . import away, decision, devices, geoip, home, lists, offline, quarantine, rules, sensitivity
 from . import store
 from .feed import FeedPublisher, feed_from_env, query_event
 from .store import QueryLog, query_log_from_env
@@ -325,12 +325,15 @@ async def serve_tcp(host: str, port: int, upstreams: list[tuple[str, int]],
 
 
 class StoreWatcher:
-    """Reloads rules, AI verdicts, offline, away and home mode and quarantine when they change.
+    """Reloads rules, AI verdicts, offline, away, home and sensitivity modes and quarantine when they change.
 
-    After a reload it records the rules, offline, away, quarantine and home
-    revisions it loaded (rules.mark_loaded, offline.mark_loaded, away.mark_loaded,
-    quarantine.mark_loaded, home.mark_loaded): the API's proof that DNS is
-    enforcing a change.
+    After a reload it records the rules, offline, away, quarantine, home and
+    sensitivity revisions it loaded (rules.mark_loaded, offline.mark_loaded,
+    away.mark_loaded, quarantine.mark_loaded, home.mark_loaded,
+    sensitivity.mark_loaded): the API's proof that DNS is enforcing a change.
+
+    poll runs in a worker thread that cancelling watch_store can't stop, so
+    close takes the same lock: the connection is never closed mid-poll.
     """
 
     def __init__(self, path: str, engine: decision.Engine = decision.engine, mode: offline.Mode | None = None):
@@ -338,19 +341,19 @@ class StoreWatcher:
         self.engine = engine
         self.mode = mode or offline_mode
         self.seen = None
-        # Cancelling watch_store doesn't stop a poll already in its worker
-        # thread; closing the connection under it can crash sqlite.
         self.lock = threading.Lock()
+        self.closed = False
 
     def close(self) -> None:
-        """Close the connection once no poll is using it."""
+        """Close the connection once any poll in progress has finished."""
         with self.lock:
+            self.closed = True
             self.conn.close()
 
     def poll(self) -> bool:
         """Reload if rules or verdicts changed since the last poll. True if it did."""
         with self.lock:
-            return self._poll()
+            return not self.closed and self._poll()
 
     def _poll(self) -> bool:
         changed = self.conn.execute(
@@ -360,7 +363,8 @@ class StoreWatcher:
             " (SELECT ifnull(max(value), 0) FROM engine_state WHERE key = 'offline_rev'),"
             " (SELECT ifnull(max(value), 0) FROM engine_state WHERE key = 'away_rev'),"
             " (SELECT ifnull(max(value), 0) FROM engine_state WHERE key = 'quarantine_rev'),"
-            " (SELECT ifnull(max(value), 0) FROM engine_state WHERE key = 'home_rev')").fetchone()
+            " (SELECT ifnull(max(value), 0) FROM engine_state WHERE key = 'home_rev'),"
+            " (SELECT ifnull(max(value), 0) FROM engine_state WHERE key = 'sensitivity_rev')").fetchone()
         if changed == self.seen:
             return False
         self.engine.load_from_store(self.conn)
@@ -374,6 +378,7 @@ class StoreWatcher:
         away.mark_loaded(self.conn, changed[4])
         quarantine.mark_loaded(self.conn, changed[5])
         home.mark_loaded(self.conn, changed[6])
+        sensitivity.mark_loaded(self.conn, changed[7])
         self.seen = changed
         return True
 

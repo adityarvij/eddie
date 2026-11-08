@@ -20,6 +20,11 @@ First match wins:
    domain labelled telemetry, ads, analytics or tracking (labels.py) is
    blocked here, and steps 5 and 6 block where they would flag a tracker
    or a beacon. Source away_mode.
+   Sensitivity modes (#110, sensitivity.py): within WINDOW_MS after a device
+   looks up a first-party domain of a protected category (the pharmacy site
+   itself), its lookups of labelled trackers, data brokers and AI "tracker"
+   verdicts are blocked here, source sensitivity. The first-party domain
+   opens the window at any step, so a rule allowing it still counts.
 5. Cached AI verdict: needed allows; tracker flags as a likely tracker;
    unsure flags. The AI never blocks on its own: on real traffic the local
    model called Google's static files, Apple's update servers and Safe
@@ -33,7 +38,8 @@ First match wins:
 
 This runs on the DNS hot path: no model calls, no network, no disk. Everything
 it reads is in memory; the only state it writes is the bounded in-memory
-lookup timing for unknown and ACR domains (beacons.Beacons, acr_caught). Writers (rules API #12, list loader #8, classifier #27, quarantine #98)
+lookup timing for unknown and ACR domains (beacons.Beacons, acr_caught) and
+the sensitivity windows (Engine.windows). Writers (rules API #12, list loader #8, classifier #27, quarantine #98)
 replace whole snapshots with set_rules / set_lists / set_verdicts / set_quarantined instead of
 mutating them, so a lookup never sees a half-updated table.
 
@@ -52,7 +58,7 @@ import time
 from collections import OrderedDict
 from dataclasses import dataclass
 
-from . import acr, quarantine
+from . import acr, quarantine, sensitivity
 from .beacons import Beacons
 from .bypass import RESOLVERS
 from .events import Action, Source
@@ -66,12 +72,22 @@ UNKNOWN = "unknown, waiting for classifier"
 BEACON = "looked up every {} s, likely telemetry; waiting for classifier"
 ACR_BLOCK = "ACR ({}): looked up every {} s, likely sending what's on screen"
 MAX_ACR = 10_000  # device and ACR domain pairs kept blocked; least recently seen are dropped
+MAX_WINDOWS = 10_000  # devices with an open sensitivity window; least recently opened are dropped
+SENSITIVE = "{} protection: {} is a third-party tracker, looked up within {} min of a protected site"
 QUARANTINE = "new device, quarantined until approved"
 DENIED = "device denied"
 
 _WORD_SPLIT = re.compile(r"[^a-z]+")
 # Labelled tracking domains (labels.py) away mode blocks for the devices it covers.
 TELEMETRY = frozenset(d for d, (_, category) in DOMAINS.items() if category in TRACKING)
+# Device names/hostnames auto-classified as security devices (exempt from home mode #46).
+SECURITY_DEVICE_WORDS = re.compile(r"\b(?:doorbell|alarm|outdoor|floodlight|chime|front door|back door|driveway|backyard)\b", re.IGNORECASE)
+
+
+def is_security_device(label: str | None = None, hostname: str | None = None) -> bool:
+    """Returns True if the label or hostname matches outdoor/security hardware (#46)."""
+    words = f"{label or ''} {hostname or ''}"
+    return bool(SECURITY_DEVICE_WORDS.search(words))
 # Camera upload domains blocked when home mode is active (#43).
 CAMERA_DOMAINS = frozenset({
     "ring.com",
@@ -202,6 +218,10 @@ class Engine:
         self.acr_caught: OrderedDict[tuple[str, str], int] = OrderedDict()  # (device, domain) -> interval ms
         self.block_doh = False  # block the resolver names in bypass.RESOLVERS
         self.home_mode = False
+        self.security_devices: frozenset[str] = frozenset()
+        self.protected: dict[str, str] = {}  # first-party domain -> sensitivity mode protecting it
+        self.sensitive_trackers: frozenset[str] = frozenset()
+        self.windows: OrderedDict[str, tuple[int, str]] = OrderedDict()  # device -> (until ms, mode)
 
     def set_rules(self, rules) -> None:
         self.rules = RuleIndex(rules)
@@ -217,24 +237,59 @@ class Engine:
         self.quarantined = dict(held)
 
 
+    def set_security_devices(self, devices) -> None:
+        self.security_devices = frozenset(devices)
+
     def set_home_mode(self, on: bool) -> None:
         self.home_mode = bool(on)
 
     def set_away(self, devices, until: int = 0) -> None:
         self.away = Away(frozenset(devices), until)
 
+    def set_sensitivity(self, modes) -> None:
+        """Protect these sensitivity modes; windows opened by a mode now off close at once."""
+        protected, trackers = {}, frozenset()
+        for mode in modes:
+            sites, found = sensitivity.rule_set(mode)
+            protected.update(dict.fromkeys(sites, mode))
+            trackers |= found
+        self.protected = protected
+        self.sensitive_trackers = trackers - frozenset(protected)
+        self.windows = OrderedDict((k, w) for k, w in self.windows.items() if w[1] in protected.values())
+
+    def open_window(self, device: str, domain: str, now_ms: int) -> None:
+        """Note a first-party lookup of a protected category: the device's trackers block for a while."""
+        if site := matches(domain, self.protected):
+            self.windows[device] = (now_ms + sensitivity.WINDOW_MS, self.protected[site])
+            self.windows.move_to_end(device)
+            if len(self.windows) > MAX_WINDOWS:
+                self.windows.popitem(last=False)
+
+    def window(self, device: str, now_ms: int) -> tuple[int, str] | None:
+        """The device's open sensitivity window, or None."""
+        found = self.windows.get(device)
+        return found if found and now_ms < found[0] else None
+
     def load_from_store(self, conn: sqlite3.Connection) -> None:
-        """Replace rules, cached AI verdicts, home and away mode and quarantined devices with what's in eddie.db."""
+        """Replace rules, cached AI verdicts, home, away and sensitivity modes and quarantined devices with what's in eddie.db."""
         self.set_rules(Rule.from_row(r) for r in conn.execute(
             "SELECT id, scope, device_mac, pattern, action FROM rules"))
         self.set_verdicts({d: Verdict(label, confidence, reason or "") for d, label, confidence, reason
                            in conn.execute("SELECT domain, label, confidence, reason FROM ai_verdicts")})
         home_on = conn.execute("SELECT value FROM engine_state WHERE key = 'home_mode'").fetchone()
         self.set_home_mode(bool(home_on and home_on[0]))
+        sec_devs = set()
+        for mac, label, hostname, sec in conn.execute(
+            "SELECT mac, label, hostname, coalesce(security, 0) FROM devices"
+        ):
+            if sec or (label and SECURITY_DEVICE_WORDS.search(label)) or (hostname and SECURITY_DEVICE_WORDS.search(hostname)):
+                sec_devs.add(mac)
+        self.set_security_devices(sec_devs)
         on = conn.execute("SELECT value FROM engine_state WHERE key = 'away'").fetchone()
         end = conn.execute("SELECT value FROM engine_state WHERE key = 'away_until'").fetchone()
         devices = [r[0] for r in conn.execute("SELECT mac FROM away_devices WHERE security = 0")]
         self.set_away(devices if on and on[0] else (), end[0] if end else 0)
+        self.set_sensitivity(sensitivity.wanted(conn))
         status = quarantine.statuses(conn)
         self.set_quarantined({mac: QUARANTINE if status[mac] == quarantine.PENDING else DENIED
                               for mac in quarantine.blocked(conn)})
@@ -258,6 +313,9 @@ class Engine:
             if entry := matches(domain, self.allowlist):
                 return Decision("allow", "allowlist", entry)
             return Decision("block", "quarantine", held)
+        if self.protected:
+            now_ms = int(time.time() * 1000) if now_ms is None else now_ms
+            self.open_window(device, domain, now_ms)
         rule = self.rules.find(domain, device, ip)
         if rule and rule.pattern == "*" and (entry := matches(domain, self.allowlist)):
             return Decision("allow", "allowlist", entry)
@@ -269,7 +327,10 @@ class Engine:
         if entry := matches(domain, self.allowlist):
             return Decision("allow", "allowlist", entry)
         if self.home_mode and (entry := matches(domain, CAMERA_DOMAINS)):
-            return Decision("block", "home_mode", f"home mode: {entry} camera upload blocked")
+            if device in self.security_devices or (ip and ip in self.security_devices):
+                pass  # Security devices (doorbells, outdoor cams, alarms) are exempt from Home Mode (#46)
+            else:
+                return Decision("block", "home_mode", f"home mode: {entry} camera upload blocked")
         if entry := matches(domain, self.blocklist):
             return Decision("block", "blocklist", entry)
         if self.block_doh and (entry := matches(domain, RESOLVERS)):
@@ -282,7 +343,13 @@ class Engine:
         away = self.away.covers(device, ip, now_ms)
         if away and (entry := matches(domain, TELEMETRY)):
             return Decision("block", "away_mode", f"away mode: {entry} telemetry")
-        if verdict := self.verdicts.get(domain):
+        verdict = self.verdicts.get(domain)
+        if self.windows and (opened := self.window(device, now_ms)):
+            entry = matches(domain, self.sensitive_trackers)
+            if entry or (verdict and verdict.label == "tracker" and not matches(domain, self.protected)):
+                return Decision("block", "sensitivity", SENSITIVE.format(
+                    opened[1], entry or domain, sensitivity.WINDOW_MS // 60_000))
+        if verdict:
             if verdict.label == "tracker":
                 if away:
                     return Decision("block", "away_mode", f"away mode: likely tracker: {verdict.reason}"

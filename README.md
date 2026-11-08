@@ -68,7 +68,7 @@ Dashboard at http://localhost:5173, API at http://localhost:8000. The traffic AP
 ### Household
 - **Kid mode** (#119, built) — mark a device as a child's in the dashboard's device list, then "turn on kid mode" (or the dashboard switch) locks every child's device down to the kid-safe list after a yes
 - **Guest mode** — Airbnb/short-term rental: guests see that the house isn't watching them
-- **House guide** (#165, built) — guests ask about Wi-Fi, checkout, towels or parking and Eddie quotes the owner's local `voice/house_guide.json`; owner-only entries are never spoken (concierge roles, #163, aren't built yet)
+- **House guide** (#165, built) — guests ask about Wi-Fi, checkout, towels or parking and Eddie quotes the owner's local `voice/house_guide.json`; owner-only entries are spoken only while Guest Mode (#163) is off
 - **Multiple voices** — recognize household members, with per-person permissions
 
 ### Personal assistant
@@ -172,13 +172,13 @@ For voice, also set up `.venv-frontend` and the models as in [voice/README.md](v
 | `eddie-classifier` | `python -m eddie.classifier` against Ollama (`EDDIE_OLLAMA_URL`, default the Pi's own) | none |
 | `eddie-dashboard` | `scripts/run_voice.sh`, or `frontend/serve.py` without the voice environment | 5173 |
 
-`eddie.target` groups them: `sudo systemctl start|stop|restart eddie.target`, with logs from `journalctl -u 'eddie-*' -f`. `/etc/eddie/eddie.env` (root-only, `0600`) holds a fixed `EDDIE_API_TOKEN` and `EDDIE_DASHBOARD_TOKEN`, so the iPad's pairing link survives reboots. Add any other `EDDIE_*` setting there, such as `EDDIE_DB` for the encrypted volume, `EDDIE_CLASSIFIER_MODEL` or `EDDIE_AGENT_MODEL`. Rerunning `install_pi.sh` keeps the tokens. `./scripts/run_pi.sh` starts the same processes in the foreground with a fresh token, for debugging; Ctrl-C stops them all.
+`eddie.target` groups them: `sudo systemctl start|stop|restart eddie.target`, with logs from `journalctl -u 'eddie-*' -f`. `/etc/eddie/eddie.env` (root-only, `0600`) holds a fixed `EDDIE_API_TOKEN` and `EDDIE_DASHBOARD_TOKEN`, so the iPad's pairing link survives reboots. Add any other `EDDIE_*` setting there, such as `EDDIE_DB` or `EDDIE_CLASSIFIER_MODEL`. Voice and typed asks use deterministic parsers plus the provisioned local MiniLM intent model, so the Ollama voice agent is off by default; set `EDDIE_AGENT=ollama` (and optionally `EDDIE_AGENT_MODEL`) only to opt back into it. Rerunning `install_pi.sh` keeps the tokens. `./scripts/run_pi.sh` starts the same processes in the foreground with a fresh token, for debugging; Ctrl-C stops them all.
 
 Everything runs from the cloned repo as your user, so `eddie.db` lives there unless `EDDIE_DB` says otherwise. Nothing else on Raspberry Pi OS uses port 53 by default; if `eddie-dns` fails with "Can't listen", check `sudo ss -lunp 'sport = :53'`.
 
-**Updating:** develop and merge on the Mac as usual (CI runs the tests on x86 and ARM64). Then on the Pi run `git pull && uv sync --locked && sudo systemctl restart eddie.target`. The restart takes a few seconds, and devices get no DNS answers during it, so don't deploy mid-demo. Ollama is a separate service and keeps its model loaded.
+**Updating:** the Pi follows `main` by itself. Develop and merge on the Mac as usual (CI runs the tests on x86 and ARM64); within 5 minutes `eddie-update.timer` runs `scripts/update_pi.sh`, which fetches `origin/main` and, only if it moved, checks it out, runs `uv sync --locked` (plus the voice requirements or assets if those changed, and `install_pi.sh` if the units did) and restarts `eddie.target`. If a dependency install fails it goes back to the previous commit and restarts nothing. The Pi's checkout is deploy-only: local edits to tracked files are overwritten, while `eddie.db`, `voice/models` and the environments are untracked and kept. The restart takes a few seconds and devices get no DNS answers during it, so **hold updates before a demo** with `sudo touch /etc/eddie/hold` (resume with `sudo rm /etc/eddie/hold`). `sudo systemctl start eddie-update` updates now; `journalctl -u eddie-update` shows what it did. Ollama is a separate service and keeps its model loaded.
 
-**Model speed:** the Pi 5 runs the model on its CPU. Expect typed answers and AI verdicts to be several times slower than on the M1 (not yet measured). DNS doesn't wait on the model, so lookups aren't affected. A smaller model (`EDDIE_AGENT_MODEL` / `EDDIE_CLASSIFIER_MODEL`, such as `llama3.2:1b`) trades accuracy for speed.
+**Model speed:** the Pi 5 runs the domain classifier on its CPU, off the DNS path. Voice does not call Ollama by default: supported questions use the small local intent model and backend-authored answers, and unsupported questions list what Eddie can do. The optional Ollama voice agent is several times slower than on the M1 (not yet measured); if explicitly enabled, a smaller `EDDIE_AGENT_MODEL` such as `llama3.2:1b` trades accuracy for speed.
 
 **Not yet checked on the hardware:** booting the units, binding port 53 through the capability, ARP device names, the speakerphone through the `audio` group, model speed and memory with voice running alongside, and the Mac fallback.
 
@@ -269,7 +269,7 @@ CREATE INDEX q_dev ON queries(device_mac, ts);
 CREATE INDEX t_dev ON traffic(device_mac, last_ts);
 ```
 
-`rules.pattern` matches exact domain or suffix (`*.amazon-adsystem.com`). `scope` = `global` or `device`. `created_by` = `user` (default) / `voice` / `agent`. `traffic` rows are written by the optional traffic monitor: one per device, remote IP, remote port and protocol per minute it saw packets (`port` is 0 for ICMP), with bytes and packets each way. `engine_state` holds `rules_rev` (bumped by every rule write) and `rules_loaded` (the revision the DNS engine last loaded), which `/rules` uses to acknowledge a change; offline and away mode keep their state and revisions there the same way. `away_devices` holds the devices away mode covers (`security = 0`, with their leak score) or exempts (`security = 1`) while it's on, and is emptied when it's turned off. `sensitive_summaries` is what the forget timer leaves of health, beliefs and kids lookups after 24 hours (#111): a lookup count per local day (`YYYY-MM-DD`), device and `category` (`health`, `beliefs` or `kids`), with no domains.
+`rules.pattern` matches exact domain or suffix (`*.amazon-adsystem.com`). `scope` = `global` or `device`. `created_by` = `user` (default) / `voice` / `agent`. `traffic` rows are written by the optional traffic monitor: one per device, remote IP, remote port and protocol per minute it saw packets (`port` is 0 for ICMP), with bytes and packets each way. `engine_state` holds `rules_rev` (bumped by every rule write) and `rules_loaded` (the revision the DNS engine last loaded), which `/rules` uses to acknowledge a change; offline, away and sensitivity modes keep their state and revisions there the same way. `away_devices` holds the devices away mode covers (`security = 0`, with their leak score) or exempts (`security = 1`) while it's on, and is emptied when it's turned off. `sensitive_summaries` is what the forget timer leaves of health, beliefs and kids lookups after 24 hours (#111): a lookup count per local day (`YYYY-MM-DD`), device and `category` (`health`, `beliefs` or `kids`), with no domains.
 
 ### Decision order (first match wins)
 
@@ -279,6 +279,7 @@ CREATE INDEX t_dev ON traffic(device_mac, last_ts);
    **ACR** (#104): a seeded smart-TV content recognition domain (`eddie/acr.py`: Samsung, LG/Alphonso, Vizio/Inscape, Samba TV) that the device looks up on a regular timer (same test as step 6) → `BLOCK`, source `heuristic`, reason "ACR (Samsung): looked up every 15 s, likely sending what's on screen". It stays blocked for that device until the DNS server restarts; until a timer is measured the lookup falls through to the steps below.
 4. **Keyword heuristic:** labels containing `metrics`, `telemetry`, `analytics`, `ads`, `adsystem`, `tracking`, `beacon`, `crashlytics`, `log` → `BLOCK`, source `heuristic`.
    **Away mode** (#109): for a device away mode covers, until its end time, a domain labelled telemetry, ads, analytics or tracking in `eddie/labels.py` → `BLOCK`, source `away_mode`; steps 5 and 6 then block a tracker verdict or a beacon instead of flagging it.
+   **Sensitivity modes** (#110): for 5 minutes after a device looks up a site of a protected category (health, kids, money or beliefs, from the labels in `eddie/labels.py`), its lookups of a labelled tracker (telemetry, ads, analytics, tracking, id-sync), a data broker or ad exchange (`eddie/data/brokers.json`) or a cached AI tracker verdict → `BLOCK`, source `sensitivity`. The site itself is never in that set. DNS can't see which page asked for a tracker, so the window is per device and in time.
 5. **Cached AI verdict:** needed → `ALLOW`; tracker → `FLAG` as a likely tracker; unsure → `FLAG`. The AI never blocks on its own: on real traffic the local model called Google's static files, Apple's update servers and Safe Browsing trackers at 0.8–0.9 confidence. A user rule ("block it"), a list or the keyword heuristic does the blocking.
 6. **Beacon:** an unknown domain the device looks up on a regular timer (gap coefficient of variation ≤ 0.15, see `eddie/beacons.py`) → `FLAG`, source `heuristic`, reason "looked up every 60 s, likely telemetry"; still queued for AI.
 7. **Unknown:** `ALLOW` + `FLAG` now, queue for AI.
@@ -305,6 +306,8 @@ Writes from anywhere but loopback need `Authorization: Bearer $EDDIE_API_TOKEN`,
 | GET | `/summary?window=1h` | Totals: queries, blocked, top blocked domains, top companies, per device, data broker and ad exchange counts |
 | GET | `/what-they-know?hours=24` | "What they know about you" facts `{fact, evidence, confidence, category, sensitive}` + spoken text, from `eddie.db` (else the in-memory feed); `?demo=true` returns the labelled seeded demo week instead (see docs/EVENTS.md) |
 | GET | `/burglars-eye?hours=168` | Burglar's-eye report: when the house looked empty, devices ranked by occupancy leak score, security devices flagged `never_block`, and whether the data covered the range asked for; `?demo=true` uses the demo week (see docs/EVENTS.md) |
+| GET | `/sensitivity` | `{protected, applied, modes: [{mode, on, sites, trackers, examples}]}` for the sensitivity modes `health`, `kids`, `money`, `beliefs` (#110) |
+| POST | `/sensitivity` | `{mode, on}` turns one sensitivity mode on or off; answers with `applied` once DNS has loaded it (see docs/EVENTS.md) |
 | GET | `/rules` | Every rule, newest first |
 | POST | `/rules` | `{pattern, action, device_mac?, created_by?}` add rule; answers with the stored id and `applied` once DNS has loaded it (see docs/EVENTS.md) |
 | DELETE | `/rules/{id}` | Remove rule; answers with the removed rule and `applied` |
@@ -499,7 +502,7 @@ Not built yet. Goal: show the audience what would happen to a Ring camera, using
 
 Break-ins are one category. Eddie's "What they know about you" report groups every inference into these categories, each with a plain-English line, the evidence, and what Eddie did about it.
 
-Built (#134): every `/what-they-know` fact carries one of these ten as `category`, and `sensitive: true` for Health, Beliefs and Kids. Per-category facts come from labelled domains (`eddie/labels.py`), a cross-device count of the tracking company that sees the most devices, and a device count. Not built yet: the "What Eddie does" column (sensitivity modes, kid mode, forget timer, mic watch, category scores); Listening only shows that an assistant is connected, never that audio was sent.
+Built (#134): every `/what-they-know` fact carries one of these ten as `category`, and `sensitive: true` for Health, Beliefs and Kids. Per-category facts come from labelled domains (`eddie/labels.py`), a cross-device count of the tracking company that sees the most devices, and a device count. Sensitivity modes are built (#110, below). Not built yet: the rest of the "What Eddie does" column (kid mode, forget timer, mic watch, category scores); Listening only shows that an assistant is connected, never that audio was sent.
 
 | Category | What it reveals | Signal Eddie sees | What Eddie does |
 |---|---|---|---|
@@ -516,7 +519,7 @@ Built (#134): every `/what-they-know` fact carries one of these ten as `category
 
 ### Features that come out of this
 
-- **Sensitivity modes:** "Hey Eddie, protect anything health related" blocks third-party trackers for that whole category, not one domain at a time.
+- **Sensitivity modes (#110, built):** "Hey Eddie, protect anything health related" blocks third-party trackers for that whole category, not one domain at a time. Modes: health, kids, money (banking, payments, shopping) and beliefs (news, religion, politics). Each mode's rule set comes from the domain labels: its sites open a 5-minute window per device, and inside it known trackers and data brokers are blocked while the site itself keeps working. Voice and `POST /sensitivity` turn modes on and off and read back only what DNS loaded. No dashboard toggle yet, and the category lists are small hand-written tables, so a pharmacy or bank not in `eddie/labels.py` opens no window. Not yet tried on real browsing.
 - **Category privacy score:** the household gets a score per category (Safety B, Health D, Kids A) instead of one number, so people see what's actually exposed.
 - **ACR blocker (#104, built):** a dedicated check for smart-TV content recognition, shown as "Your TV was sending what's on screen every 15 seconds. Blocked." Seeded ACR domains that beacon are blocked at DNS, and the dashboard shows an `acr_detected` card with the interval Eddie measured. See docs/EVENTS.md. Not yet seen on a real smart TV on this network.
 - **Mic watch:** correlate speaker uploads with whether anyone spoke; flag uploads with no wake word.

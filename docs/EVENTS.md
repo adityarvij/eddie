@@ -31,7 +31,7 @@ Body is one event or a list of events.
 | `domain`     | string | lowercase, no trailing dot |
 | `qtype`      | string | `A`, `AAAA`, `HTTPS`, ... |
 | `action`     | string | `allow` \| `block` \| `flag` \| `spoof` (answered with Eddie's IP, #99) |
-| `source`     | string | `rule` \| `allowlist` \| `blocklist` \| `heuristic` \| `ai` \| `home_mode` \| `away_mode` \| `default` |
+| `source`     | string | `rule` \| `allowlist` \| `blocklist` \| `heuristic` \| `ai` \| `home_mode` \| `away_mode` \| `sensitivity` \| `quarantine` \| `default` |
 | `reason`     | string | one short human line, shown on screen |
 
 The DNS server sends every lookup here through `eddie/feed.py`: fire-and-forget
@@ -81,6 +81,7 @@ Both are computed by the API from the events it has received, keyed by
 - `mode`: `{home_mode, home_manual, home_applied, reason}` after every home mode change, sent once the API has waited for DNS to load it; `reason` is `manual` (`POST /mode`, the dashboard or voice) or `presence` (household phones, #20)
 - `offline_mode`: `{offline: bool, applied: bool}` after every `POST /offline-mode`
 - `away_mode`: `{away, away_until, away_applied, away_devices, away_exempt}` after every `POST /mode` with `away` (below)
+- `sensitivity`: `{mode, on, protected, applied, sites, trackers, examples}` after every `POST /sensitivity` (see Sensitivity modes below)
 - `rule_change`: a rule was stored or deleted (see Rules below)
 - `question` / `question_resolved`: Eddie is asking whether to block a likely tracker, and its answer (see Ask before blocking below)
 - `new_device`, `quarantine`, `device_status`: see New devices and quarantine below
@@ -294,6 +295,40 @@ analytics or tracking in `eddie/labels.py`, a cached AI `tracker` verdict
 allowlist, blocklists and the keyword heuristic, so a user allow rule or an
 essential still wins. Everything else, including unknown domains, is
 unchanged.
+
+## Sensitivity modes: `/sensitivity` (#110)
+
+`POST /sensitivity {"mode": "health", "on": true}` turns one mode on or off.
+`mode` is `health`, `kids`, `money` or `beliefs`; anything else is 422. The
+state is stored in `engine_state` (`sensitive_<mode>`, `sensitivity_rev`) and
+the API waits up to 2 s for the DNS server to write `sensitivity_loaded`, the
+same handshake as rules. It answers, and broadcasts as a `sensitivity` event:
+
+```json
+{"mode": "health", "sites": 6, "trackers": 74, "examples": ["BetterHelp", "CVS", "GoodRx"],
+ "on": true, "protected": ["health"], "applied": true}
+```
+
+`sites` and `trackers` are the sizes of the mode's rule set, `examples` up to
+three site owners, `protected` every mode now on. `applied: false` means
+stored but no running DNS server confirmed it. `GET /sensitivity` answers
+`{protected, applied, modes: [{mode, on, sites, trackers, examples}]}`.
+
+Rule set (`eddie/sensitivity.py`): a mode's sites are the domains in
+`eddie/labels.py` labelled with its categories (health: `health`; kids:
+`kids`; money: `finance`, `shopping`; beliefs: `news`, `religion`,
+`politics`). Its trackers are every domain labelled `telemetry`, `ads`,
+`analytics`, `tracking` or `id-sync` plus every domain in
+`eddie/data/brokers.json`, never one of the sites. While a mode is on, a
+device's lookup of one of its sites (or a subdomain) opens a 5-minute window
+for that device, whatever the decision for the site. Inside it, after rules,
+the allowlist, blocklists, the keyword heuristic and away mode's telemetry
+step, the device's lookups of a tracker or of a domain with a cached AI
+`tracker` verdict are blocked with `source: "sensitivity"` and a reason like
+`health protection: graph.facebook.com is a third-party tracker, looked up
+within 5 min of a protected site` (the site itself is never named). Other devices and other lookups are unchanged.
+Windows live in the DNS server's memory (at most 10,000 devices) and close
+when their mode is turned off.
 
 ## Offline mode: `POST /offline-mode` (#26)
 
@@ -689,10 +724,12 @@ Relays to the traffic API (`EDDIE_API_URL`, default `http://127.0.0.1:8000`), so
 | `POST /api/devices/decide` `{mac, decision: "approve" \| "deny"}` | `POST /devices/{mac}/{decision}` | answers with the API's `{mac, name, status, applied}`; anything but a MAC and approve/deny is 400 |
 | `POST /api/devices/update` `{mac, label?, kid?}` | `PUT /devices/{mac}` | names a device or marks it as a child's (#119); `mac` is a MAC or client IP; answers with the API's stored device; 400 for anything else, 422 for a bad name, 404 for a device Eddie hasn't seen |
 | `POST /api/kid-mode` `{on: bool}` | `GET /devices`, `GET /rules`, then `POST` / `DELETE /rules` per child's device | runs kid mode with the page's confirm dialog as the yes (`voice_agent.kid_mode_change`, rules `created_by: dashboard`); answers `{message}`, the same wording voice speaks, which says whether DNS loaded the rules |
+| `GET /api/guest` | none | Guest Mode (#163): `{active, allowed, approvable, owner_only}` from the local profile |
+| `POST /api/guest` `{active?: bool, allowed?: [category]}` | none | the Eddie computer only (403 from other devices, token or not); `allowed` may list only `approvable` categories, anything else is 400; answers with the saved profile, 500 if it couldn't be written. Switching it on or off cancels a pending confirmation; off also forgets guest timers |
 
 The mode POSTs forward only that one boolean (anything else is 400) and wait up to 5 s for the API.
 
-Control auth (#40): POSTs need a `Host` that is an IP, `localhost` or `.local`, and a same-origin `Origin` if one is sent (403 otherwise). From the Eddie computer (loopback) no token is needed. From another device, only `POST /api/voice/ask` (`{text}`), `POST /api/mode`, `POST /api/offline-mode`, `POST /api/quarantine`, `POST /api/devices/decide`, `POST /api/devices/update`, `POST /api/kid-mode` and the two `/api/questions` POSTs are allowed, with `Authorization: Bearer <pairing token>`; a missing or wrong token gets 401 `{message}`. `/api/voice/start`, `/api/voice/stop`, `/api/voice/dismiss` and `/api/events` answer 403 from other devices whatever the token. A paired `/api/voice/ask` of “stop recording” still turns the mic off, as the spoken command does (#128).
+Control auth (#40): POSTs need a `Host` that is an IP, `localhost` or `.local`, and a same-origin `Origin` if one is sent (403 otherwise). From the Eddie computer (loopback) no token is needed. From another device, only `POST /api/voice/ask` (`{text}`), `POST /api/mode`, `POST /api/offline-mode`, `POST /api/quarantine`, `POST /api/devices/decide`, `POST /api/devices/update`, `POST /api/kid-mode` and the two `/api/questions` POSTs are allowed, with `Authorization: Bearer <pairing token>`; a missing or wrong token gets 401 `{message}`. `/api/voice/start`, `/api/voice/stop`, `/api/voice/dismiss`, `POST /api/guest` and `/api/events` answer 403 from other devices whatever the token. A paired `/api/voice/ask` of “stop recording” still turns the mic off, as the spoken command does (#128).
 
 Wake lifecycle: `wake`, `voice_state: listening`, `voice_state: thinking`, optional `transcript`, `agent_reply`, `speaking`, `speech_end`, then `voice_state: listening` again for a follow-up without the wake phrase. If no speech starts within 4 seconds of listening, the worker emits `voice_state: dismissed` and the dashboard closes Eddie and returns to the live feed; the next request needs the wake phrase. No transcript is persisted. Capture or inference failure yields `voice_status: error`.
 

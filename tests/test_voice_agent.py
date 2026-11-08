@@ -58,6 +58,26 @@ class MissedSpeech(unittest.TestCase):
         self.assertEqual(voice_agent.respond(''), "Didn't catch that. Try again.")
         request.assert_not_called()
 
+
+class NoModelFallback(unittest.TestCase):
+    def setUp(self):
+        self.model = patch.object(voice_agent, 'ask_model', None)
+        self.model.start()
+        self.addCleanup(self.model.stop)
+
+    @patch('voice_agent.request')
+    def test_unmatched_question_lists_supported_capabilities_without_a_write(self, request):
+        reply = voice_agent.respond('Can you recommend a movie for tonight?')
+        self.assertIn("don't know how to answer that yet", reply)
+        self.assertIn('summarize activity', reply)
+        request.assert_not_called()
+
+    @patch('voice_agent.request')
+    def test_unparseable_command_changes_nothing(self, request):
+        reply = voice_agent.respond('Block some bad stuff and send an email')
+        self.assertIn("haven't changed anything", reply)
+        request.assert_not_called()
+
 class HomeModeTool(unittest.TestCase):
     @patch('voice_agent.request', return_value={'home_mode': True})
     def test_explicit_enable_phrases(self, request):

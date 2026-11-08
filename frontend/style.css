@@ -123,3 +123,4 @@ footer #open-devices{color:#fff}footer #open-devices span{margin:0}
 .map-grid tr.sync th,.map-grid tr.sync td.seen{color:#ff3b30}
 .map-sync{list-style:none;padding:0;margin:10px 0}.map-sync li{display:flex;flex-wrap:wrap;align-items:center;gap:4px 12px;margin:6px 0;color:#ff3b30}
 .map-sync .toggle{border-color:#ff3b30;color:#ff3b30}.map-sync .toggle:disabled{border-color:#666;color:#888}
+.guest-allowed{display:flex;flex-wrap:wrap;gap:4px 12px}.guest-allowed label{display:inline-flex;align-items:center;gap:4px;white-space:nowrap;cursor:pointer}.guest-allowed input{width:auto;margin:0;accent-color:#fff}
