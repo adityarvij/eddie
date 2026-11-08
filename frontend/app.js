@@ -254,7 +254,7 @@ function awayNote(away = modes.away) {
 function homeNote() {
   if (modes.home_mode === null || modes.home_applied === null) return ['', false];
   if (!modes.home_applied) return [`home mode ${modes.home_mode ? 'on' : 'off'} not yet applied by DNS`, true];
-  if (modes.home_mode) return [`home mode: blocking camera uploads · ${modes.home_manual ? 'turned on by hand' : 'a household phone is home'}`, false];
+  if (modes.home_mode) return ['', false];
   return ['', false];  // off says nothing: the hollow house beside the heading already shows it
 }
 function renderModes() {

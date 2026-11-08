@@ -340,7 +340,7 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   assert.equal(get('home-mode').attrs['aria-label'], 'home mode: on');
   assert.equal(get('home-mode').attrs['aria-pressed'], 'true');
   assert.equal(get('home-mode').attrs['aria-busy'], 'false');
-  assert.equal(get('home-note').textContent, 'home mode: blocking camera uploads · turned on by hand');
+  assert.equal(get('home-note').textContent, '', 'acknowledged Home Mode uses the accessory without redundant text');
   assert.equal(get('character').dataset.role, 'home', 'acknowledged and applied Home Mode adds the roof');
 
   // A failed change keeps the last acknowledged state and says so.
@@ -359,7 +359,7 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   assert.equal(get('offline-mode').textContent, 'offline');
   assert.equal(get('mic').textContent, 'start mic', 'the footer already says offline');
   assert.equal(get('offline-note').textContent, 'offline mode on not yet applied by DNS');
-  assert.equal(get('home-note').textContent, 'home mode: blocking camera uploads · turned on by hand', 'both notes show at once');
+  assert.equal(get('home-note').textContent, '', 'Home Mode has no redundant applied-state note');
 
   // Backend broadcasts (another screen, or voice) update the toggles.
   socket.onmessage({data:JSON.stringify({type:'offline_mode', offline:true, applied:true})});
@@ -375,7 +375,7 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   assert.equal(get('home-note').textContent, 'home mode on not yet applied by DNS');
   socket.onmessage({data:JSON.stringify({type:'mode', home_mode:true, home_manual:false, home_applied:true, reason:'presence'})});
   assert.equal(get('character').dataset.role, 'home');
-  assert.equal(get('home-note').textContent, 'home mode: blocking camera uploads · a household phone is home');
+  assert.equal(get('home-note').textContent, '');
   assert.equal(get('home-mode').hidden, false, 'the house flag shows while home mode is on');
   socket.onmessage({data:JSON.stringify({type:'mode', home_mode:false, home_manual:false, home_applied:true, reason:'presence'})});
   assert.equal(get('home-note').textContent, '');
