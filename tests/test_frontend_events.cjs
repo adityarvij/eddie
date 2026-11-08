@@ -37,6 +37,7 @@ const page = fs.readFileSync('frontend/index.html','utf8');
 assert.match(page, /<footer>.*id="open-rules"[^>]*>rules \(<span id="rules-count">.*id="open-devices".*id="offline-mode".*id="suggestions-open"[^>]*>suggestions<.*id="capabilities-open"[^>]*>capabilities<\/button><\/div><\/footer>/, 'footer: rules, devices, online/offline, suggestions, capabilities last');
 assert.doesNotMatch(page, /learn more/, 'learn more is gone');
 assert.match(page, /id="suggestions-open"[^>]*hidden>/, 'no suggestions link in the footer');
+assert.match(page, /<\/button><span id="kid-flag"[^>]*hidden>/, 'the kid flag sits right after the house, hidden by default');
 assert.match(page, /id="capabilities-close"[^>]*hidden>/, 'capabilities has no close button');
 assert.match(page, /id="close-devices"[^>]*hidden>/, 'devices has no close button');
 assert.match(page, /<div class="devices-controls" hidden>.*id="kid-mode".*id="guest-mode".*id="quarantine-mode".*class="devices-hint".*<\/div><ul id="device-list">/, 'devices sheet shows just the devices');
@@ -203,11 +204,14 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   assert.equal(looked.textContent, 'looked up: device-metrics-us.amazon.com, netflix.com');
   assert.equal(rows[2].children.length, 3, 'no looked-up line without lookups');
   assert.equal(get('kid-mode').textContent, 'kid mode: off');
+  assert.equal(get('kid-flag').hidden, true, 'no kid flag while kid mode is off');
   assert.equal(get('kid-note').textContent, "children's devices: --- (172.20.10.9)");
   // Kid mode reads only stored rules: a device "*" block rule is a locked-down device.
   context.renderRules([{id:3, pattern:'*', action:'block', device_mac:'172.20.10.9', device:'172.20.10.9', created_by:'voice'}]);
   assert.equal(get('kid-mode').textContent, 'kid mode: on');
   assert.equal(get('kid-mode').attrs['aria-pressed'], 'true');
+  assert.equal(get('kid-flag').hidden, false, 'the kid flag shows beside the house');
+  assert.equal(get('kid-flag').attrs['aria-label'], 'kid mode on');
   rows = get('device-list').children;
   assert.equal(rows[2].children[2].textContent, '172.20.10.9 · locked down · 1 tracker blocked');
 
@@ -237,6 +241,8 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
     {mac:'172.20.10.9', ip:'172.20.10.9', label:'Kids tablet', kid:true, trackers:0, recent_domains:[]},
     {mac:'f0:4f:7c:11:22:33', ip:'172.20.10.5', label:'Fire Stick', kid:true, trackers:0, recent_domains:[]}]});
   assert.equal(get('kid-mode').textContent, 'kid mode: on for 1 of 2');
+  assert.equal(get('kid-flag').hidden, false);
+  assert.equal(get('kid-flag').attrs['title'], 'kid mode on for 1 of 2');
   assert.equal(get('kid-mode').attrs['aria-pressed'], 'false');
 
   // The kid mode button asks first, then shows the bridge's own words, never its own claim.
@@ -255,6 +261,7 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   await answer('/api/devices', 200, {hours:24, devices:[]});
   assert.equal(get('kid-mode').textContent, 'kid mode: off');
   assert.equal(get('kid-mode').disabled, true, 'no child device: nothing to switch');
+  assert.equal(get('kid-flag').hidden, true);
 
   // The devices link opens and closes the list.
   get('open-devices').onclick();
