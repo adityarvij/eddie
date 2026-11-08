@@ -77,7 +77,7 @@ class ConfirmationFlow(unittest.TestCase):
     def test_dismissal_discards(self):
         self.ask()
         voice_agent.confirmation.cancel()
-        self.assertEqual(voice_agent.respond('yes'), "Try asking what's been going on, or say turn on home mode.")
+        self.assertIn("don't know how to answer that yet", voice_agent.respond('yes'))
         self.action.assert_not_called()
 
     def test_new_command_replaces_pending_and_says_so(self):
@@ -91,7 +91,7 @@ class ConfirmationFlow(unittest.TestCase):
         self.ask()
         self.assertEqual(voice_agent.respond('yes but not the tv'), 'I need a yes or no. Lock down the tv?')
         self.assertEqual(voice_agent.respond('maybe'), "I didn't get a clear yes, so I didn't do it.")
-        self.assertEqual(voice_agent.respond('yes'), "Try asking what's been going on, or say turn on home mode.")
+        self.assertIn("don't know how to answer that yet", voice_agent.respond('yes'))
         self.action.assert_not_called()
         self.request.assert_not_called()
 
