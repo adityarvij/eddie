@@ -64,11 +64,11 @@ Both are still answered and written to `eddie.db`. So `totals.seen`,
 
 ## Receiving: `WS /ws/events`
 
-The API adds `id`, `company` and `category` (from `eddie/labels.py`), plus
+The API adds `id`, `company`, `category` and `broker` (from `eddie/labels.py`), plus
 `beacon_s` and `idle` (from `eddie/beacons.py`, #24), and pushes:
 
 - `snapshot`: sent once on connect: `{events, ai_verdicts, bypass, acr, questions, totals, home_mode}`
-- `query`: the event above plus `id`, `company`, `category`, `beacon_s`, `idle`
+- `query`: the event above plus `id`, `company`, `category`, `broker`, `beacon_s`, `idle`; `broker` is `"data broker"`, `"ad exchange"` or `null` (see Data broker watch below)
 
 | Added field | Notes |
 |-------------|-------|
@@ -613,6 +613,10 @@ Confirmation: after Eddie reads back a risky action, the bridge emits `voice_sta
 ## Per-device counts and event filters (#29)
 
 `GET /summary?window=15m|1h|24h` (default `1h`; anything else gets 422) adds `window` and `devices`: one row per device label seen in that window, `{device, requests, blocked, flagged, blocked_companies}`, busiest first, where `blocked_companies` is up to three `{company, blocked}` rows. `text` and `companies` still cover the last hour. Like the rest of `/summary`, counts come from the API's in-memory feed (at most 20,000 events, none older than `EDDIE_RETENTION_DAYS`), so a busy 24-hour window can be partial.
+
+## Data broker watch
+
+`GET /summary` also adds `brokers` over the same `window` as `devices`: `{requests, blocked, devices, companies}`, where `devices` is one `{device, requests, blocked}` row per device that looked up a known broker domain and `companies` is up to ten `{company, kind, requests, blocked}` rows, busiest first; `kind` is `data broker` or `ad exchange`. A domain counts when it or a parent domain is in `eddie/data/brokers.json` (source in `eddie/data/README.md`). A count is a DNS lookup, not proof that data was sold, and a broker missing from the list is not counted. The dashboard shows a `brokers:` counter next to allowed and blocked, and highlights those feed lines with their kind.
 
 `GET /events` also takes `action=allow|block|flag` (anything else gets 422) and `domain=` (exact, already-normalized match). The voice agent uses these for recent blocks and domain explanations.
 

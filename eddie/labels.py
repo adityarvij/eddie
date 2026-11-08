@@ -12,6 +12,8 @@ import tldextract
 # Disable both network fetching and filesystem cache writes.
 _EXTRACT = tldextract.TLDExtract(suffix_list_urls=(), cache_dir=None, include_psl_private_domains=True)
 OWNERS = json.loads((Path(__file__).parent / 'data' / 'tracker_owners.json').read_text())
+# Tracker domains of registered data brokers and ad exchanges (see eddie/data/README.md).
+BROKERS = json.loads((Path(__file__).parent / 'data' / 'brokers.json').read_text())
 
 # suffix -> (company, category)
 DOMAINS = {
@@ -89,3 +91,12 @@ def lookup(domain: str) -> tuple[str, str]:
                 company = owner
                 break
     return company or registrable_domain(domain), category
+
+
+def broker(domain: str) -> dict | None:
+    """{company, kind} when the domain belongs to a known data broker or ad exchange."""
+    parts = domain.strip().lower().rstrip('.').split('.')
+    for i in range(len(parts)):
+        if entry := BROKERS.get('.'.join(parts[i:])):
+            return entry
+    return None

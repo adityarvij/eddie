@@ -174,6 +174,10 @@ Ollama runs on the host and is local; the classifier refuses any non-private Oll
 
 Ownership and public suffix data are bundled setup assets. Labeling makes no outbound requests and creates no cache files. Per-company counters are computed from the existing in-memory API events; no new browsing-history store or retention period is added. They count requested DNS lookups, not uploaded data. Unmapped domains are presented as registrable domains rather than guessed companies.
 
+### Data broker watch (implemented)
+
+`eddie/data/brokers.json` is a bundled setup asset built from public lists (source in `eddie/data/README.md`); Eddie never fetches it at runtime. Each event's `broker` label and the `/summary` `brokers` counts are computed from the existing in-memory feed, with no new store, log or retention period, and are readable by anyone who can already read `/summary` and `/events`. A broker count is a lookup of a broker's domain, not proof that data was sold. Tested in [tests/test_brokers.py](../tests/test_brokers.py).
+
 
 ### Voice activity calibration (#38, implemented)
 

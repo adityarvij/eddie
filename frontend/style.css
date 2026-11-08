@@ -73,3 +73,5 @@
 /* While a spoof rule is active (#99) the house turns into Pinocchio: Eddie is telling trackers a fib. */
 .home-toggle .pinocchio,.home-toggle[data-spoofing="true"] .house{display:none}.home-toggle[data-spoofing="true"] .pinocchio{display:block}
 .home-toggle .eye{fill:currentColor;stroke:none}.home-toggle[aria-pressed="true"] .eye{fill:#000}
+/* Data broker watch: lookups of known brokers and ad exchanges get their own counter and highlight. */
+.broker-counter{color:#facc15}.event.broker{background:rgba(250,204,21,.08)}.tag-broker{color:#facc15}

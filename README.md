@@ -268,7 +268,7 @@ Writes from anywhere but loopback need `Authorization: Bearer $EDDIE_API_TOKEN`,
 | GET | `/devices?hours=24` | Devices Eddie has seen, with name, vendor, lookup / blocked / flagged counts, distinct trackers blocked and the latest blocked domains (see docs/EVENTS.md) |
 | PUT | `/devices/{mac}` | `{label}` names a device ("Fire Stick"); `""` or `null` clears it |
 | GET | `/events?since=&device=` | Recent query rows |
-| GET | `/summary?window=1h` | Totals: queries, blocked, top blocked domains, top companies, per device |
+| GET | `/summary?window=1h` | Totals: queries, blocked, top blocked domains, top companies, per device, data broker and ad exchange counts |
 | GET | `/what-they-know?hours=24` | "What they know about you" facts `{fact, evidence, confidence}` + spoken text, from `eddie.db` (else the in-memory feed); `?demo=true` returns the labelled seeded demo week instead (see docs/EVENTS.md) |
 | GET | `/burglars-eye?hours=168` | Burglar's-eye report: when the house looked empty, devices ranked by occupancy leak score, security devices flagged `never_block`, and whether the data covered the range asked for; `?demo=true` uses the demo week (see docs/EVENTS.md) |
 | GET | `/rules` | Every rule, newest first |
@@ -448,7 +448,7 @@ Not built yet. Goal: show the audience what would happen to a Ring camera, using
 - **Bypass detection:** a lookup of a known encrypted DNS resolver name now raises `bypass_suspected` and `EDDIE_BLOCK_DOH=on` blocks those names (#97). Still open: flagging devices that go quiet on DNS while clearly active, and spotting plain DNS sent to another resolver (needs router mode).
 - **Privacy grade per device (A to F):** phone-home rate, idle activity, number of tracking companies, occupancy leak score, how much could be blocked without breakage.
 - **Settings coach:** for each device, tells you which built-in privacy toggles to switch off (e.g. Fire TV usage data, interest-based ads), so the choice sticks at the source too.
-- **Data broker watch:** highlight traffic to known data brokers and ad exchanges separately; these are where data gets sold on.
+- **Data broker watch (implemented):** highlight traffic to known data brokers and ad exchanges separately; these are where data gets sold on. Counter and feed highlight on the dashboard, counts in `/summary` (see [EVENTS](docs/EVENTS.md)).
 - **Night report:** a short spoken summary each morning: what was blocked, anything new, any occupancy leak.
 
 ### Build order
