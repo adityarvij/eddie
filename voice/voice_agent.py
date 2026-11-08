@@ -431,6 +431,54 @@ def known_names(devices):
     return ''
 
 
+# "List my rules" / "list my devices": Eddie reads them out, the same lists the dashboard's footer opens.
+_LIST = (r'(?:(?:hey|ok|okay) )?(?:eddie )?(?:please )?(?:(?:can|could|would|will) you )?'
+         r'(?:list|read|read out|show|show me|tell me|go through|give me|what are)(?: me)?(?: all)?(?: of)?'
+         r'(?: (?:my|the|our|your|all))? {}(?: please| for me)?')
+LIST_RULES = re.compile(_LIST.format('rules') + r'|what rules (?:do i|do we|are there|have i|have we)(?: have| set| made)?')
+LIST_DEVICES = re.compile(_LIST.format('devices') + r'|what devices (?:do i have|do we have|are there|are on (?:the|my) (?:network|wifi)|are connected|have you seen)')
+LIST_MAX = 5  # read this many aloud; the rest are on the dashboard
+
+
+def spoken_device(d):
+    """A name worth saying: the label, else the maker, never the MAC the dashboard falls back to."""
+    if named(d):
+        return d['label']
+    return f"a {d['vendor']} device" if d.get('vendor') else 'an unnamed device'
+
+
+def list_rules():
+    try:
+        rules = request('/rules')
+    except Exception:
+        return "I can't reach Eddie's backend, so I can't read your rules right now."
+    if not rules:
+        return "You don't have any rules yet. Say block, then a domain, to add one."
+    def phrase(rule):
+        target = 'everything' if rule['pattern'] == '*' else rule['pattern']
+        where = f" on {rule['device']}" if rule.get('device') else ''
+        return f"{rule['action']} {target}{where}"
+    said = [phrase(rule) for rule in rules[:LIST_MAX]]
+    if len(rules) > LIST_MAX:
+        said.append(f"{len(rules) - LIST_MAX} more on the dashboard")
+    return f"You have {len(rules)} rule{'' if len(rules) == 1 else 's'}: {join(said)}."
+
+
+def list_devices():
+    try:
+        devices = request('/devices')['devices']
+    except Exception:
+        return "I can't reach Eddie's backend, so I can't list your devices right now."
+    if not devices:
+        return "I haven't seen any devices in the last day."
+    busiest = sorted(devices, key=lambda d: d.get('queries', 0), reverse=True)
+    said = [f"{spoken_device(d)} made {d.get('queries', 0)} lookups, {d.get('blocked', 0)} blocked"
+            for d in busiest[:LIST_MAX]]
+    if len(devices) > LIST_MAX:
+        said.append(f"{len(devices) - LIST_MAX} more on the dashboard")
+    return f"I've seen {len(devices)} device{'' if len(devices) == 1 else 's'} today. {'; '.join(said)}."
+
+
 def keep_text(keep):
     names = [SERVICES[key]['name'] for key in keep]
     return f"{join(names)}, plus Eddie's essentials" if names else "Eddie's essentials"
@@ -1222,6 +1270,11 @@ def route(text):
     reply = timers.handle(store if profile.allows('timers') else timers.Timers(), raw)
     if reply is not None:
         return profile.check('timers') or reply
+    # Rules and devices are the household's traffic: a guest gets the same refusal as other traffic reads (#163).
+    if LIST_RULES.fullmatch(text):
+        return profile.check('traffic') or list_rules()
+    if LIST_DEVICES.fullmatch(text):
+        return profile.check('traffic') or list_devices()
     if not (WHAT_THEY_KNOW.search(text) or EMPTY_HOUSE.search(text) or PRIVACY_TIPS.search(text)):
         # The house guide (#165) speaks owner entries only to the owner (Guest Mode off). A guest
         # needs house_guide approved; a refused guest question is matched against guest entries only.

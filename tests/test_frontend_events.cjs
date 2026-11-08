@@ -31,6 +31,13 @@ assert.match(styles, /forced-colors:active\)\{\.character \.bellhop-hat \.bellho
 assert.match(styles, /\[data-hat-tip\] \.bellhop-hat\{[^}]*animation:role-hat-tip [^};]* 1\}/, 'the hat-tip plays once');
 assert.doesNotMatch(styles, /role-hat-tip[^}]*infinite/, 'the hat-tip never loops');
 assert.match(fs.readFileSync('frontend/index.html','utf8'), /<\/g><g class="role-accessory bellhop-hat"/, 'the hat is drawn over the head, outside the eyes and mouth');
+const page = fs.readFileSync('frontend/index.html','utf8');
+assert.match(page, /<footer>.*id="open-rules"[^>]*>rules \(<span id="rules-count">.*id="open-devices".*id="offline-mode".*id="suggestions-open"[^>]*>learn more</, 'footer: rules, devices, online/offline, learn more');
+assert.doesNotMatch(page, /class="panels"|id="rules" class="rules"/, 'no rules panel on the main screen');
+assert.match(page, /id="tracker-map-open"[^>]*hidden/, 'who sees what is hidden for now');
+assert.match(page, /id="devices-sheet".*id="quarantine-mode".*id="device-list"/, 'quarantine lives with the devices');
+assert.doesNotMatch(source, /DNS-only/, 'no DNS-only note');
+assert.match(page, /what to ask eddie/, 'learn more lists what to ask');
 // getElementById returns the first match, so a repeated id makes one element overwrite another.
 const pageIds=[...fs.readFileSync('frontend/index.html','utf8').matchAll(/\sid="([^"]+)"/g)].map(m=>m[1]);
 assert.deepEqual(pageIds.filter((id,i)=>pageIds.indexOf(id)!==i),[],'every id in index.html is unique');
@@ -279,7 +286,7 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   context.renderRules([]);
   assert.equal(get('home-mode').attrs['data-spoofing'], 'false');
   assert.equal(get('home-mode').attrs['aria-label'], 'home mode: off');
-  assert.equal(get('offline-mode').textContent, 'offline mode: off');
+  assert.equal(get('offline-mode').textContent, 'online', 'the footer says just online or offline');
   // Mic indicator (#128): the heading's mic icon shows only while the stream is open, and the footer
   // button only offers to start it; stopping is by voice.
   assert.equal(get('mic').textContent, 'start mic');
@@ -328,12 +335,12 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
 
   // Offline mode the API stored but DNS hasn't loaded is shown in red, not as done.
   get('offline-mode').onclick();
-  assert.equal(get('offline-mode').textContent, 'offline mode: turning on…');
+  assert.equal(get('offline-mode').textContent, 'going offline…');
   assert.equal(get('mic').textContent, 'start mic', 'no offline prefix before the backend confirms');
   assert.deepEqual(JSON.parse(calls.find(c => c.path === '/api/offline-mode').init.body), {offline:true});
   await answer('/api/offline-mode', 200, {offline:true, applied:false});
-  assert.equal(get('offline-mode').textContent, 'offline mode: on');
-  assert.equal(get('mic').textContent, 'offline • start mic');
+  assert.equal(get('offline-mode').textContent, 'offline');
+  assert.equal(get('mic').textContent, 'start mic', 'the footer already says offline');
   assert.equal(get('offline-note').textContent, 'offline mode on not yet applied by DNS');
   assert.equal(get('home-note').textContent, 'home mode: blocking camera uploads · turned on by hand', 'both notes show at once');
 
@@ -343,7 +350,7 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   socket.onmessage({data:JSON.stringify({type:'mode', home_mode:false, home_manual:true, home_applied:true, reason:'manual'})});
   assert.equal(get('character').dataset.role, 'regular', 'exiting Home Mode removes the roof');
   assert.equal(get('home-mode').attrs['aria-label'], 'home mode: off');
-  assert.equal(get('home-note').textContent, 'home mode: off by hand, phones ignored');
+  assert.equal(get('home-note').textContent, '', 'home mode off says nothing; the hollow house shows it');
   // Phone presence (#20): shown as on only once DNS has loaded it.
   socket.onmessage({data:JSON.stringify({type:'mode', home_mode:true, home_manual:false, home_applied:false, reason:'presence'})});
   assert.equal(get('character').dataset.role, 'home', 'backend-acknowledged Home Mode adds the roof while DNS catches up');

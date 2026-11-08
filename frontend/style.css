@@ -133,3 +133,7 @@ footer #open-devices{color:#fff}footer #open-devices span{margin:0}
 
 /* EDDIE_SPEAKER=ipad: Safari needs one tap before Eddie's voice can play here. */
 .voice-unlock{margin-top:12px;padding:8px 14px;border:1px solid currentColor;border-radius:999px;background:transparent;color:inherit;font:inherit;cursor:pointer}
+
+/* learn more: what to ask Eddie, above the privacy suggestions */
+.ask-list{margin:4px 0 18px}.ask-list ul{margin:6px 0 0;padding-left:18px;color:#aaa}.ask-list li{margin:2px 0}
+#rules-list{list-style:none;margin:0;padding:0}#rules-list li{margin:0 0 6px;overflow-wrap:anywhere}
