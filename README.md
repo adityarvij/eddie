@@ -262,12 +262,13 @@ CREATE TABLE ai_verdicts (domain TEXT PRIMARY KEY, label TEXT, confidence REAL, 
 CREATE TABLE engine_state (key TEXT PRIMARY KEY, value INTEGER);
 CREATE TABLE away_devices (mac TEXT PRIMARY KEY, score INTEGER, security INTEGER);
 CREATE TABLE traffic (id INTEGER PRIMARY KEY, first_ts INTEGER, last_ts INTEGER, device_mac TEXT, ip TEXT, port INTEGER, proto TEXT, bytes_out INTEGER, bytes_in INTEGER, packets_out INTEGER, packets_in INTEGER);
+CREATE TABLE sensitive_summaries (day TEXT, device_mac TEXT, category TEXT, lookups INTEGER, PRIMARY KEY (day, device_mac, category));
 CREATE INDEX q_ts ON queries(ts);
 CREATE INDEX q_dev ON queries(device_mac, ts);
 CREATE INDEX t_dev ON traffic(device_mac, last_ts);
 ```
 
-`rules.pattern` matches exact domain or suffix (`*.amazon-adsystem.com`). `scope` = `global` or `device`. `created_by` = `user` (default) / `voice` / `agent`. `traffic` rows are written by the optional traffic monitor: one per device, remote IP, remote port and protocol per minute it saw packets (`port` is 0 for ICMP), with bytes and packets each way. `engine_state` holds `rules_rev` (bumped by every rule write) and `rules_loaded` (the revision the DNS engine last loaded), which `/rules` uses to acknowledge a change; offline and away mode keep their state and revisions there the same way. `away_devices` holds the devices away mode covers (`security = 0`, with their leak score) or exempts (`security = 1`) while it's on, and is emptied when it's turned off.
+`rules.pattern` matches exact domain or suffix (`*.amazon-adsystem.com`). `scope` = `global` or `device`. `created_by` = `user` (default) / `voice` / `agent`. `traffic` rows are written by the optional traffic monitor: one per device, remote IP, remote port and protocol per minute it saw packets (`port` is 0 for ICMP), with bytes and packets each way. `engine_state` holds `rules_rev` (bumped by every rule write) and `rules_loaded` (the revision the DNS engine last loaded), which `/rules` uses to acknowledge a change; offline and away mode keep their state and revisions there the same way. `away_devices` holds the devices away mode covers (`security = 0`, with their leak score) or exempts (`security = 1`) while it's on, and is emptied when it's turned off. `sensitive_summaries` is what the forget timer leaves of health, beliefs and kids lookups after 24 hours (#111): a lookup count per local day (`YYYY-MM-DD`), device and `category` (`health`, `beliefs` or `kids`), with no domains.
 
 ### Decision order (first match wins)
 
@@ -520,7 +521,7 @@ Built (#134): every `/what-they-know` fact carries one of these ten as `category
 - **Mic watch:** correlate speaker uploads with whether anyone spoke; flag uploads with no wake word.
 - **Cross-device map:** a visual of which companies see which of your devices, and how many devices each company can link.
 - **Data broker spotlight:** separate counter for known data brokers and ad exchanges, since that's where data gets sold on.
-- **Forget timer:** sensitive categories (health, beliefs, kids) are summarised and the raw logs deleted after 24 hours, so Eddie never becomes the leak.
+- **Forget timer (built, #111):** sensitive categories (health, beliefs, kids) are summarised and the raw logs deleted after 24 hours, so Eddie never becomes the leak.
 
 ### For the demo
 

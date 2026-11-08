@@ -60,7 +60,10 @@ from .events import Action, AIVerdictEvent, GeoAlertEvent, ModeUpdate, NewDevice
 recent: deque[dict] = deque(maxlen=20000)
 # The feed keeps no more history than eddie.db does (#129).
 FEED_RETENTION_MS = int(float(os.environ.get("EDDIE_RETENTION_DAYS", store.RETENTION_DAYS)) * 86_400_000)
+FORGET_MS = int(store.FORGET_HOURS * 3_600_000)  # and no sensitive lookup past a day, like eddie.db (#111)
+FORGET_EVERY_MS = 60_000  # at most one sensitive sweep of the feed a minute
 totals = {"seen": 0, "blocked": 0}
+forget_state = {"swept": 0}  # when feed() last dropped day-old sensitive events
 state = {"home_mode": False}  # home mode as last read or written; eddie.db holds it (home.py) unless EDDIE_DB is off
 clients: set[WebSocket] = set()
 ai_verdicts: dict[str, dict] = {}
@@ -154,10 +157,19 @@ def feed() -> deque[dict]:
 
     Events arrive roughly in time order, so trimming from the oldest end is enough.
     Called on every read and ingest, so history expires even while the network is idle.
+    Sensitive events (labels.SENSITIVE) older than a day are dropped from the
+    middle too, in a sweep that runs at most once a minute.
     """
-    cutoff = int(time.time() * 1000) - FEED_RETENTION_MS
+    now = int(time.time() * 1000)
+    cutoff = now - FEED_RETENTION_MS
     while recent and recent[0]["ts"] < cutoff:
         del recent[0]
+    if now - forget_state["swept"] >= FORGET_EVERY_MS:
+        forget_state["swept"] = now
+        kept = [e for e in recent if e["ts"] >= now - FORGET_MS or e.get("category") not in labels.SENSITIVE]
+        if len(kept) < len(recent):
+            recent.clear()
+            recent.extend(kept)
     return recent
 
 
@@ -174,6 +186,7 @@ async def broadcast(msg: dict) -> None:
 async def ingest(body: QueryEvent | list[QueryEvent]):
     events = body if isinstance(body, list) else [body]
     cutoff = int(time.time() * 1000) - FEED_RETENTION_MS
+    cutoff_sensitive = int(time.time() * 1000) - FORGET_MS
     feed()
     for ev in events:
         company, category = labels.lookup(ev.domain)
@@ -182,7 +195,8 @@ async def ingest(body: QueryEvent | list[QueryEvent]):
         seller = labels.broker(ev.domain)
         row = {**ev.model_dump(), "id": next(ids), "company": company, "category": category,
                "broker": seller and seller["kind"], "beacon_s": every and round(every / 1000), "idle": idle}
-        if ev.ts >= cutoff:  # already past retention: still counted and broadcast, never kept
+        forgotten = category in labels.SENSITIVE and ev.ts < cutoff_sensitive
+        if ev.ts >= cutoff and not forgotten:  # already past retention: still counted and broadcast, never kept
             recent.append(row)
         totals["seen"] += 1
         totals["blocked"] += ev.action == "block"
