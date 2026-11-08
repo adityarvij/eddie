@@ -1,4 +1,5 @@
 import asyncio
+import errno
 import sqlite3
 import statistics
 import tempfile
@@ -83,22 +84,39 @@ class ServerCase(unittest.IsolatedAsyncioTestCase):
         for close in self.closers:
             close()
 
+    async def on_one_port(self, start_udp, start_tcp, tries=20):
+        """Bind UDP on a free port, then TCP on the same number.
+
+        The OS only promises the UDP port is free; the same TCP port can
+        already be held (say, by another test's client), so try a fresh one.
+        """
+        for attempt in range(tries):
+            transport, proto = await start_udp()
+            addr = transport.get_extra_info('sockname')
+            try:
+                tcp = await start_tcp(proto, addr)
+            except OSError as e:
+                transport.close()
+                if e.errno != errno.EADDRINUSE or attempt == tries - 1:
+                    raise
+                continue
+            self.closers += [transport.close, tcp.close]
+            return transport, proto, addr
+
     async def start_upstream(self, silent=False):
-        transport, proto = await asyncio.get_running_loop().create_datagram_endpoint(
-            lambda: FakeUpstream(silent), local_addr=('127.0.0.1', 0))
-        self.closers.append(transport.close)
-        addr = transport.get_extra_info('sockname')
-        tcp = await asyncio.start_server(proto.handle_tcp, *addr)
-        self.closers.append(tcp.close)
+        loop = asyncio.get_running_loop()
+        _, proto, addr = await self.on_one_port(
+            lambda: loop.create_datagram_endpoint(lambda: FakeUpstream(silent), local_addr=('127.0.0.1', 0)),
+            lambda proto, addr: asyncio.start_server(proto.handle_tcp, *addr))
         return addr, proto
 
     async def start_server(self, upstreams, timeout=0.3, query_log=None, feed=None, idle=1.0):
         """UDP and TCP on one port, like the real server. The UDP client; TCP clients come from connect()."""
-        transport = await dns_server.serve('127.0.0.1', 0, upstreams, timeout, query_log, feed)
-        self.closers.append(transport.close)
-        self.server_addr = transport.get_extra_info('sockname')
-        tcp = await dns_server.serve_tcp(*self.server_addr, upstreams, timeout, query_log, feed, idle=idle)
-        self.closers.append(tcp.close)
+        async def start_udp():
+            return await dns_server.serve('127.0.0.1', 0, upstreams, timeout, query_log, feed), None
+        _, _, self.server_addr = await self.on_one_port(
+            start_udp,
+            lambda _, addr: dns_server.serve_tcp(*addr, upstreams, timeout, query_log, feed, idle=idle))
         transport_c, client = await asyncio.get_running_loop().create_datagram_endpoint(
             Client, remote_addr=self.server_addr)
         self.closers.append(transport_c.close)
