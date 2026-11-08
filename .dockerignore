@@ -8,3 +8,5 @@ blocklists
 eddie.db
 eddie.db-*
 eddie/data/geoip
+voice/timers.json*
+voice/contacts.json

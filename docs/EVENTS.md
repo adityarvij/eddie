@@ -659,12 +659,14 @@ Control auth (#40): POSTs need a `Host` that is an IP, `localhost` or `.local`, 
 
 Wake lifecycle: `wake`, `voice_state: listening`, `voice_state: thinking`, optional `transcript`, `agent_reply`, `speaking`, `speech_end`, then `voice_state: listening` again for a follow-up without the wake phrase. If no speech starts within 4 seconds of listening, the worker emits `voice_state: dismissed` and the dashboard closes Eddie and returns to the live feed; the next request needs the wake phrase. No transcript is persisted. Capture or inference failure yields `voice_status: error`.
 
+A timer or reminder coming due (#122) sends `voice_state: thinking`, `agent_reply`, `speaking` with `title: "Timer done"` or `"Reminder"`, then `speech_end`, with or without the microphone on. If the alarm sound can't play, a `voice_status` with `message: "Alarm sound unavailable: …"` comes first and Eddie still speaks.
+
 
 Voice recovery: after an initial wake with no command, or an empty/failed transcription, Eddie says “Didn’t catch that. Try again.” and listens again. Four seconds of silence during a follow-up dismisses Eddie back to the newest feed activity. Speech inference errors recover without disabling wake detection; microphone errors and bridge disconnects close the overlay. Listening/waiting uses a yellow ambient glow, speaking uses blue. Automated voice checks pass; live microphone/noisy-room accuracy still needs rehearsal.
 
 Active conversation lifecycle: listening state events include `is_eddie_active: true`; after four seconds with no user speech, `voice_state: dismissed` includes `is_eddie_active: false`. This applies immediately after the wake and after every reply. Two empty transcriptions in a row also end with `dismissed`. `POST /api/voice/dismiss` (the overlay's close button; localhost only, `{"ok": true}`) ends an active conversation: the worker emits `voice_state: dismissed` instead of `listening` and waits for the wake phrase again. It also cancels any pending confirmation.
 
-Confirmation: after Eddie reads back a risky action, the bridge emits `voice_state: confirming` with `kind`, `prompt` and `expires_in_ms` in place of `idle`; the worker's following `listening` event does not clear it. The next `thinking`, `dismissed` or the expiry clears it. Action arguments are never sent. The dashboard shows `prompt` (Eddie's read-back, not the user's words) under Eddie with “say yes to confirm or no to cancel” until then (#19).
+Confirmation: after Eddie reads back a risky action, the bridge emits `voice_state: confirming` with `kind`, `prompt` and `expires_in_ms` in place of `idle`; the worker's following `listening` event does not clear it. The next `thinking`, `dismissed` or the expiry clears it. Action arguments are never sent. The dashboard shows `prompt` (Eddie's read-back; for `kind: text` it contains the message being sent, word for word) under Eddie with “say yes to confirm or no to cancel” until then (#19).
 
 ## Company counts (#25)
 
