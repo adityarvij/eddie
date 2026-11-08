@@ -34,6 +34,17 @@ class Lists(unittest.TestCase):
                                  "a TCL device made 40 lookups, 5 blocked; an unnamed device made 3 lookups, 0 blocked.",
                                  voice_agent.route(said))
 
+    def test_a_sentence_never_starts_lowercase(self, request):
+        with patch('voice_agent.request', return_value={'devices': [{'label': None, 'vendor': None, 'queries': 9, 'blocked': 1}]}):
+            self.assertEqual("I've seen 1 device today. An unnamed device made 9 lookups, 1 blocked.",
+                             voice_agent.route('list my devices'))
+
+    def test_duplicate_rules_are_read_once(self, request):
+        twice = [{'pattern': 'unagi-na.amazon.com', 'action': 'block', 'device': None}] * 2 + [RULES[2]]
+        with patch('voice_agent.request', return_value=twice):
+            self.assertEqual('You have 3 rules: block unagi-na.amazon.com and allow netflix.com on Fire TV.',
+                             voice_agent.route('list my rules'))
+
     def test_long_lists_point_to_the_dashboard(self, request):
         many = [{'pattern': f'{n}.example', 'action': 'block', 'device': None} for n in range(8)]
         with patch('voice_agent.request', return_value=many):
