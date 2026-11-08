@@ -64,6 +64,14 @@ assert.equal(tag(get('feed').children.at(-1)).className,'tag tag-bypass');
 assert.equal(get('notice').textContent,bypassReason);
 assert.equal(get('requests').textContent,'4','bypass suspicions are not DNS requests');
 
+// Geo alerts (#102): a [new country?] row and a toast with the caveat the API sent; not a DNS request.
+const geoReason='Doorbell started talking to a server in Russia (example.com, 5.6.7.8). Until now its servers were in the United States. IP location is approximate.';
+socket.onmessage({data:JSON.stringify({type:'geo_alert',ts:Date.now(),device_mac:'f0:4f:7c:11:22:34',device:'Doorbell',domain:'example.com',ip:'5.6.7.8',country:'RU',country_name:'Russia',previous:['US'],approximate:true,reason:geoReason})});
+assert.equal(tag(get('feed').children.at(-1)).parent.textContent,`[new country?] ${geoReason}`);
+assert.equal(tag(get('feed').children.at(-1)).className,'tag tag-geo');
+assert.equal(get('notice').textContent,geoReason);
+assert.equal(get('requests').textContent,'4','geo alerts are not DNS requests');
+
 // Rollbacks: a [rolled back?] row and a toast with the API's reason, which says it's a guess.
 const rollbackReason="I removed the block on a.example for TV: it asked for a.example 14 times in a minute after the block, which can mean it stopped working. That's a guess, not proof it broke. Block it again as a pinned rule to keep it.";
 const rolledBack=applied=>socket.onmessage({data:JSON.stringify({type:'rule_rolled_back',ts:Date.now(),rule:{id:9,pattern:'a.example',action:'block',device_mac:'f0:4f:7c:11:22:33',device:'TV',created_by:'voice',pinned:false},device_mac:'f0:4f:7c:11:22:33',device:'TV',sign:'retry_storm',reason:rollbackReason,applied})});

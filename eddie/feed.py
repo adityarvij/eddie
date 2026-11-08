@@ -13,6 +13,7 @@ within REPEAT_MS, such as a browser asking for A and AAAA at once.
 New device alerts (#98) go to POST /devices/new, sent by send_new_devices
 from the device watcher's thread: rare, so not queued, and dropped if the API
 doesn't answer (the device stays pending in eddie.db for the dashboard).
+Geo alerts (#102) go to POST /geo/alerts the same way, from geoip's worker.
 
 Events use the query format in docs/EVENTS.md. Until devices.py (#14) maps an
 IP to a MAC and label, device_mac is "ip:<client IP>" and device is the IP.
@@ -112,6 +113,10 @@ class FeedPublisher:
     def send_new_devices(self, alerts: list[dict]) -> bool:
         """POST new_device alerts to the API. Blocking (one timeout): call from a worker thread."""
         return self._send(alerts, "/devices/new")
+
+    def send_geo_alerts(self, alerts: list[dict]) -> bool:
+        """POST geo_alert events (#102) to the API. Blocking: geoip's worker thread calls it."""
+        return self._send(alerts, "/geo/alerts")
 
     def _send(self, events: list[dict], path: str = "/ingest") -> bool:
         req = urllib.request.Request(self.url + path, data=json.dumps(events).encode(),

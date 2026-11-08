@@ -67,7 +67,7 @@ Both are still answered and written to `eddie.db`. So `totals.seen`,
 The API adds `id`, `company` and `category` (from `eddie/labels.py`), plus
 `beacon_s` and `idle` (from `eddie/beacons.py`, #24), and pushes:
 
-- `snapshot`: sent once on connect: `{events, ai_verdicts, bypass, totals, home_mode}`
+- `snapshot`: sent once on connect: `{events, ai_verdicts, bypass, geo, totals, home_mode}`
 - `query`: the event above plus `id`, `company`, `category`, `beacon_s`, `idle`
 
 | Added field | Notes |
@@ -85,6 +85,7 @@ Both are computed by the API from the events it has received, keyed by
 - `question` / `question_resolved`: Eddie is asking whether to block a likely tracker, and its answer (see Ask before blocking below)
 - `new_device`, `quarantine`, `device_status`: see New devices and quarantine below
 - `bypass_suspected`: a device looked up an encrypted DNS resolver (see Bypass detection below)
+- `geo_alert`: a device's DNS answers pointed to a country it hadn't used (see Geo alerts below)
 - `rule_rolled_back`: Eddie deleted a new block rule that looked like it broke a device (see Self-correcting blocks below)
 
 ## Bypass detection: `bypass_suspected` (#97)
@@ -111,6 +112,35 @@ pushes, right after the query:
 - Not a lookup: it doesn't change `totals`. The last 50 are kept in memory
   and sent as `bypass` in the `snapshot`; a restart clears them.
 - The dashboard shows it as a `[bypass?]` feed row and a toast with `reason`.
+
+## Geo alerts: `geo_alert`, `POST /geo/alerts` (#102)
+
+The DNS server's geoip worker (`eddie/geoip.py`) looks up the public A and
+AAAA addresses in each forwarded answer in the pinned offline country
+database. Once a device has finished learning (50 answers *and* an hour since
+its first), an address in a country it hasn't used before is posted to
+`POST /geo/alerts` (one event or a list; a write, so it needs the API token
+off loopback), and the API pushes it unchanged:
+
+```json
+{"type": "geo_alert", "ts": 1762531200123, "device_mac": "f0:4f:7c:11:22:33", "device": "Doorbell",
+ "domain": "telemetry.example", "ip": "77.88.8.8", "country": "RU", "country_name": "Russia",
+ "previous": ["US"], "approximate": true,
+ "reason": "Doorbell started talking to a server in Russia (telemetry.example, 77.88.8.8). Until now its servers were in the United States. IP location is approximate: CDNs and cloud providers serve from many countries, so this is where the server's address is registered, not proof of where the data goes."}
+```
+
+- `domain` is the name the device looked up (a CNAME's target isn't named);
+  `ip` is the address in the new country; `previous` is the ISO codes the
+  device had used, sorted. `approximate` is always `true` and `reason`
+  always carries the caveat: say it whenever an alert is read aloud or shown.
+- Once per device and country. A device that raises more than 5 new countries
+  in 24 hours stops raising them (a phone or laptop roaming the web).
+- What a device has used lives in the DNS server's memory and restarts with
+  it, so a restart means another learning period with no alerts.
+- Blocked, spoofed and offline-cached answers aren't looked up.
+- Not a lookup: it doesn't change `totals`. The last 50 are kept in memory
+  and sent as `geo` in the `snapshot`; an API restart clears them.
+- The dashboard shows it as a `[new country?]` feed row and a toast with `reason`.
 
 ## Device baselines: `new_domain`, `baseline_state`, `/baselines`
 

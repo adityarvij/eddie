@@ -10,6 +10,8 @@ waits for the DNS server to load them before answering; see docs/EVENTS.md.
 from its query log, and stores user labels (devices.py).
 /questions holds "block this likely tracker?" questions from AI tracker verdicts
 in memory, and an answer writes a rule like /rules does (questions.py, #79).
+/geo/alerts takes the DNS server's geo_alert events (geoip.py, #102) and
+pushes them out, keeping the last 50 for the snapshot.
 /devices/new takes the DNS server's new_device alerts and pushes them to the
 feed; /quarantine and /devices/{key}/approve|deny change quarantine (#98,
 quarantine.py) and wait for DNS to load it like rules.
@@ -47,7 +49,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 
 from . import away, baselines, beacons, bypass, decision, demo_week, devices, inferences, insights, labels, occupancy, offline, quarantine, questions, rollback, rules, store
-from .events import Action, AIVerdictEvent, ModeUpdate, NewDeviceEvent, OfflineUpdate, QuarantineUpdate, QueryEvent
+from .events import Action, AIVerdictEvent, GeoAlertEvent, ModeUpdate, NewDeviceEvent, OfflineUpdate, QuarantineUpdate, QueryEvent
 
 # In memory for now; SQLite (store.py) replaces this once the DNS side lands.
 recent: deque[dict] = deque(maxlen=20000)
@@ -61,6 +63,7 @@ asking = questions.Questions()  # ask before blocking (#79)
 timing = {"beacons": beacons.Beacons(), "idle": beacons.Idle()}  # beacon_s and idle on each event (#24)
 suspicions = bypass.Suspicions()  # bypass_suspected events (#97)
 bypass_recent: deque[dict] = deque(maxlen=50)
+geo_recent: deque[dict] = deque(maxlen=50)  # geo_alert events (#102), memory only
 watcher = rollback.Watcher()  # new block rules that may have broken a device (#101)
 rollbacks: set[asyncio.Task] = set()  # rollbacks waiting for DNS, so ingest doesn't
 ids = itertools.count(1)
@@ -522,6 +525,17 @@ async def list_devices(hours: int = Query(24, ge=1, le=168)):
     return {"hours": hours, "devices": devices.all_devices(rules_db(), since), **quarantine_state()}
 
 
+@app.post("/geo/alerts")
+async def geo_alerts(body: GeoAlertEvent | list[GeoAlertEvent]):
+    # Not a lookup: totals and the feed are unchanged. A restart forgets them.
+    alerts = body if isinstance(body, list) else [body]
+    for alert in alerts:
+        event = alert.model_dump()
+        geo_recent.append(event)
+        await broadcast(event)
+    return {"ok": True, "count": len(alerts)}
+
+
 @app.post("/devices/new")
 async def new_devices(body: NewDeviceEvent | list[NewDeviceEvent]):
     # Sent by the DNS server once the MAC is stored as pending; says nothing about enforcement.
@@ -617,6 +631,7 @@ async def ws_events(ws: WebSocket):
         "events": list(feed())[-60:],
         "ai_verdicts": list(ai_verdicts.values()),
         "bypass": list(bypass_recent),
+        "geo": list(geo_recent),
         "questions": asking.pending(),
         "totals": totals,
         "home_mode": state["home_mode"],

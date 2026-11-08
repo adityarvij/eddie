@@ -1,3 +1,5 @@
 `webrtc-test-audio.pcm`: public 8 kHz, mono signed 16-bit PCM speech fixture from https://github.com/wiseman/py-webrtcvad/blob/master/test-audio.raw, retrieved 2026-11-07. License reproduced in WEBRTC_VAD_LICENSE. Tests resample it in memory, mix deterministic generated noise, and never use household recordings. No raw microphone audio or transcripts are saved.
 
 `traffic.pcap`: hand-built Ethernet frames for the traffic monitor (`tests/test_traffic.py`), written by `make_traffic_pcap.py`. Invented locally administered MACs, private LAN addresses and well-known public servers; no household capture. Valid pcap (`tcpdump -r` reads it).
+
+`geoip-country.csv`: a tiny GeoIP database in DB-IP's IP to Country Lite format (`start,end,country`) for `tests/test_geoip.py`. The countries are invented for the tests and say nothing about who really holds these addresses; the gaps between rows and an IPv6 range that doesn't end on a /64 boundary are deliberate. Not the real database, which `scripts/provision_geoip.py` fetches.

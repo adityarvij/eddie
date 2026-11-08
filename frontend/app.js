@@ -13,7 +13,7 @@ function addEvent(event) {
   renderEvent(event, device, action);
 }
 // A feed line: a coloured status tag ([approved], [blocked], [flagged], [approved (ai)]) then the text.
-const TAGS = { allow: 'approved', block: 'blocked', flag: 'flagged', spoof: 'spoofed', ai: 'ai', rule: 'rule', bypass: 'bypass?', rollback: 'rolled back?' };
+const TAGS = { allow: 'approved', block: 'blocked', flag: 'flagged', spoof: 'spoofed', ai: 'ai', rule: 'rule', bypass: 'bypass?', geo: 'new country?', rollback: 'rolled back?' };
 // What the DNS engine does with each AI label (decision.py), coloured like that result. The AI never
 // blocks: a tracker is flagged, and so is an unsure domain, which says unsure to tell them apart.
 const AI_RESULTS = { needed: ['approved', 'allow'], unsure: ['unsure', 'flag'], tracker: ['flagged', 'flag'] };
@@ -229,6 +229,7 @@ function consumeEvent(event) {
   if (event.type === 'away_mode') return applyModes(event);
   // A suspicion, never proof: the reason says what was looked up and never that a device is covered.
   if (event.type === 'bypass_suspected') { feedNote('bypass', event.reason, event); notice(event.reason); return; }
+  if (event.type === 'geo_alert') { feedNote('geo', event.reason, event); notice(event.reason); return; }
   if (event.type === 'rule_rolled_back') {
     // A guess from traffic, never proof: the reason says so; applied false means DNS hasn't confirmed the block is gone.
     const text = event.applied ? event.reason : `${event.reason} Eddie's DNS hasn't confirmed the block is gone yet.`;
@@ -312,7 +313,7 @@ $('mic').onclick = async () => { try { const r = await control(voiceReady ? '/ap
 const stream = new EventSource('/events'); stream.onopen = () => { $('feed-status').textContent='Connected to local event bridge'; }; stream.onerror=()=>{ $('feed-status').textContent='Reconnecting to local event bridge…'; if(dialog.open) dismiss(); }; stream.onmessage=e=>{ try { const event=JSON.parse(e.data); if(event.type==='traffic_status'){ $('connection').firstChild.textContent=event.connected?'Connected':'Waiting'; $('source-label').textContent=event.connected?'LIVE TRAFFIC':'WAITING FOR TRAFFIC'; } else consumeEvent(event); } catch {} };
 // The traffic API runs on the same machine as this page (localhost on the Mac, its LAN IP from the iPad).
 const trafficUrl = new URLSearchParams(location.search).get('traffic') || `ws://${location.hostname || 'localhost'}:8000/ws/events`;
-function connectTraffic() { let ws; try { ws=new WebSocket(trafficUrl); } catch { return; } ws.onopen=()=>{ $('connection').firstChild.textContent='Connected'; $('source-label').textContent='LIVE TRAFFIC'; }; ws.onmessage=e=>{ try { const message=JSON.parse(e.data); if(message.type==='snapshot'){ total=0; blocked=0; allowedCount=0; deviceSet.clear(); $('feed').replaceChildren(); } let events=Array.isArray(message)?message:Array.isArray(message.events)?message.events:[message]; if(message.type==='snapshot'){ events=[...events, ...(message.ai_verdicts || []), ...(message.bypass || [])].sort((a,b)=>(dateOf(a).getTime()||0)-(dateOf(b).getTime()||0)); } events.forEach(consumeEvent); if(message.type==='snapshot'){ showQuestions(message.questions); loadRules(); refreshPanels(); } const totals=message.totals || (message.type==='totals'?message:null); if(totals){ total=totals.seen; blocked=totals.blocked; $('requests').textContent=total.toLocaleString(); $('blocked').textContent=blocked.toLocaleString(); updateCounts(); } } catch {} }; ws.onclose=()=>{ $('connection').firstChild.textContent='Waiting'; $('source-label').textContent='WAITING FOR TRAFFIC'; setTimeout(connectTraffic,2500); }; ws.onerror=()=>ws.close(); }
+function connectTraffic() { let ws; try { ws=new WebSocket(trafficUrl); } catch { return; } ws.onopen=()=>{ $('connection').firstChild.textContent='Connected'; $('source-label').textContent='LIVE TRAFFIC'; }; ws.onmessage=e=>{ try { const message=JSON.parse(e.data); if(message.type==='snapshot'){ total=0; blocked=0; allowedCount=0; deviceSet.clear(); $('feed').replaceChildren(); } let events=Array.isArray(message)?message:Array.isArray(message.events)?message.events:[message]; if(message.type==='snapshot'){ events=[...events, ...(message.ai_verdicts || []), ...(message.bypass || []), ...(message.geo || [])].sort((a,b)=>(dateOf(a).getTime()||0)-(dateOf(b).getTime()||0)); } events.forEach(consumeEvent); if(message.type==='snapshot'){ showQuestions(message.questions); loadRules(); refreshPanels(); } const totals=message.totals || (message.type==='totals'?message:null); if(totals){ total=totals.seen; blocked=totals.blocked; $('requests').textContent=total.toLocaleString(); $('blocked').textContent=blocked.toLocaleString(); updateCounts(); } } catch {} }; ws.onclose=()=>{ $('connection').firstChild.textContent='Waiting'; $('source-label').textContent='WAITING FOR TRAFFIC'; setTimeout(connectTraffic,2500); }; ws.onerror=()=>ws.close(); }
 $('home-mode').onclick = () => setMode('home_mode', !modes.home_mode);
 $('offline-mode').onclick = () => setMode('offline', !modes.offline);
 $('quarantine-mode').onclick = () => setMode('quarantine', !modes.quarantine);
