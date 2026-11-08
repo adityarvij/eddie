@@ -2,12 +2,12 @@ const $ = id => document.getElementById(id);
 let total = 0, blocked = 0, deviceSet = new Set(), voiceReady = false, speaking = false, closeTimer;
 let is_eddie_active = false, exitTimer, confirming = false, confirmTimer, userClosed = false;
 const dialog = $('assistant');
-function updateCounts() { $('allowed').textContent = allowedCount.toLocaleString(); $('blocked-count').textContent = blocked.toLocaleString(); }
-let allowedCount = 0;
+function updateCounts() { $('allowed').textContent = allowedCount.toLocaleString(); $('blocked-count').textContent = blocked.toLocaleString(); $('broker-count').textContent = brokerCount.toLocaleString(); }
+let allowedCount = 0, brokerCount = 0;
 function notice(message) { $('notice').textContent = message; $('notice').hidden = false; clearTimeout(notice.timer); notice.timer = setTimeout(() => $('notice').hidden = true, 7000); }
 function addEvent(event) {
   if (!event || typeof event !== 'object' || !event.domain) return;
-  total++; const action = String(event.action || event.decision || 'allow').toLowerCase(); if (action === 'block' || action === 'blocked') blocked++; if(['allow','allowed'].includes(action)) allowedCount++; updateCounts();
+  total++; const action = String(event.action || event.decision || 'allow').toLowerCase(); if (action === 'block' || action === 'blocked') blocked++; if(['allow','allowed'].includes(action)) allowedCount++; if (event.broker) brokerCount++; updateCounts();
   const device = typeof event.device === 'object' ? event.device.name || event.device.ip || 'Unknown device' : event.device || event.device_name || event.client_ip || 'Unknown device';
   deviceSet.add(String(device)); $('requests').textContent = total.toLocaleString(); $('blocked').textContent = blocked.toLocaleString(); $('devices').textContent = deviceSet.size;
   renderEvent(event, device, action);
@@ -35,7 +35,10 @@ function renderEvent(event, device, action) {
   const time = timeOf(event);
   const kind = ['block','blocked'].includes(action) ? 'block' : ['flag', 'spoof'].includes(action) ? action : 'allow';
   const line = taggedLine(kind, `${device} → ${event.domain}${event.reason ? ' — ' + event.reason : ''}`);
-  row.append(time, line); $('feed').append(row);
+  row.append(time, line);
+  // Known data broker or ad exchange (the API's label): where data gets sold on, so it stands out.
+  if (event.broker) { row.className = 'event broker'; const tag = document.createElement('span'); tag.className = 'tag tag-broker'; tag.textContent = ` [${event.broker}]`; line.append(tag); }
+  $('feed').append(row);
   if (!$('assistant-logs').hidden) { $('voice-logs').append(row.cloneNode(true)); while ($('voice-logs').children.length > 150) $('voice-logs').firstChild.remove(); $('voice-logs').scrollTop = $('voice-logs').scrollHeight; }
   while ($('feed').children.length > 150) $('feed').firstChild.remove();
   $('feed').scrollTop = $('feed').scrollHeight;
@@ -313,7 +316,7 @@ $('mic').onclick = async () => { try { const r = await control(voiceReady ? '/ap
 const stream = new EventSource('/events'); stream.onopen = () => { $('feed-status').textContent='Connected to local event bridge'; }; stream.onerror=()=>{ $('feed-status').textContent='Reconnecting to local event bridge…'; if(dialog.open) dismiss(); }; stream.onmessage=e=>{ try { const event=JSON.parse(e.data); if(event.type==='traffic_status'){ $('connection').firstChild.textContent=event.connected?'Connected':'Waiting'; $('source-label').textContent=event.connected?'LIVE TRAFFIC':'WAITING FOR TRAFFIC'; } else consumeEvent(event); } catch {} };
 // The traffic API runs on the same machine as this page (localhost on the Mac, its LAN IP from the iPad).
 const trafficUrl = new URLSearchParams(location.search).get('traffic') || `ws://${location.hostname || 'localhost'}:8000/ws/events`;
-function connectTraffic() { let ws; try { ws=new WebSocket(trafficUrl); } catch { return; } ws.onopen=()=>{ $('connection').firstChild.textContent='Connected'; $('source-label').textContent='LIVE TRAFFIC'; }; ws.onmessage=e=>{ try { const message=JSON.parse(e.data); if(message.type==='snapshot'){ total=0; blocked=0; allowedCount=0; deviceSet.clear(); $('feed').replaceChildren(); } let events=Array.isArray(message)?message:Array.isArray(message.events)?message.events:[message]; if(message.type==='snapshot'){ events=[...events, ...(message.ai_verdicts || []), ...(message.bypass || []), ...(message.geo || [])].sort((a,b)=>(dateOf(a).getTime()||0)-(dateOf(b).getTime()||0)); } events.forEach(consumeEvent); if(message.type==='snapshot'){ showQuestions(message.questions); loadRules(); refreshPanels(); } const totals=message.totals || (message.type==='totals'?message:null); if(totals){ total=totals.seen; blocked=totals.blocked; $('requests').textContent=total.toLocaleString(); $('blocked').textContent=blocked.toLocaleString(); updateCounts(); } } catch {} }; ws.onclose=()=>{ $('connection').firstChild.textContent='Waiting'; $('source-label').textContent='WAITING FOR TRAFFIC'; setTimeout(connectTraffic,2500); }; ws.onerror=()=>ws.close(); }
+function connectTraffic() { let ws; try { ws=new WebSocket(trafficUrl); } catch { return; } ws.onopen=()=>{ $('connection').firstChild.textContent='Connected'; $('source-label').textContent='LIVE TRAFFIC'; }; ws.onmessage=e=>{ try { const message=JSON.parse(e.data); if(message.type==='snapshot'){ total=0; blocked=0; allowedCount=0; brokerCount=0; deviceSet.clear(); $('feed').replaceChildren(); } let events=Array.isArray(message)?message:Array.isArray(message.events)?message.events:[message]; if(message.type==='snapshot'){ events=[...events, ...(message.ai_verdicts || []), ...(message.bypass || []), ...(message.geo || [])].sort((a,b)=>(dateOf(a).getTime()||0)-(dateOf(b).getTime()||0)); } events.forEach(consumeEvent); if(message.type==='snapshot'){ showQuestions(message.questions); loadRules(); refreshPanels(); } const totals=message.totals || (message.type==='totals'?message:null); if(totals){ total=totals.seen; blocked=totals.blocked; $('requests').textContent=total.toLocaleString(); $('blocked').textContent=blocked.toLocaleString(); updateCounts(); } } catch {} }; ws.onclose=()=>{ $('connection').firstChild.textContent='Waiting'; $('source-label').textContent='WAITING FOR TRAFFIC'; setTimeout(connectTraffic,2500); }; ws.onerror=()=>ws.close(); }
 $('home-mode').onclick = () => setMode('home_mode', !modes.home_mode);
 $('offline-mode').onclick = () => setMode('offline', !modes.offline);
 $('quarantine-mode').onclick = () => setMode('quarantine', !modes.quarantine);

@@ -157,8 +157,9 @@ async def ingest(body: QueryEvent | list[QueryEvent]):
         company, category = labels.lookup(ev.domain)
         every = timing["beacons"].observe(ev.device_mac, ev.domain, ev.ts)
         idle = timing["idle"].observe(ev.device_mac, ev.ts, ev.action == "allow" and category in labels.HUMAN)
+        seller = labels.broker(ev.domain)
         row = {**ev.model_dump(), "id": next(ids), "company": company, "category": category,
-               "beacon_s": every and round(every / 1000), "idle": idle}
+               "broker": seller and seller["kind"], "beacon_s": every and round(every / 1000), "idle": idle}
         if ev.ts >= cutoff:  # already past retention: still counted and broadcast, never kept
             recent.append(row)
         totals["seen"] += 1
@@ -275,10 +276,11 @@ def events(since: int = 0, device: str | None = None, limit: int = 200,
 @app.get("/summary")
 def summary(window: Literal["15m", "1h", "24h"] = "1h"):
     events = list(feed())
-    # text and companies cover the last hour; devices covers the requested window.
+    # text and companies cover the last hour; devices and brokers cover the requested window.
     return {**totals, "home_mode": state["home_mode"], "text": insights.summary_text(events),
             "companies": insights.company_counts(events), "company_window_seconds": 3600,
-            "window": window, "devices": insights.device_counts(events, insights.WINDOWS_MS[window])}
+            "window": window, "devices": insights.device_counts(events, insights.WINDOWS_MS[window]),
+            "brokers": insights.broker_counts(events, insights.WINDOWS_MS[window])}
 
 
 def report_limit_hours() -> int:

@@ -98,11 +98,17 @@ assert.equal(get('assistant-pending').hidden,true,'dismissal clears the pending 
 assert.equal(get('assistant-pending').textContent,'');
 
 assert.doesNotMatch(source,/localStorage|sessionStorage|indexedDB|document\.cookie/,'nothing is persisted client-side');
+assert.equal(get('broker-count').textContent,'0','an ordinary lookup is not broker traffic');
+socket.onmessage({data:JSON.stringify({domain:'rlcdn.com',device:'TV',action:'allow',broker:'data broker',ts:Date.now()})});
+assert.equal(get('broker-count').textContent,'1','broker lookups get their own counter');
+assert.equal(get('feed').children.at(-1).className,'event broker','broker lookups are highlighted');
+assert.match(get('feed').children.at(-1).textContent,/\[approved\] TV → rlcdn\.com \[data broker\]$/);
 // A snapshot's verdicts sit among its DNS lines by time, not in a block at the end.
 socket.onmessage({data:JSON.stringify({type:'snapshot',events:[
   {domain:'a.example',device:'TV',action:'flag',ts:1000},{domain:'c.example',device:'TV',action:'allow',ts:3000}],
   ai_verdicts:[{type:'ai_verdict',domain:'b.example',label:'needed',reason:'Why',ts:2000}],totals:{seen:2,blocked:0}})});
 assert.deepEqual(get('feed').children.map(row=>row.textContent.match(/[abc]\.example/)[0]),['a.example','b.example','c.example']);
+assert.equal(get('broker-count').textContent,'0','a snapshot recounts broker lookups from its own events');
 console.log('Frontend query/verdict/rule/confirmation event checks passed');
 
 // "What they know": the demo week always shows its banner; live facts never do.
