@@ -111,6 +111,56 @@ pushes, right after the query:
   and sent as `bypass` in the `snapshot`; a restart clears them.
 - The dashboard shows it as a `[bypass?]` feed row and a toast with `reason`.
 
+## Device baselines: `new_domain`, `baseline_state`, `/baselines`
+
+The API keeps each device's usual registrable domains in `eddie.db`
+(`eddie/baselines.py`; nothing with `EDDIE_DB=off`). A device's baseline starts
+learning at its first feed event and becomes active once it has made at
+least 200 lookups **and** an hour has passed since the first one
+(`EDDIE_BASELINE_LOOKUPS`, `EDDIE_BASELINE_MINUTES`). Lookups are counted as
+the feed sees them (no plumbing, 2 s repeats merged), every action included.
+Devices are keyed like `GET /devices`: MAC, or client IP (the feed's
+`ip:` prefix is dropped).
+
+After learning, the first lookup of a registrable domain the device has never
+looked up pushes, after that batch's query events:
+
+```json
+{"type": "new_domain", "ts": 1762531200123, "device_mac": "f0:4f:7c:11:22:33", "device": "Fire Stick",
+ "domain": "anthropic.com", "query": "api.anthropic.com", "action": "allow"}
+```
+
+- `domain` is the registrable domain (eTLD+1); `query` the name looked up;
+  `action` the DNS decision (`block` means it tried and was stopped).
+- Once per device and domain: the domain joins the baseline. It means "first
+  time since learning", not "suspicious": a learning window always misses
+  domains a device uses only now and then.
+- A domain not looked up for `EDDIE_RETENTION_DAYS` is forgotten with the
+  query log, so it counts as new again.
+- More than 20 new domains within 24 h (a phone or laptop browsing) makes the
+  baseline `unstable`: domains are still recorded, no more `new_domain`
+  events are sent until it's reset.
+
+`baseline_state` is pushed when a baseline becomes `active` or `unstable`, or
+is `reset`: `{"type", "ts", "device_mac", "device", "state", "domains"}`.
+Neither event changes `totals` or is kept for the `snapshot`.
+
+`GET /devices/{key}/baseline` (`404` if none yet, `503` with `EDDIE_DB=off`):
+
+```json
+{"device_mac": "f0:4f:7c:11:22:33", "device": "Fire Stick", "state": "learning", "started_at": 1762531200123,
+ "active_at": null, "last_seen": 1762531800456, "lookups": 120, "domains": 14, "learned_domains": 14,
+ "new_domain_count": 0, "lookups_left": 80, "ms_left": 3000000, "min_lookups": 200, "learn_ms": 3600000,
+ "new_domains": []}
+```
+
+`lookups` stops counting once learning ends. `new_domains` lists up to 20
+domains first seen after learning, newest first, with `first_seen`.
+`GET /baselines` lists every device's baseline in that shape.
+`DELETE /devices/{key}/baseline` forgets the device's baseline (`404` if
+none) and answers `{"device_mac", "reset": true, "domains_deleted"}`; its
+next lookup starts learning again.
+
 ## Home mode: `GET/POST /mode`
 
 `POST /mode {"home_mode": true}`. The decision engine reads `GET /mode` (or

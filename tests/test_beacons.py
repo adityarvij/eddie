@@ -172,7 +172,7 @@ class IngestTests(unittest.TestCase):
         body += [query(ts, 'ping.unlisted.example', 'flag') for ts in regular(60 * S, n=8, start=start + 2 * S)]
         fresh = {'beacons': Beacons(), 'idle': Idle()}
         with patch.object(api, 'recent', []) as recent, patch.object(api, 'timing', fresh), \
-                patch.object(api, 'totals', {'seen': 0, 'blocked': 0}):
+                patch.object(api, 'totals', {'seen': 0, 'blocked': 0}), patch.dict('os.environ', {'EDDIE_DB': 'off'}):
             TestClient(api.app, client=('127.0.0.1', 50000)).post('/ingest', json=body)
         self.assertEqual(False, recent[0]['idle'])
         self.assertEqual(None, recent[0]['beacon_s'])
