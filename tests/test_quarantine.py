@@ -168,7 +168,7 @@ class QuarantineDNSTests(unittest.IsolatedAsyncioTestCase):
         client, self.replies = await loop.create_datagram_endpoint(Client, remote_addr=server.get_extra_info('sockname'))
         watcher = dns_server.StoreWatcher(self.path, decision.engine)
         task = asyncio.create_task(dns_server.watch_store(watcher, every=0.01))
-        self.closers[:0] = [task.cancel, watcher.conn.close, client.close, server.close, up.close]
+        self.closers[:0] = [task.cancel, watcher.close, client.close, server.close, up.close]
         self.client = client
 
     async def ask(self, name):

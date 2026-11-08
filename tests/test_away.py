@@ -190,7 +190,7 @@ class AwayAPITests(unittest.IsolatedAsyncioTestCase):
         client, proto = await loop.create_datagram_endpoint(Client, remote_addr=server.get_extra_info('sockname'))
         watcher = dns_server.StoreWatcher(self.path, decision.engine)
         task = asyncio.create_task(dns_server.watch_store(watcher, every=0.02))
-        self.closers += [up.close, server.close, client.close, task.cancel, watcher.conn.close]
+        self.closers += [up.close, server.close, client.close, task.cancel, watcher.close]
         self.dns = client, proto
         await asyncio.sleep(0.05)
 

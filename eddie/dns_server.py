@@ -46,6 +46,7 @@ import logging
 import os
 import signal
 import sqlite3
+import threading
 import time
 
 from dnslib import AAAA, QTYPE, RCODE, RR, A, DNSRecord
@@ -337,9 +338,21 @@ class StoreWatcher:
         self.engine = engine
         self.mode = mode or offline_mode
         self.seen = None
+        # Cancelling watch_store doesn't stop a poll already in its worker
+        # thread; closing the connection under it can crash sqlite.
+        self.lock = threading.Lock()
+
+    def close(self) -> None:
+        """Close the connection once no poll is using it."""
+        with self.lock:
+            self.conn.close()
 
     def poll(self) -> bool:
         """Reload if rules or verdicts changed since the last poll. True if it did."""
+        with self.lock:
+            return self._poll()
+
+    def _poll(self) -> bool:
         changed = self.conn.execute(
             "SELECT (SELECT count(*) || ':' || ifnull(max(id), 0) || ':' || ifnull(max(ts), 0) FROM rules),"
             " (SELECT count(*) || ':' || ifnull(max(ts), 0) FROM ai_verdicts),"
