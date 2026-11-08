@@ -118,7 +118,8 @@ class GuestRouting(unittest.TestCase):
             'reports': ['What does Amazon know about me?', 'When did the house look empty?'],
             'devices': ['approve the new device', 'deny that new device', 'any suggestions'],
             'rules': ['block tiktok.com', 'allow example.com', 'allow netflix', 'allow *.example.com',
-                      'lock down the TV to Netflix', 'undo that', 'block the TV from talking to Amazon'],
+                      'lock down the TV to Netflix', 'undo that', 'block the TV from talking to Amazon',
+                      'protect health stuff', 'turn off kids protection'],
             'modes': ['turn on home mode', 'turn off home mode', 'turn on kid mode', 'turn on away mode',
                       "I'm leaving for the weekend", 'turn off guest mode', 'turn on guest mode'],
         }

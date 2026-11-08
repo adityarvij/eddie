@@ -3,7 +3,6 @@ import errno
 import sqlite3
 import statistics
 import tempfile
-import threading
 import time
 import unittest
 from unittest.mock import patch
@@ -31,29 +30,6 @@ def upstream_answer(data, tcp=False):
     else:
         reply.add_answer(RR(request.q.qname, QTYPE.A, ttl=300, rdata=A(REAL_IP)))
     return reply.pack()
-
-
-def watch(watcher, every):
-    """Start dns_server.watch_store; the returned closer stops it and closes the connection.
-
-    poll runs in a worker thread that cancelling the task doesn't stop, and closing a
-    connection mid-query can crash SQLite, so the close waits for any running poll.
-    """
-    lock = threading.Lock()
-    poll = watcher.poll
-
-    def locked_poll():
-        with lock:
-            return poll()
-
-    watcher.poll = locked_poll
-    task = asyncio.create_task(dns_server.watch_store(watcher, every=every))
-
-    def close():
-        task.cancel()
-        with lock:
-            watcher.conn.close()
-    return close
 
 
 class FakeUpstream(asyncio.DatagramProtocol):

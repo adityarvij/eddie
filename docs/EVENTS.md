@@ -31,7 +31,7 @@ Body is one event or a list of events.
 | `domain`     | string | lowercase, no trailing dot |
 | `qtype`      | string | `A`, `AAAA`, `HTTPS`, ... |
 | `action`     | string | `allow` \| `block` \| `flag` \| `spoof` (answered with Eddie's IP, #99) |
-| `source`     | string | `rule` \| `allowlist` \| `blocklist` \| `heuristic` \| `ai` \| `home_mode` \| `away_mode` \| `default` |
+| `source`     | string | `rule` \| `allowlist` \| `blocklist` \| `heuristic` \| `ai` \| `home_mode` \| `away_mode` \| `sensitivity` \| `quarantine` \| `default` |
 | `reason`     | string | one short human line, shown on screen |
 
 The DNS server sends every lookup here through `eddie/feed.py`: fire-and-forget
@@ -81,6 +81,7 @@ Both are computed by the API from the events it has received, keyed by
 - `mode`: `{home_mode, home_manual, home_applied, reason}` after every home mode change, sent once the API has waited for DNS to load it; `reason` is `manual` (`POST /mode`, the dashboard or voice) or `presence` (household phones, #20)
 - `offline_mode`: `{offline: bool, applied: bool}` after every `POST /offline-mode`
 - `away_mode`: `{away, away_until, away_applied, away_devices, away_exempt}` after every `POST /mode` with `away` (below)
+- `sensitivity`: `{mode, on, protected, applied, sites, trackers, examples}` after every `POST /sensitivity` (see Sensitivity modes below)
 - `rule_change`: a rule was stored or deleted (see Rules below)
 - `question` / `question_resolved`: Eddie is asking whether to block a likely tracker, and its answer (see Ask before blocking below)
 - `new_device`, `quarantine`, `device_status`: see New devices and quarantine below
@@ -294,6 +295,40 @@ analytics or tracking in `eddie/labels.py`, a cached AI `tracker` verdict
 allowlist, blocklists and the keyword heuristic, so a user allow rule or an
 essential still wins. Everything else, including unknown domains, is
 unchanged.
+
+## Sensitivity modes: `/sensitivity` (#110)
+
+`POST /sensitivity {"mode": "health", "on": true}` turns one mode on or off.
+`mode` is `health`, `kids`, `money` or `beliefs`; anything else is 422. The
+state is stored in `engine_state` (`sensitive_<mode>`, `sensitivity_rev`) and
+the API waits up to 2 s for the DNS server to write `sensitivity_loaded`, the
+same handshake as rules. It answers, and broadcasts as a `sensitivity` event:
+
+```json
+{"mode": "health", "sites": 6, "trackers": 74, "examples": ["BetterHelp", "CVS", "GoodRx"],
+ "on": true, "protected": ["health"], "applied": true}
+```
+
+`sites` and `trackers` are the sizes of the mode's rule set, `examples` up to
+three site owners, `protected` every mode now on. `applied: false` means
+stored but no running DNS server confirmed it. `GET /sensitivity` answers
+`{protected, applied, modes: [{mode, on, sites, trackers, examples}]}`.
+
+Rule set (`eddie/sensitivity.py`): a mode's sites are the domains in
+`eddie/labels.py` labelled with its categories (health: `health`; kids:
+`kids`; money: `finance`, `shopping`; beliefs: `news`, `religion`,
+`politics`). Its trackers are every domain labelled `telemetry`, `ads`,
+`analytics`, `tracking` or `id-sync` plus every domain in
+`eddie/data/brokers.json`, never one of the sites. While a mode is on, a
+device's lookup of one of its sites (or a subdomain) opens a 5-minute window
+for that device, whatever the decision for the site. Inside it, after rules,
+the allowlist, blocklists, the keyword heuristic and away mode's telemetry
+step, the device's lookups of a tracker or of a domain with a cached AI
+`tracker` verdict are blocked with `source: "sensitivity"` and a reason like
+`health protection: graph.facebook.com is a third-party tracker, looked up
+within 5 min of a protected site` (the site itself is never named). Other devices and other lookups are unchanged.
+Windows live in the DNS server's memory (at most 10,000 devices) and close
+when their mode is turned off.
 
 ## Offline mode: `POST /offline-mode` (#26)
 

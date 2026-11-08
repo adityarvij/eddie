@@ -17,18 +17,37 @@ EXAMPLES = {
     'device_activity': (
         "what's the TV doing", "what's my TV been up to",
         'what do you think the Fire Stick is doing', 'show me the Roku activity',
+        'tell me about the Chromecast traffic', 'how active has the television been',
+        'is my streaming device talking to the internet', 'what has the set top box contacted',
     ),
     'summary': (
         "what's been going on", 'give me an overall summary',
         'how is the network doing', 'catch me up on the house',
+        'give me the big picture for my network', 'has anything happened today',
+        'tell me the highlights', 'what should I know about the network', 'give me a broad overview',
+        'show me the whole picture',
     ),
     'recent_blocks': (
         'what got blocked recently', 'show me the latest blocks',
         'which trackers did you just stop', 'recent blocked requests',
+        'what sites have you stopped lately', 'show the newest denied traffic',
+        'have you blocked any trackers recently', 'list the last things you blocked',
+        'which websites did you block most recently',
     ),
     'why_blocked': (
         'why was example.com blocked', 'why did you block that domain',
         'explain why ads.example.com was stopped', 'what made that tracker get blocked',
+        'explain the block on example.com', 'why did you deny telemetry.example.com',
+        'what was wrong with tracker.example.com', 'give me the reason that domain was blocked',
+    ),
+    # Negative anchors make the similarity threshold useful near neighboring
+    # commands and question families. They never become a routable intent.
+    None: (
+        'block the Fire Stick', 'lock down the Roku', 'allow netflix.com',
+        'turn on home mode', 'undo that', 'set a timer for five minutes',
+        'what do companies know about me', 'when does the house look empty',
+        'give me privacy advice', 'how private is my network',
+        'tell me a joke', 'what time is it',
     ),
 }
 

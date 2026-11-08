@@ -143,7 +143,7 @@ class DeclineAndTimeout(LockdownBase):
     def test_no_changes_nothing(self):
         self.ask()
         self.assertEqual(voice_agent.respond('no'), 'Cancelled. Nothing changed.')
-        self.assertEqual(voice_agent.respond('yes'), "Try asking what's been going on, or say turn on home mode.")
+        self.assertIn("don't know how to answer that yet", voice_agent.respond('yes'))
         self.assertEqual([], self.backend.posts)
 
     def test_timeout_never_executes(self):

@@ -11,7 +11,7 @@ import httpx2 as httpx
 from dnslib import DNSRecord
 
 from eddie import api, decision, dns_server, home, store
-from tests.test_dns_server import REAL_IP, Client, FakeUpstream, watch
+from tests.test_dns_server import REAL_IP, Client, FakeUpstream
 from tests.test_rules_api import FakeSocket
 
 PHONE, OTHER_PHONE, LAPTOP = 'aa:00:00:00:00:01', 'aa:00:00:00:00:02', 'aa:00:00:00:00:03'
@@ -85,7 +85,7 @@ class PresenceTests(unittest.TestCase):
     def test_watcher_records_the_home_revision_it_loaded(self):
         engine = decision.Engine()
         watcher = dns_server.StoreWatcher(os.path.join(self.tmp.name, 'eddie.db'), engine)
-        self.addCleanup(watcher.conn.close)
+        self.addCleanup(watcher.close)
         watcher.poll()
         rev = home.write(self.conn, True, False)
         self.assertEqual(rev - 1, home.loaded(self.conn))
@@ -129,8 +129,8 @@ class HomeAPITests(unittest.IsolatedAsyncioTestCase):
         server = await dns_server.serve('127.0.0.1', 0, [up.get_extra_info('sockname')], 0.3)
         client, proto = await loop.create_datagram_endpoint(Client, remote_addr=server.get_extra_info('sockname'))
         watcher = dns_server.StoreWatcher(self.path, decision.engine)
-        stop_watching = watch(watcher, 0.02)
-        self.closers += [up.close, server.close, client.close, stop_watching]
+        task = asyncio.create_task(dns_server.watch_store(watcher, every=0.02))
+        self.closers += [up.close, server.close, client.close, task.cancel, watcher.close]
         self.dns = client, proto
         await asyncio.sleep(0.05)
 

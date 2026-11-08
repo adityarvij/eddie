@@ -1,0 +1,10 @@
+# Checks GitHub for a new main every 5 minutes; sudo touch /etc/eddie/hold pauses it (#18).
+[Unit]
+Description=Check for a new Eddie main every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target

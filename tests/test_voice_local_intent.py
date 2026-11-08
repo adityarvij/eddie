@@ -68,6 +68,10 @@ class MatcherThreshold(unittest.TestCase):
         matcher = local_intent.Matcher(FakeEncoder(), threshold=.5)
         self.assertEqual('summary', matcher.match('give me a summary'))
 
+    def test_negative_anchors_are_not_a_routable_intent(self):
+        self.assertIn(None, local_intent.EXAMPLES)
+        self.assertIn('block the Fire Stick', local_intent.EXAMPLES[None])
+
 
 if __name__ == '__main__':
     unittest.main()

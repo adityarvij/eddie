@@ -10,7 +10,7 @@ import httpx2 as httpx
 from dnslib import DNSRecord
 
 from eddie import api, away, decision, dns_server, store
-from tests.test_dns_server import REAL_IP, Client, FakeUpstream, watch
+from tests.test_dns_server import REAL_IP, Client, FakeUpstream
 from tests.test_rules_api import FakeSocket
 
 HOUR = away.HOUR_MS
@@ -189,8 +189,8 @@ class AwayAPITests(unittest.IsolatedAsyncioTestCase):
         server = await dns_server.serve('127.0.0.1', 0, [up.get_extra_info('sockname')], 0.3)
         client, proto = await loop.create_datagram_endpoint(Client, remote_addr=server.get_extra_info('sockname'))
         watcher = dns_server.StoreWatcher(self.path, decision.engine)
-        stop_watching = watch(watcher, 0.02)
-        self.closers += [up.close, server.close, client.close, stop_watching]
+        task = asyncio.create_task(dns_server.watch_store(watcher, every=0.02))
+        self.closers += [up.close, server.close, client.close, task.cancel, watcher.close]
         self.dns = client, proto
         await asyncio.sleep(0.05)
 
@@ -276,7 +276,7 @@ class WatcherAckTests(unittest.TestCase):
             self.assertEqual(rev, away.loaded(conn))
             self.assertEqual('block', engine.evaluate(TELEMETRY, TV).action)
             self.assertFalse(watcher.poll())
-            watcher.conn.close()
+            watcher.close()
             conn.close()
 
 
