@@ -664,7 +664,7 @@ Voice recovery: after an initial wake with no command, or an empty/failed transc
 
 Active conversation lifecycle: listening state events include `is_eddie_active: true`; after four seconds with no user speech, `voice_state: dismissed` includes `is_eddie_active: false`. This applies immediately after the wake and after every reply. Two empty transcriptions in a row also end with `dismissed`. `POST /api/voice/dismiss` (the overlay's close button; localhost only, `{"ok": true}`) ends an active conversation: the worker emits `voice_state: dismissed` instead of `listening` and waits for the wake phrase again. It also cancels any pending confirmation.
 
-Confirmation: after Eddie reads back a risky action, the bridge emits `voice_state: confirming` with `kind`, `prompt` and `expires_in_ms` in place of `idle`; the worker's following `listening` event does not clear it. The next `thinking`, `dismissed` or the expiry clears it. Action arguments are never sent. The dashboard shows `prompt` (Eddie's read-back, not the user's words) under Eddie with “say yes to confirm or no to cancel” until then (#19).
+Confirmation: after Eddie reads back a risky action, the bridge emits `voice_state: confirming` with `kind`, `prompt` and `expires_in_ms` in place of `idle`; the worker's following `listening` event does not clear it. The next `thinking`, `dismissed` or the expiry clears it. Action arguments are never sent. The dashboard shows `prompt` (Eddie's read-back; for `kind: text` it contains the message being sent, word for word) under Eddie with “say yes to confirm or no to cancel” until then (#19).
 
 ## Company counts (#25)
 

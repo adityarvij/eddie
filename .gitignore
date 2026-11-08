@@ -5,3 +5,4 @@ __pycache__/
 eddie.db
 eddie.db-*
 eddie/data/geoip/
+voice/contacts.json
