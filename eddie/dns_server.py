@@ -3,6 +3,9 @@
 Allowed lookups are forwarded to an upstream resolver (1.1.1.1, then 9.9.9.9)
 and the answer is passed back untouched. Blocked lookups get a dead end:
 0.0.0.0 for A, :: for AAAA, an empty answer for anything else, TTL 60.
+Spoofed lookups (rule action spoof, #99) get Eddie's own IPv4 (EDDIE_SPOOF_IP)
+for A and an empty answer for anything else, so the device talks to the stub
+server (spoof_server.py) instead. Without EDDIE_SPOOF_IP they're blocked.
 The decision comes from decision.evaluate, which never waits on a model.
 
 Every lookup is written to the queries table in eddie.db (EDDIE_DB) through
@@ -19,7 +22,9 @@ the first time is sent to the API as a new_device alert, and quarantine
 (#98, quarantine.py) is reloaded like rules.
 Offline mode (#26, offline.py) is loaded the same way: while it's on, nothing
 is forwarded and allowed lookups get the answer kept from the last time they
-were forwarded, or SERVFAIL.
+were forwarded, or SERVFAIL. Away mode (#109, away.py) is loaded with the
+rules: the devices it covers and its end time go into the decision engine.
+EDDIE_BLOCK_DOH=on blocks the encrypted DNS resolver names in bypass.py (#97).
 Each decision is also sent to the live feed (POST /ingest on the local API)
 by feed.FeedPublisher, off the reply path; EDDIE_FEED=off turns that off.
 
@@ -36,7 +41,7 @@ import time
 
 from dnslib import AAAA, QTYPE, RCODE, RR, A, DNSRecord
 
-from . import decision, devices, lists, offline, quarantine, rules
+from . import away, decision, devices, lists, offline, quarantine, rules
 from . import store
 from .feed import FeedPublisher, feed_from_env, query_event
 from .store import QueryLog, query_log_from_env
@@ -48,6 +53,7 @@ MAX_IN_FLIGHT = 512  # lookups being answered at once; extra packets are dropped
 
 log = logging.getLogger("eddie.dns")
 offline_mode = offline.Mode()
+spoof = {"ip": None}  # Eddie's LAN IPv4 for spoof answers (EDDIE_SPOOF_IP); None blocks instead
 
 
 def upstreams_from_env() -> list[tuple[str, int]]:
@@ -67,6 +73,26 @@ def block_reply(request: DNSRecord) -> DNSRecord:
         reply.add_answer(RR(q.qname, QTYPE.A, ttl=BLOCK_TTL, rdata=A("0.0.0.0")))
     elif q.qtype == QTYPE.AAAA:
         reply.add_answer(RR(q.qname, QTYPE.AAAA, ttl=BLOCK_TTL, rdata=AAAA("::")))
+    return reply
+
+
+def spoof_ip_from_env() -> str | None:
+    """EDDIE_SPOOF_IP="192.168.4.1": the address devices reach Eddie's stub server on."""
+    value = os.environ.get("EDDIE_SPOOF_IP", "").strip()
+    if not value:
+        return None
+    try:
+        A(value)
+    except Exception:
+        raise ValueError(f"expected an IPv4 address, got {value!r}")
+    return value
+
+
+def spoof_reply(request: DNSRecord, ip: str) -> DNSRecord:
+    """Eddie's IP for A; an empty answer for AAAA and the rest, so clients fall back to IPv4."""
+    reply = request.reply()
+    if request.q.qtype == QTYPE.A:
+        reply.add_answer(RR(request.q.qname, QTYPE.A, ttl=BLOCK_TTL, rdata=A(ip)))
     return reply
 
 
@@ -128,6 +154,8 @@ async def resolve(packet: bytes, client_ip: str, upstreams: list[tuple[str, int]
         feed.publish(query_event(arrived, client_ip, domain, qtype, verdict.action, verdict.source, verdict.reason,
                                  mac=device if device != client_ip else None,
                                  name=device_map.name(device) if device_map else None))
+    if verdict.action == "spoof":
+        return (spoof_reply(request, spoof["ip"]) if spoof["ip"] else block_reply(request)).pack()
     if verdict.action == "block":
         return block_reply(request).pack()
 
@@ -179,11 +207,11 @@ async def serve(host: str, port: int, upstreams: list[tuple[str, int]],
 
 
 class StoreWatcher:
-    """Reloads rules, AI verdicts, quarantine and offline mode when they change.
+    """Reloads rules, AI verdicts, offline mode, away mode and quarantine when they change.
 
-    After a reload it records the rules, quarantine and offline revisions it
-    loaded (rules.mark_loaded, quarantine.mark_loaded, offline.mark_loaded):
-    the API's proof that DNS is enforcing a change.
+    After a reload it records the rules, offline, away and quarantine revisions
+    it loaded (rules.mark_loaded, offline.mark_loaded, away.mark_loaded,
+    quarantine.mark_loaded): the API's proof that DNS is enforcing a change.
     """
 
     def __init__(self, path: str, engine: decision.Engine = decision.engine, mode: offline.Mode | None = None):
@@ -199,6 +227,7 @@ class StoreWatcher:
             " (SELECT count(*) || ':' || ifnull(max(ts), 0) FROM ai_verdicts),"
             " (SELECT ifnull(max(value), 0) FROM engine_state WHERE key = 'rules_rev'),"
             " (SELECT ifnull(max(value), 0) FROM engine_state WHERE key = 'offline_rev'),"
+            " (SELECT ifnull(max(value), 0) FROM engine_state WHERE key = 'away_rev'),"
             " (SELECT ifnull(max(value), 0) FROM engine_state WHERE key = 'quarantine_rev')").fetchone()
         if changed == self.seen:
             return False
@@ -210,7 +239,8 @@ class StoreWatcher:
         # already loaded, and the next poll records it.
         rules.mark_loaded(self.conn, changed[2])
         offline.mark_loaded(self.conn, changed[3])
-        quarantine.mark_loaded(self.conn, changed[4])
+        away.mark_loaded(self.conn, changed[4])
+        quarantine.mark_loaded(self.conn, changed[5])
         self.seen = changed
         return True
 
@@ -253,8 +283,14 @@ def main() -> None:
     except OSError as exc:
         raise SystemExit(f"Can't load the allowlist or blocklists ({exc}). Blocking without the allowlist can break devices.")
     decision.engine.set_lists(allowlist, blocklist)
-    log.info("loaded %d blocklist and %d allowlist entries in %.2fs",
-             len(blocklist), len(allowlist), time.monotonic() - started)
+    decision.engine.block_doh = os.environ.get("EDDIE_BLOCK_DOH", "off") == "on"
+    try:
+        spoof["ip"] = spoof_ip_from_env()
+    except ValueError as exc:
+        raise SystemExit(f"EDDIE_SPOOF_IP refused: {exc}.")
+    log.info("loaded %d blocklist and %d allowlist entries in %.2fs%s",
+             len(blocklist), len(allowlist), time.monotonic() - started,
+             ", blocking encrypted DNS resolver names" if decision.engine.block_doh else "")
     try:
         feed = feed_from_env()
     except ValueError as exc:
@@ -269,10 +305,10 @@ def main() -> None:
             raise SystemExit(f"Port {port} needs root: run with sudo, or set EDDIE_DNS_PORT=8053 for development.")
         except OSError as exc:
             raise SystemExit(f"Can't listen on {host}:{port} ({exc}). On a Mac, turn off Internet Sharing, which holds port 53.")
-        log.info("listening on %s:%s, upstream %s, query log %s, live feed %s",
+        log.info("listening on %s:%s, upstream %s, query log %s, live feed %s, spoof %s",
                  host, port, ", ".join(f"{h}:{p}" for h, p in upstreams),
                  f"{query_log.path} ({query_log.retention_days:g} days)" if query_log else "off",
-                 feed.url if feed else "off")
+                 feed.url if feed else "off", spoof["ip"] or "off (spoof rules block)")
         watcher = asyncio.create_task(watch_store(StoreWatcher(query_log.path))) if query_log else None
         device_watcher = asyncio.create_task(watch_devices(device_map, feed=feed))
         stop = asyncio.Event()

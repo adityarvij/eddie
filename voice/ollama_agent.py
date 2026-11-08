@@ -1,7 +1,12 @@
-"""Local Ollama tool-calling agent with read-only traffic tools.
+"""Local Ollama tool-calling agent: read-only traffic tools plus write tools
+behind the spoken yes/no confirmation.
 
 The model only phrases answers; every fact comes from the local Eddie API
-through the tools below. Nothing here can change a rule, mode or device.
+through the tools below. The model can't change a rule, mode or device itself:
+a write tool call (block, allow, lockdown_device, set_mode, #108) is checked
+against WRITE_TOOLS' schema, turned into a read-back of exactly what would
+change, and parked in voice_agent.confirmation. Only a yes runs it, through the
+same actions as spoken commands (rules tagged created_by: voice, undoable).
 
 - EDDIE_OLLAMA_URL must be localhost or a private IP literal; proxies and
   redirects are ignored, so questions and traffic facts stay in the house.
@@ -9,6 +14,8 @@ through the tools below. Nothing here can change a rule, mode or device.
   is replaced by backend text or an honest "can't verify".
 - A backend failure ends the turn with a fixed spoken failure; a model failure
   raises AgentUnavailable so the caller can use the deterministic router.
+- One write per question. A malformed, unknown-target or essentials-blocking
+  write call ends the turn with "nothing changed"; the model never retries it.
 - Questions, tool results and replies are never logged or stored.
 - phrase() turns "what they know" facts into at most 5 "someone could guess"
   lines. The model sees only the computed facts, never raw logs; a line is
@@ -39,13 +46,21 @@ WINDOW_WORDS = {'15m': '15 minutes', '1h': 'hour', '24h': '24 hours'}
 
 SYSTEM_PROMPT = (
     'You are Eddie, a local privacy guard. Answer in two short sentences, spoken style, a little dry. '
-    'Use tools for facts; never invent numbers. Confirm before sending email or locking down a device. '
-    'Your tools only read traffic; you cannot block, allow or change anything, so never say you did. '
+    'Use tools for facts; never invent numbers. '
+    'To block or allow a domain or service, lock a device down to some services, or turn home mode on or off, '
+    'call that one tool once; Eddie reads it back and waits for a yes, so never say a change is done. '
     'Use the device names the tools return. If a tool reports an error, say plainly what you could not find. '
-    'Only state facts that appear in tool results; when a result has a "said" sentence, base your answer on it.'
+    'Only state facts that appear in tool results; when a result has a "said" sentence, base your answer on it. '
+    'If a tool says enough_data is false, say there is not enough data instead of guessing.'
 )
 BACKEND_FAILURE = "I can't reach Eddie's traffic backend, so I can't answer that right now."
 UNVERIFIED = "I couldn't check that answer against Eddie's records, so I won't guess."
+INVALID_WRITE = "I couldn't turn that into a change I can check, so nothing changed."
+ONE_WRITE = "I can only set up one change at a time. Ask for them one by one. Nothing changed."
+NOT_DONE = "I haven't changed anything. Ask me again and I'll read the change back for a yes."
+# A final reply that claims a change; changes only happen after a yes, never inside ask.
+CLAIMED = re.compile(r"\b(?:done|i(?:'ve| have) (?:just )?(?:blocked|allowed|locked|turned|set|added|changed)"
+                     r"|(?:is|are) now (?:blocked|allowed|locked|on|off))\b")
 # README "Intelligence features", step 5.
 INFER_PROMPT = (
     'Using only these facts, write at most 5 things someone could infer about the people in this household: '
@@ -101,6 +116,26 @@ def function(name, description, properties, required=()):
         'type': 'object', 'properties': properties, 'required': list(required), 'additionalProperties': False}}}
 
 
+SERVICE_KEYS = list(voice_agent.SERVICES)
+WRITE_TOOLS = [
+    function('block', 'Block one exact domain on every device, after the user says yes.',
+             {'domain': {'type': 'string', 'maxLength': 253}}, ['domain']),
+    function('allow', 'Allow a known service or one exact domain on every device, after the user says yes. '
+             'Give exactly one of service or domain.',
+             {'service': {'type': 'string', 'enum': SERVICE_KEYS},
+              'domain': {'type': 'string', 'maxLength': 253}}),
+    function('lockdown_device', 'Block everything for one device except the keep services and Eddie\'s '
+             'essentials, after the user says yes. "The TV can only talk to Netflix" is device "TV", '
+             'keep ["netflix"].',
+             {'device': {'type': 'string', 'maxLength': 64, 'description': 'The device\'s dashboard label.'},
+              'keep': {'type': 'array', 'items': {'type': 'string', 'enum': SERVICE_KEYS},
+                       'maxItems': len(SERVICE_KEYS), 'uniqueItems': True}},
+             ['device', 'keep']),
+    function('set_mode', 'Turn home mode on or off, after the user says yes.',
+             {'home_mode': {'type': 'boolean'}}, ['home_mode']),
+]
+WRITE_SCHEMAS = {tool['function']['name']: tool['function']['parameters'] for tool in WRITE_TOOLS}
+
 TOOLS = [
     function('get_summary', 'Request and block counts per household device, with the companies blocked most. '
              'Use window 1h unless the user names a time span. Omit device to see every device.',
@@ -112,7 +147,60 @@ TOOLS = [
     function('explain_domain', "Eddie's latest decision and any local AI verdict for one domain.",
              {'domain': {'type': 'string'}}, ['domain']),
     voice_agent.WHAT_THEY_KNOW_TOOL,
-]
+] + WRITE_TOOLS
+
+
+def valid(value, schema):
+    """True if value matches the subset of JSON schema WRITE_TOOLS uses, exactly (no coercion)."""
+    kind = schema['type']
+    if kind == 'boolean':
+        return type(value) is bool
+    if kind == 'string':
+        return (type(value) is str and len(value) <= schema.get('maxLength', len(value))
+                and ('enum' not in schema or value in schema['enum']))
+    if kind == 'array':
+        return (type(value) is list and len(value) <= schema['maxItems']
+                and len(set(map(str, value))) == len(value) and all(valid(v, schema['items']) for v in value))
+    if kind == 'object':
+        return (type(value) is dict and set(value) <= set(schema['properties'])
+                and set(schema['required']) <= set(value)
+                and all(valid(v, schema['properties'][k]) for k, v in value.items()))
+    return False
+
+
+def exact_domain(value):
+    """A spoken or typed domain as POST /rules takes it (no wildcard), else None."""
+    domain = value.strip().lower().rstrip('.')
+    return domain if len(domain) <= 253 and voice_agent.DOMAIN.fullmatch(domain) else None
+
+
+def propose(name, args):
+    """(kind, args, prompt) for voice_agent.confirmation, or the spoken reply when nothing
+    can be proposed. args already matched WRITE_SCHEMAS[name]."""
+    if name == 'set_mode':
+        state = 'on' if args['home_mode'] else 'off'
+        return 'home_mode', {'enabled': args['home_mode']}, f'Turn home mode {state}?'
+    if name == 'lockdown_device':
+        spoken = voice_agent.words(args['device'])
+        article = voice_agent.LOCKDOWN_ARTICLE.match(spoken + ' ')
+        spoken = spoken[article.end():] if article else spoken
+        if not spoken:
+            return INVALID_WRITE
+        return voice_agent.lockdown_request(article[0] if article else '', spoken, args['keep'])
+    if name == 'allow' and len(args) != 1:
+        return INVALID_WRITE
+    if 'service' in args:
+        return voice_agent.allow_request('service', args['service'])
+    domain = exact_domain(args['domain'])
+    if domain is None:
+        return INVALID_WRITE
+    if name == 'allow':
+        return ('allow', {'name': domain, 'patterns': [domain]},
+                f'Allow {domain} on every device? That adds one allow rule.')
+    if voice_agent.essential(domain):
+        return voice_agent.essential_reply(domain)
+    return 'block', {'domain': domain}, f'Block {domain} on every device? That adds one block rule.'
+
 
 
 def read(path):
@@ -216,9 +304,11 @@ def explain_domain(domain):
     return result
 
 
-def what_they_know(hours=24):
-    if type(hours) is not int or not 1 <= hours <= 168:
-        raise ToolError('hours must be an integer from 1 to 168')
+def what_they_know(hours=None):
+    if hours is None:
+        return read('/what-they-know')
+    if type(hours) is not int or not 1 <= hours <= 8760:
+        raise ToolError('hours must be an integer from 1 to 8760')
     return read(f'/what-they-know?hours={hours}')
 
 
@@ -266,12 +356,13 @@ def supported(line, facts):
 
 
 class Agent:
-    def __init__(self, url=None, model=None, chat=None, clock=time.monotonic):
+    def __init__(self, url=None, model=None, chat=None, clock=time.monotonic, confirmation=None):
         self.url = url or os.environ.get('EDDIE_OLLAMA_URL', DEFAULT_URL)
         self.model = model or os.environ.get('EDDIE_AGENT_MODEL', DEFAULT_MODEL)
         check_local(self.url)
         self.chat = chat or self.ollama_chat
         self.clock = clock
+        self.confirmation = confirmation or voice_agent.confirmation
 
     def ollama_chat(self, messages, timeout, tools=TOOLS, num_predict=200):
         body = {'model': self.model, 'stream': False, 'messages': messages, 'tools': tools,
@@ -299,6 +390,9 @@ class Agent:
             calls = message.get('tool_calls') or []
             if not calls:
                 return self.checked(str(message.get('content') or ''), results)
+            writes = [call for call in calls if tool_name(call) in WRITE_SCHEMAS]
+            if writes:
+                return self.write(writes)
             messages.append({'role': 'assistant', 'content': message.get('content') or '', 'tool_calls': calls})
             for call in calls:
                 name, output = self.run_tool(call)
@@ -324,16 +418,21 @@ class Agent:
                 lines.append(line)
         return lines[:MAX_INFERENCES]
 
+    def write(self, calls):
+        """The read-back for one write call, now pending in confirmation, or why nothing changed."""
+        if len(calls) > 1:
+            return ONE_WRITE
+        name, args = tool_name(calls[0]), tool_args(calls[0])
+        if not valid(args, WRITE_SCHEMAS[name]):
+            return INVALID_WRITE
+        proposal = propose(name, args)
+        if isinstance(proposal, str):
+            return proposal
+        return self.confirmation.request(*proposal)
+
     def run_tool(self, call):
         """(name, result) for one tool call. BackendError propagates and ends the turn."""
-        fn = call.get('function') if isinstance(call, dict) else None
-        name = fn.get('name') if isinstance(fn, dict) else None
-        args = fn.get('arguments') if isinstance(fn, dict) else None
-        if isinstance(args, str):
-            try:
-                args = json.loads(args or '{}')
-            except ValueError:
-                args = None
+        name, args = tool_name(call), tool_args(call)
         if name not in HANDLERS:
             return str(name), {'error': f'Unknown tool. Available: {", ".join(HANDLERS)}.'}
         if not isinstance(args, dict):
@@ -347,6 +446,8 @@ class Agent:
     def checked(self, reply, results):
         """The reply if every number in it came from a tool result, else backend text."""
         reply = ' '.join(reply.split())[:MAX_REPLY_CHARS]
+        if CLAIMED.search(reply.lower()):
+            return NOT_DONE
         if reply and reply_numbers(reply) <= numbers_in(results):
             return reply
         for result in reversed(results):
@@ -354,6 +455,23 @@ class Agent:
             if isinstance(text, str) and text:
                 return text
         return UNVERIFIED
+
+
+def tool_name(call):
+    fn = call.get('function') if isinstance(call, dict) else None
+    return fn.get('name') if isinstance(fn, dict) else None
+
+
+def tool_args(call):
+    """The call's arguments as a dict, or None; Ollama may send them as a JSON string."""
+    fn = call.get('function') if isinstance(call, dict) else None
+    args = fn.get('arguments') if isinstance(fn, dict) else None
+    if isinstance(args, str):
+        try:
+            args = json.loads(args or '{}')
+        except ValueError:
+            return None
+    return args
 
 
 def answer(agent, text):

@@ -102,13 +102,13 @@ class Routing(unittest.TestCase):
         self.assertIn('/events?limit=1&domain=device-metrics-us.amazon.com', paths)
         self.assertIn('"minutes_ago": 2', model.seen[1][-2]['content'])
 
-    def test_write_tools_are_not_offered_or_run(self, request):
+    def test_write_tools_are_offered_but_never_run(self, request):
         names = {tool['function']['name'] for tool in ollama_agent.TOOLS}
-        self.assertEqual(names, {'get_summary', 'get_recent_blocks', 'explain_domain', 'what_they_know'})
-        bot, model = agent({'tool_calls': [call('block', pattern='amazon.com')]},
-                           {'content': "I can't block things."})
-        self.assertEqual(ollama_agent.answer(bot, 'block amazon'), "I can't block things.")
-        self.assertIn('Unknown tool', model.seen[1][-1]['content'])
+        self.assertEqual(names, {'get_summary', 'get_recent_blocks', 'explain_domain', 'what_they_know',
+                                 'block', 'allow', 'lockdown_device', 'set_mode'})
+        bot, model = agent({'tool_calls': [call('block', pattern='amazon.com')]})
+        self.assertEqual(ollama_agent.answer(bot, 'block amazon'), ollama_agent.INVALID_WRITE)
+        self.assertEqual(len(model.seen), 1)  # a bad write ends the turn; the model doesn't retry
         request.assert_not_called()
 
     def test_bad_arguments_are_reported_to_model(self, request):
@@ -163,9 +163,10 @@ class Router(unittest.TestCase):
         voice_agent.ask_model = lambda text: asked.append(text) or 'From the model.'
         self.assertEqual(voice_agent.respond("What's the TV doing?"), 'From the model.')
         self.assertEqual(asked, ["What's the TV doing?"])
-        voice_agent.respond('block netflix')  # writes never reach the model
+        voice_agent.respond('turn on home mode')  # parsed commands never reach the model
         voice_agent.respond('hello')
         self.assertEqual(len(asked), 1)
+        self.assertEqual(voice_agent.respond('block everything on the TV but Netflix'), 'From the model.')
 
     @patch('voice_agent.request', return_value={'text': 'Seven requests were blocked.'})
     def test_router_falls_back_when_model_unavailable(self, request):
@@ -241,11 +242,11 @@ class InferenceRouting(unittest.TestCase):
         voice_agent.phrase_inferences = None
 
     @patch('voice_agent.request', return_value=REPORT)
-    def test_privacy_question_reads_a_week_and_uses_the_model(self, request):
+    def test_privacy_question_reads_all_retained_data_and_uses_the_model(self, request):
         given = []
         voice_agent.phrase_inferences = lambda facts: given.append(facts) or 'Someone could guess Sundays.'
         self.assertEqual('Someone could guess Sundays.', voice_agent.respond('What do they know about me?'))
-        request.assert_called_once_with('/what-they-know?hours=168')
+        request.assert_called_once_with('/what-they-know')
         self.assertEqual([FACTS], given)
 
     @patch('voice_agent.request', return_value=REPORT)
@@ -257,6 +258,11 @@ class InferenceRouting(unittest.TestCase):
     def test_no_facts_never_reaches_the_model(self, request):
         voice_agent.phrase_inferences = lambda facts: self.fail('model called without facts')
         self.assertEqual('Not enough traffic.', voice_agent.respond('What do they know about me?'))
+
+    @patch('voice_agent.request', return_value={**REPORT, 'enough_data': False, 'text': 'Not enough data.'})
+    def test_explicit_not_enough_data_never_reaches_the_model(self, request):
+        voice_agent.phrase_inferences = lambda facts: self.fail('model called with insufficient data')
+        self.assertEqual('Not enough data.', voice_agent.respond('What do they know about me?'))
 
 
 if __name__ == '__main__':

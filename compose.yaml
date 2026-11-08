@@ -5,6 +5,9 @@ services:
     # Localhost only by default; EDDIE_BIND=0.0.0.0 exposes it to the iPad on the hotspot.
     ports:
       - "${EDDIE_BIND:-127.0.0.1}:8000:8000"
+    # Inside the container nothing on the host is loopback, so every writer needs this token (#96).
+    environment:
+      EDDIE_API_TOKEN: ${EDDIE_API_TOKEN:-}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/mode', timeout=2)"]
@@ -17,6 +20,8 @@ services:
     build: .
     profiles: ["fake"]
     command: ["python", "scripts/fake_traffic.py", "--url", "http://api:8000", "--speed", "${FAKE_SPEED:-2}", "--quiet"]
+    environment:
+      EDDIE_API_TOKEN: ${EDDIE_API_TOKEN:-}
     depends_on:
       api:
         condition: service_healthy

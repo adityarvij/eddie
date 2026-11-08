@@ -32,12 +32,13 @@ Configuration:
 | `EDDIE_INPUT_DEVICE` | Default microphone; device name or numeric index |
 | `EDDIE_PIPER_MODEL` | Absolute voice model path; companion JSON required |
 | `EDDIE_API_URL` | `http://127.0.0.1:8000`; use the Pi address for split deployment |
+| `EDDIE_API_TOKEN` | Bearer token for the traffic API's writes (rules, modes); needed when the API isn't on this machine's loopback, such as in Docker or on the Pi |
 
 Say “Hey Eddie,” then ask your question. The detector uses 16 kHz mono audio in 80 ms frames. Recording ends after 800 ms of silence following speech, or after 10 seconds of speech. After each reply Eddie listens again for a follow-up without the wake phrase; if no speech starts within 4 seconds, the conversation ends and Eddie is dismissed. Audio stays in memory. Speech output suspends recognition and queued audio is discarded before rearming. There is no always-on cloud transcription.
 
-Questions go to the local Ollama agent (`voice/ollama_agent.py`, #29) when it's reachable: “What's the TV doing?”, “What got blocked recently?”, “Why was device-metrics-us.amazon.com blocked?”. It only reads traffic through four tools, every number it says must come from those tools, and if Ollama is down the keyword router below answers instead. `EDDIE_AGENT=off` disables it; `EDDIE_OLLAMA_URL` and `EDDIE_AGENT_MODEL` (default `llama3.2:3b`, provisioned with `ollama pull`) configure it. Try it typed with `EDDIE_API_URL=http://127.0.0.1:8000 python voice/ollama_agent.py "What's the TV doing?"`. See [architecture](../docs/ARCHITECTURE.md#local-tool-calling-agent-29).
+Questions go to the local Ollama agent (`voice/ollama_agent.py`, #29) when it's reachable: “What's the TV doing?”, “What got blocked recently?”, “Why was device-metrics-us.amazon.com blocked?”. It reads traffic through four tools, every number it says must come from those tools, and if Ollama is down the keyword router below answers instead. It can also propose a change (see [plain-English rules](#plain-english-rules-108)); nothing runs without a spoken yes. `EDDIE_AGENT=off` disables it; `EDDIE_OLLAMA_URL` and `EDDIE_AGENT_MODEL` (default `llama3.2:3b`, provisioned with `ollama pull`) configure it. Try it typed with `EDDIE_API_URL=http://127.0.0.1:8000 python voice/ollama_agent.py "What's the TV doing?"`. See [architecture](../docs/ARCHITECTURE.md#local-tool-calling-agent-29).
 
-Keyword commands: “What's been going on?” (backend facts), “What do they know about me?” / “What do companies know about me?” (reads `GET /what-they-know?hours=168`, up to a week; the local model, when on, rewrites the backend's facts into at most five checked “Someone could guess …” lines, otherwise Eddie speaks the backend template), “turn on home mode”, “turn off home mode”, “block it” / “block device-metrics-us.amazon.com”, “allow Netflix” / “allow api.example.com” and “undo that” (below). Home mode updates backend state; actual network enforcement still depends on Will's decision engine. Lockdown and email are pending; the confirmation step lockdown and email will use is built and already guards service allows (see below). Typed questions use the same router. Do not claim these pending tools work.
+Keyword commands: “What's been going on?” (backend facts), “What do they know about me?” / “What do companies know about me?” (honors ranges such as “the last 3 days,” otherwise uses all retained history; longer requests are capped with disclosure, and Eddie says there is not enough data instead of guessing; the local model, when on, rewrites the backend's facts into at most five checked “Someone could guess …” lines, otherwise Eddie speaks the backend template), “turn on home mode”, “turn off home mode”, “I'm leaving for the weekend” / “I'm back” (away mode, below), “block it” / “block device-metrics-us.amazon.com”, “allow Netflix” / “allow api.example.com” and “undo that” (below). Home mode updates backend state; actual network enforcement still depends on Will's decision engine. Lockdown and email are pending; the confirmation step lockdown and email will use is built and already guards service allows (see below). Typed questions use the same router. Do not claim these pending tools work.
 
 ## Verification before demo
 
@@ -142,13 +143,15 @@ Because the block rule is always last, a failure never leaves the device blocked
 
 Not yet checked on hardware: a real Fire Stick or TV under lockdown, including whether the keep patterns cover each app's sign-in and playback.
 
+The registered risky actions are `allow` (#13) and `lockdown` (#17), both parsed in `route`: a typed wildcard needs the raw text's dots, and lockdown looks the device up first. `block` and `home_mode` are registered for the model's write tools (#108) only; spoken “block x.com” and “turn on home mode” still run directly. `RISKY_COMMANDS` stays empty until email (#37) lands. Closing the dashboard overlay by hand does not notify the worker; the 15 second expiry still applies.
+
 ## New device (#98)
 
 “Allow the new device” (also “approve” or “let in”) and “deny the new device” (also “block” or “reject”) act on the newest device `GET /devices` lists as `pending`. Eddie reads it back by name and first-seen time (“Allow the new device, kindle, first seen at 2:14 AM?”) and says how many others are waiting; only a yes posts `/devices/<mac>/approve` or `/deny`. The reply comes from the backend's stored status, and says Eddie's DNS has loaded it only when the API answered `applied: true`. With no pending device, or the backend down, nothing changes. Tested in `tests/test_voice_new_device.py`; not checked with a real device joining.
 
 ## Confirmation for risky actions
 
-Risky actions (service and wildcard allows, lockdown; email once built) never run from the command that asks for them. `voice_agent.Confirmation` holds at most **one** pending action, `{kind, args, prompt, expires_at}`, and speaks the read-back prompt followed by “Say yes to confirm or no to cancel.”
+Risky actions (service and wildcard allows, lockdown, and every write the local model proposes; email once built) never run from the command that asks for them. `voice_agent.Confirmation` holds at most **one** pending action, `{kind, args, prompt, expires_at}`, and speaks the read-back prompt followed by “Say yes to confirm or no to cancel.”
 
 | Next reply | Result |
 |---|---|
@@ -161,7 +164,7 @@ Risky actions (service and wildcard allows, lockdown; email once built) never ru
 
 Replies must match the whole utterance after lowercasing and removing punctuation, so “yes, but not the TV” is unclear, not a yes. Typed asks use the same router. While an action is pending the bridge emits `voice_state: confirming` with `kind`, `prompt` and `expires_in_ms` (never the action's arguments); the dashboard shows “say yes or no” until the next reply, dismissal or expiry. No pending action, reply or transcript is persisted or logged.
 
-The registered risky actions are `allow` (#13), `lockdown` (#17), and `approve` / `deny` for new devices (#98), all parsed in `route`: a typed wildcard needs the raw text's dots, and lockdown looks the device up first. `RISKY_COMMANDS` stays empty until email (#37) lands. Closing the dashboard overlay by hand does not notify the worker; the 15 second expiry still applies.
+The registered risky actions are `allow` (#13), `lockdown` (#17), and `approve` / `deny` for new devices (#98), all parsed in `route`: a typed wildcard needs the raw text's dots, and lockdown and new devices look the device up first. `block` and `home_mode` are registered for the model's write tools (#108) only; spoken “block x.com” and “turn on home mode” still run directly. `RISKY_COMMANDS` stays empty until email (#37) lands. Closing the dashboard overlay by hand does not notify the worker; the 15 second expiry still applies.
 
 
 ## Noisy-room voice and ready cue (#38)
