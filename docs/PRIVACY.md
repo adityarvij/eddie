@@ -66,6 +66,7 @@ Owner: [eddie/store.py](../eddie/store.py), written by [eddie/dns_server.py](../
 | Models are provisioned once at setup. At runtime Whisper uses `local_files_only`, `HF_HUB_OFFLINE=1` is set, Hugging Face telemetry is off, and Piper loads a local file. | implemented |
 | Audio stays in memory and is bounded: a small pre-roll, at most 10 s per command, ended by 800 ms of silence. Nothing is written to disk. | implemented |
 | Transcripts and replies are never stored or logged. | implemented |
+| **Timers and reminders** (#122, `voice/timers.py`): the one exception to the line above. Pending items are written to `EDDIE_TIMERS_FILE` (default `voice/timers.json`, mode `0600`, git- and docker-ignored): kind, due time, a timer's length and a reminder's task in the user's words (“call my mom”). An item is deleted from the file when it rings or is cancelled, so nothing is kept as history. `EDDIE_TIMERS_FILE=off` keeps them in memory only. The file isn't encrypted, and anyone who can ask Eddie (including a paired iPad, by typed ask) can hear the list read aloud. Tested. | implemented |
 | The mic ignores audio while Eddie speaks, so Eddie never transcribes itself. | implemented |
 | The mic starts only on an explicit start request, not on page load, and stops on request. | implemented |
 | A missing custom wake model is an error, never a silent switch to another engine. | implemented |
