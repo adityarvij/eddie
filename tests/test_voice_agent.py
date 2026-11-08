@@ -12,9 +12,10 @@ class VoiceCommands(unittest.TestCase):
         self.assertEqual(voice_agent.respond("What's been going on?"), 'Seven requests were blocked.')
         request.assert_called_once_with('/summary')
 
-    @patch('voice_agent.request', return_value={'home_mode': False})
+    @patch('voice_agent.request', return_value={'home_mode': False, 'home_applied': True})
     def test_turn_off(self, request):
-        self.assertEqual('Home mode turned off.', voice_agent.respond('Turn off home mode.'))
+        self.assertEqual("Home mode is off and Eddie's DNS has loaded it. It stays off until you change it, "
+                         "whoever's phone is home.", voice_agent.respond('Turn off home mode.'))
         request.assert_called_once_with('/mode', {'home_mode': False})
 
     @patch('voice_agent.request', side_effect=OSError('offline'))
@@ -31,6 +32,10 @@ class VoiceCommands(unittest.TestCase):
     @patch('voice_agent.request', return_value={'home_mode': False})
     def test_wrong_acknowledgement_is_failure(self, request):
         self.assertIn("couldn't update", voice_agent.respond('turn on home mode'))
+
+    @patch('voice_agent.request', return_value={'home_mode': True, 'home_applied': False})
+    def test_no_dns_acknowledgement_is_not_claimed(self, request):
+        self.assertEqual("Home mode is saved as on, but Eddie's DNS hasn't confirmed it, so I can't say it's being enforced.", voice_agent.respond('turn on home mode'))
 
 class ApiToken(unittest.TestCase):
     """The traffic API takes writes from another host only with EDDIE_API_TOKEN (#96)."""
@@ -59,7 +64,7 @@ class HomeModeTool(unittest.TestCase):
         for phrase in ('I want home mode on', 'enable home mode', 'turn home mode on', 'Can you turn on home mode?', 'Please turn on home mode'):
             with self.subTest(phrase=phrase):
                 request.reset_mock()
-                self.assertEqual('Home mode turned on.', voice_agent.respond(phrase))
+                self.assertTrue(voice_agent.respond(phrase).startswith('Home mode is saved as on'))
                 request.assert_called_once_with('/mode', {'home_mode': True})
 
     @patch('voice_agent.request')

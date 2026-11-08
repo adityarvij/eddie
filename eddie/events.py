@@ -63,15 +63,21 @@ MAX_AWAY_MS = 30 * 86_400_000  # away mode's end time is at most 30 days ahead
 
 
 class ModeUpdate(BaseModel):
-    """Home mode, away mode (#109) or both. away_until (ms) is optional and only with away on."""
+    """Home mode, away mode (#109) or both. away_until (ms) is optional and only with away on.
+
+    home_auto: true hands home mode back to phone presence (#20); it can't go with home_mode.
+    """
     home_mode: bool | None = None
+    home_auto: Literal[True] | None = None
     away: bool | None = None
     away_until: int | None = None
 
     @model_validator(mode="after")
     def check(self) -> "ModeUpdate":
-        if self.home_mode is None and self.away is None:
-            raise ValueError("expected home_mode or away")
+        if self.home_mode is None and self.home_auto is None and self.away is None:
+            raise ValueError("expected home_mode, home_auto or away")
+        if self.home_mode is not None and self.home_auto:
+            raise ValueError("home_auto can't go with home_mode")
         if self.away_until is not None:
             now = time.time() * 1000
             if self.away is not True:

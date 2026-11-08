@@ -78,7 +78,7 @@ The API adds `id`, `company`, `category` and `broker` (from `eddie/labels.py`), 
 Both are computed by the API from the events it has received, keyed by
 `device_mac`, so senders don't send them. They restart with the API.
 - `totals`: `{seen, blocked}`
-- `mode`: `{home_mode: bool}`
+- `mode`: `{home_mode, home_manual, home_applied, reason}` after every home mode change, sent once the API has waited for DNS to load it; `reason` is `manual` (`POST /mode`, the dashboard or voice) or `presence` (household phones, #20)
 - `offline_mode`: `{offline: bool, applied: bool}` after every `POST /offline-mode`
 - `away_mode`: `{away, away_until, away_applied, away_devices, away_exempt}` after every `POST /mode` with `away` (below)
 - `rule_change`: a rule was stored or deleted (see Rules below)
@@ -219,13 +219,39 @@ domains first seen after learning, newest first, with `first_seen`.
 none) and answers `{"device_mac", "reset": true, "domains_deleted"}`; its
 next lookup starts learning again.
 
-## Home mode: `GET/POST /mode`
+## Home mode: `GET/POST /mode` (#20)
 
-`POST /mode {"home_mode": true}`. The decision engine reads `GET /mode` (or
-shares the state in-process later) and, while on, blocks a device's
-non-essential traffic with `source: "home_mode"`.
+While home mode is on, the decision engine blocks camera upload domains
+(`decision.CAMERA_DOMAINS`, #43: `ring.com`, `arlo.com`, `fakecamera.example`,
+`camera.local`, `a.rtmp.youtube.com`, `b.rtmp.youtube.com` and
+`upload.youtube.com`, each with its subdomains) on every device with
+`source: "home_mode"` and reason `home mode: <domain> camera upload
+blocked`. Ring's exact upload hosts aren't confirmed, so all of `ring.com`.
+Rules and the allowlist still come first; nothing else changes.
 
-`GET /mode` also returns `offline` and `offline_applied` (below), away mode's fields, and
+It turns on and off by itself from household phone presence. Mark a phone
+with `PUT /devices/{mac} {"phone": true}` (below), using the address it has
+on Eddie's network: phones use a private MAC per network, and that is the
+one Eddie sees. Every 15 s the API checks the marked phones: one seen in the
+last 10 minutes (its `devices.last_seen` from ARP, or a lookup in `queries`)
+is home. The first phone home turns home mode on; when the last one has
+been gone 10 minutes it turns off. Unmarked devices never count.
+
+`POST /mode {"home_mode": true|false}` is a manual change. It wins over
+presence and holds, whoever comes or goes, until `POST /mode {"home_auto":
+true}` hands control back (which sets home mode from the phones home right
+then). `home_auto` can't go with `home_mode`, and `false` is 422. With
+`EDDIE_DB=off` there's no presence check, `home_mode` is a flag in memory,
+`home_applied` is always `false` and `home_auto` is 503.
+
+Each change is stored in `engine_state` (`home_mode`, `home_manual`, `home_rev`)
+and acknowledged like rules: the DNS server's StoreWatcher records
+`home_loaded`, and the answer (and the `mode` event, sent after the wait)
+carries `home_applied: true` only once it has. `POST /mode` with home fields
+answers `{home_mode, home_manual, home_applied}`.
+
+`GET /mode` returns `home_mode`, `home_manual` and `home_applied`, plus
+`offline` and `offline_applied` (below), away mode's fields, and
 `quarantine` and `quarantine_applied` (New devices and quarantine, below).
 
 ## Away mode: `POST /mode {"away": ...}` (#109)
@@ -234,7 +260,7 @@ non-essential traffic with `source: "home_mode"`.
 optional: ms since epoch, in the next 30 days, only with `away: true`;
 anything else is 422). `home_mode` may be sent in the same body; away is
 handled first, so a failed away request (503 with `EDDIE_DB=off`) leaves home
-mode alone. A body with only `home_mode` answers `{home_mode}` as before.
+mode alone.
 
 Turning away on ranks devices from the last week of `queries`
 (`eddie/away.py`): the occupancy leak score is the number of hours in which a
@@ -483,6 +509,7 @@ this needs `EDDIE_DB` (off answers 503).
 | `recent_blocks` | up to three of those domains, newest last block first, with that block's `ts` |
 | `recent_domains` | up to three domains the device looked up in the window, whatever the answer, newest first: the dashboard shows them so people can tell which device is which |
 | `kid` | `true` when the device is marked as a child's (#119): kid mode locks it down. Kept like a label when the device goes quiet |
+| `phone` | `true` when the device is marked as a household phone (#20): home mode turns on while one is home. Kept like a label |
 
 Sorted most blocked first. A device's first lookups can be logged under its
 IP before the first ARP read (about a second), so a short-lived IP row may
@@ -491,10 +518,11 @@ appear next to the MAC row.
 `PUT /devices/{mac}` with `{"label": "Fire Stick"}` names a device Eddie has
 seen (`404` otherwise); `""` or `null` clears it. Labels are at most 40
 printable characters. `{"kid": true}` marks it as a child's device and
-`false` unmarks it (#119); a body may carry either or both, and leaves out
-the other untouched (`{}` or a non-boolean `kid` is 422). Marking a device
-writes no rules: kid mode does that. Answers with the stored device, its
-`kid` and its `name`.
+`false` unmarks it (#119). `{"phone": true}` marks it as a household phone
+for home mode's presence check, `false` unmarks it (#20). A body may carry
+any of the three and leaves the rest untouched (`{}` or a non-boolean `kid`
+or `phone` is 422). Marking a device writes no rules: kid mode and home
+mode do that. Answers with the stored device, its `kid`, `phone` and `name`.
 
 Each device also has `status` (`approved`, `pending` or `denied`; `null` for an
 IP-keyed device), and the response has top-level `quarantine` and

@@ -173,12 +173,13 @@ async function loadDevices() {
   catch { $('device-count').textContent = 'unavailable'; if (!editingName) $('device-list').replaceChildren(); }
 }
 // Mode toggles show only state the backend acknowledged: a click shows "turning on…" until the API
-// answers, and offline mode says when DNS hasn't loaded the change. Home mode is a backend flag only.
+// answers, and offline and home mode say when DNS hasn't loaded the change.
 // Away mode (voice or the API) is shown only once DNS has loaded it, and drops at its end time.
 // spoofing counts the stored spoof rules (#99); the house icon turns into Pinocchio while there are any.
-const modes = {home_mode: null, offline: null, offline_applied: false, spoofing: 0, away: null, quarantine: null, quarantine_applied: false}, modePending = {};
+const modes = {home_mode: null, home_manual: false, home_applied: null, offline: null, offline_applied: false, spoofing: 0, away: null, quarantine: null, quarantine_applied: false}, modePending = {};
 function applyModes(state) {
   if (typeof state.home_mode === 'boolean') modes.home_mode = state.home_mode;
+  if (typeof state.home_applied === 'boolean') { modes.home_applied = state.home_applied; modes.home_manual = state.home_manual === true; }
   if (typeof state.offline === 'boolean') { modes.offline = state.offline; modes.offline_applied = state.offline_applied === true; }
   if (typeof state.quarantine === 'boolean') { modes.quarantine = state.quarantine; modes.quarantine_applied = state.quarantine_applied === true; }
   if (typeof state.away === 'boolean') modes.away = {on: state.away, until: state.away_until || null, applied: state.away_applied === true,
@@ -195,6 +196,13 @@ function awayNote(away = modes.away) {
   const cut = away.devices.length ? `cutting telemetry from ${names(away.devices)}` : 'no device seen showing someone home, nothing blocked';
   const kept = away.exempt.length ? ` · ${names(away.exempt)} stay${away.exempt.length === 1 ? 's' : ''} up` : '';
   return [`away mode: on${until} · ${cut}${kept}`, false];
+}
+// [note, is it an alert]: home mode (#20) once DNS confirms it, and whether phones or a manual change set it.
+function homeNote() {
+  if (modes.home_mode === null || modes.home_applied === null) return ['', false];
+  if (!modes.home_applied) return [`home mode ${modes.home_mode ? 'on' : 'off'} not yet applied by DNS`, true];
+  if (modes.home_mode) return [`home mode: blocking camera uploads · ${modes.home_manual ? 'turned on by hand' : 'a household phone is home'}`, false];
+  return [modes.home_manual ? 'home mode: off by hand, phones ignored' : '', false];
 }
 function renderModes() {
   for (const [id, label, key] of [['home-mode', 'home mode', 'home_mode'], ['offline-mode', 'offline mode', 'offline'], ['quarantine-mode', 'quarantine new devices', 'quarantine']]) {
@@ -215,7 +223,8 @@ function renderModes() {
   $('quarantine-note').textContent = qWaiting ? 'quarantine change not yet applied by DNS'
     : 'DNS-only: a device using hard-coded IPs or its own DNS still gets out; router mode (#22/#23) stops that';
   $('quarantine-note').classList.toggle('alert', qWaiting);
-  $('home-note').textContent = modes.home_mode ? 'home mode is a backend flag; DNS does not enforce it yet' : '';
+  const [home, homeAlert] = homeNote();
+  $('home-note').textContent = home; $('home-note').classList.toggle('alert', homeAlert);
   const [away, alert] = awayNote();
   $('away-note').textContent = away; $('away-note').classList.toggle('alert', alert);
 }
@@ -291,7 +300,7 @@ function renderAcr() {
 }
 function consumeEvent(event) {
   if (event.type === 'ai_verdict') return feedNote('ai', `${event.domain}${event.reason ? ' — ' + event.reason : ''}`, event, AI_RESULTS[event.label] || [String(event.label), 'flag']);
-  if (event.type === 'mode') return applyModes({home_mode: event.home_mode});
+  if (event.type === 'mode') return applyModes(event);
   if (event.type === 'question') { question = event; return renderQuestion(); }
   if (event.type === 'question_resolved') { if (question?.id === event.id) { question = null; renderQuestion(); } return; }
   if (event.type === 'offline_mode') return applyModes({offline: event.offline, offline_applied: event.applied});

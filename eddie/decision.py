@@ -7,6 +7,8 @@ First match wins:
    rule (the rules table). Under lockdown, an allowlisted domain is still
    allowed, so locking a device down can't cut it off from sign-in, updates or time.
 2. Allowlist: essentials, so a rule or list can't brick a device.
+   Home mode (#43, #20, home.py): while on, a camera upload domain
+   (CAMERA_DOMAINS) is blocked, source home_mode.
 3. Blocklist, then, only while block_doh is on (EDDIE_BLOCK_DOH=on), the
    encrypted DNS resolver names in bypass.RESOLVERS (#97).
    ACR (#104, acr.py): a seeded content recognition domain this device looks
@@ -222,7 +224,7 @@ class Engine:
         self.away = Away(frozenset(devices), until)
 
     def load_from_store(self, conn: sqlite3.Connection) -> None:
-        """Replace rules, cached AI verdicts, away mode and quarantined devices with what's in eddie.db."""
+        """Replace rules, cached AI verdicts, home and away mode and quarantined devices with what's in eddie.db."""
         self.set_rules(Rule.from_row(r) for r in conn.execute(
             "SELECT id, scope, device_mac, pattern, action FROM rules"))
         self.set_verdicts({d: Verdict(label, confidence, reason or "") for d, label, confidence, reason

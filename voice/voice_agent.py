@@ -47,18 +47,24 @@ def set_home_mode(enabled):
     result = request('/mode', {'home_mode': enabled})
     if result.get('home_mode') is not enabled:
         raise ValueError('Mode was not acknowledged')
-    return {'home_mode': enabled}
+    return {'home_mode': enabled, 'home_applied': result.get('home_applied') is True}
+
+
+def home_mode_reply(enabled):
+    """Set home mode and say so; it's enforced only once /mode reports DNS loaded it (#20)."""
+    try:
+        result = set_home_mode(enabled)
+    except Exception:
+        return "I couldn't update home mode. Check the local backend before trying again."
+    state = 'on' if enabled else 'off'
+    if not result['home_applied']:
+        return f"Home mode is saved as {state}, but Eddie's DNS hasn't confirmed it, so I can't say it's being enforced."
+    return f"Home mode is {state} and Eddie's DNS has loaded it. It stays {state} until you change it, whoever's phone is home."
 
 
 def home_mode_action(enabled):
-    """RISKY_ACTIONS['home_mode']: the model's set_mode after a yes. /mode only stores the
-    flag; the DNS server reports nothing back, so never claim it's enforced."""
-    try:
-        set_home_mode(enabled)
-    except Exception:
-        return "I couldn't update home mode. Check the local backend before trying again."
-    return (f"Home mode is saved as {'on' if enabled else 'off'}. Eddie's DNS doesn't report back on home mode, "
-            "so I can't say it's being enforced.")
+    """RISKY_ACTIONS['home_mode']: the model's set_mode after a yes."""
+    return home_mode_reply(enabled)
 
 
 WHAT_THEY_KNOW_TOOL = {
@@ -1126,12 +1132,7 @@ def route(text):
     on = re.fullmatch(r'(?:please )?(?:(?:turn|switch) on home mode|(?:turn|switch) home mode on|enable home mode|(?:i want|id like) home mode (?:on|enabled)|(?:can|could|would) you (?:turn on|enable) home mode)(?: please)?', text)
     off = re.fullmatch(r'(?:please )?(?:(?:turn|switch) off home mode|(?:turn|switch) home mode off|disable home mode|(?:i want|id like) home mode (?:off|disabled)|(?:can|could|would) you (?:turn off|disable) home mode)(?: please)?', text)
     if on or off:
-        enabled = bool(on)
-        try:
-            set_home_mode(enabled)
-            return f"Home mode turned {'on' if enabled else 'off'}."
-        except Exception:
-            return "I couldn't update home mode. Check the local backend before trying again."
+        return home_mode_reply(bool(on))
     block = block_target(raw)
     if block and block != ('domain', None):
         return block_command(*block)
