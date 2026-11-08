@@ -539,11 +539,23 @@ has lookups in the window, otherwise `"feed"`: the API's in-memory event list
 (at most 20,000 events and none older than `EDDIE_RETENTION_DAYS`, lost on restart), which is what `fake_traffic.py` fills.
 The two are never mixed. Database rows are named by device label, else
 "<vendor> device", else "unlabeled device" (all such devices share that name);
-never by MAC, IP or DHCP hostname. Each fact is `{fact, evidence, confidence}`
-computed in `eddie/inferences.py` (tracking company exposure, active streaming
-hours, after-midnight streaming sessions, longest streaming gap, idle telemetry,
-category by weekday, and the device
-and domain looked up most on a regular timer). `text` is a
+never by MAC, IP or DHCP hostname. Each fact is `{fact, evidence, confidence,
+category, sensitive}` computed in `eddie/inferences.py` (tracking company
+exposure, active streaming hours, after-midnight streaming sessions, longest
+streaming gap, idle telemetry, category by weekday, the device and domain
+looked up most on a regular timer, one fact per labelled topic, the tracking
+company that sees the most devices, and how many devices are in use).
+
+`category` is one of the README's ten: `Safety`, `Health`, `Kids`, `Money`,
+`Household`, `Work`, `Beliefs`, `What's on screen`, `Listening`, `Identity
+linking` (`inferences.CATEGORIES`). `sensitive` is true exactly for Health,
+Beliefs and Kids. Topic facts (`inferences.TOPICS`) map a `labels.py` category
+to a report category, for example `health` to Health or `id-sync` to Identity
+linking; their evidence is "N lookups to <companies> from <devices> on N
+days", confidence 0.7 across two or more days, else 0.5. After-midnight
+streaming counts as Health (a sleep schedule), a beacon to a known ACR domain
+as What's on screen, the busiest tracking company as Identity linking, and the
+quiet-time facts as Safety. Burglar's-eye facts carry `Safety` too. `text` is a
 template over those facts; voice has the local model rephrase the facts
 (`voice/ollama_agent.py`) and falls back to `text`. Empty traffic returns no
 facts, never guesses.
@@ -556,8 +568,9 @@ least 1.5 times the other's. A session counts at least one minute.
 
 `?demo=true` ignores `hours` and returns `{demo: true, label, hours: 168,
 facts, text}` computed from `eddie/demo_week.py`: an invented, seeded week
-(devices named "Living room TV (demo)" and "Kids' tablet (demo)", every event
-`demo: true`). `text` starts with `label`. Demo events are generated per
+(every device name ends in "(demo)": a living room TV, a kids' tablet, a phone,
+a laptop, a kitchen speaker, a thermostat and a doorbell; every event
+`demo: true`). It has facts in every category but What's on screen. `text` starts with `label`. Demo events are generated per
 request and never enter `/events`, the WebSocket feed or `eddie.db`. The
 voice tools only read the live report. An explicit spoken range is sent as
 `hours`; with no range, voice and the dashboard omit it so the API uses all

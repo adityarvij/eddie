@@ -271,7 +271,7 @@ Writes from anywhere but loopback need `Authorization: Bearer $EDDIE_API_TOKEN`,
 | PUT | `/devices/{mac}` | `{label}` names a device ("Fire Stick"); `""` or `null` clears it |
 | GET | `/events?since=&device=` | Recent query rows |
 | GET | `/summary?window=1h` | Totals: queries, blocked, top blocked domains, top companies, per device, data broker and ad exchange counts |
-| GET | `/what-they-know?hours=24` | "What they know about you" facts `{fact, evidence, confidence}` + spoken text, from `eddie.db` (else the in-memory feed); `?demo=true` returns the labelled seeded demo week instead (see docs/EVENTS.md) |
+| GET | `/what-they-know?hours=24` | "What they know about you" facts `{fact, evidence, confidence, category, sensitive}` + spoken text, from `eddie.db` (else the in-memory feed); `?demo=true` returns the labelled seeded demo week instead (see docs/EVENTS.md) |
 | GET | `/burglars-eye?hours=168` | Burglar's-eye report: when the house looked empty, devices ranked by occupancy leak score, security devices flagged `never_block`, and whether the data covered the range asked for; `?demo=true` uses the demo week (see docs/EVENTS.md) |
 | GET | `/rules` | Every rule, newest first |
 | POST | `/rules` | `{pattern, action, device_mac?, created_by?}` add rule; answers with the stored id and `applied` once DNS has loaded it (see docs/EVENTS.md) |
@@ -377,7 +377,7 @@ Rewrite `dns_server.py`, `decision.py` and the traffic monitor in Rust on Tokio 
 
 The model reads a day of facts and writes what a company (or a burglar) could infer: "you're home after 6 PM", "someone watches TV past 1 AM", "a kids' app runs on weekend mornings", "the house is empty weekdays 8 to 6".
 
-1. Label domains with a hand-written table (streaming, kids, music, telemetry, ads, camera, doorbell, thermostat).
+1. Label domains with a hand-written table (streaming, kids, music, telemetry, ads, camera, doorbell, thermostat; built, plus health, finance, shopping, work, jobs, news, religion, politics, voice assistants and ad ID syncing, #134; sources in eddie/data/README.md).
 2. Group requests into sessions: same category, gaps under 10 minutes.
 3. Compute facts in Python: first and last activity per day, after-midnight sessions, category by weekday, idle telemetry, longest gap with no human activity.
 4. Pass only a JSON list of `{fact, evidence, confidence}` to the model.
@@ -466,6 +466,8 @@ Not built yet. Goal: show the audience what would happen to a Ring camera, using
 
 Break-ins are one category. Eddie's "What they know about you" report groups every inference into these categories, each with a plain-English line, the evidence, and what Eddie did about it.
 
+Built (#134): every `/what-they-know` fact carries one of these ten as `category`, and `sensitive: true` for Health, Beliefs and Kids. Per-category facts come from labelled domains (`eddie/labels.py`), a cross-device count of the tracking company that sees the most devices, and a device count. Not built yet: the "What Eddie does" column (sensitivity modes, kid mode, forget timer, mic watch, category scores); Listening only shows that an assistant is connected, never that audio was sent.
+
 | Category | What it reveals | Signal Eddie sees | What Eddie does |
 |---|---|---|---|
 | Safety | When the house is empty, travel, routines | Activity gaps, away periods, device on/off times | Away mode, burglar's-eye report, presence masking |
@@ -491,7 +493,7 @@ Break-ins are one category. Eddie's "What they know about you" report groups eve
 
 ### For the demo
 
-With a Fire Stick you'll mainly see Safety, What's on screen, Identity linking and some Household and Kids signals (if you open a kids' app). Show those live, and show the other categories on the seeded week of demo data, clearly labelled.
+With a Fire Stick you'll mainly see Safety, What's on screen, Identity linking and some Household and Kids signals (if you open a kids' app). Show those live, and show the other categories on the seeded week of demo data, clearly labelled. The demo week (`GET /what-they-know?demo=true`) has a fact in every category except What's on screen, which is the live ACR card.
 
 
 ## Voice implementation update

@@ -7,7 +7,7 @@ from datetime import datetime
 
 import httpx2 as httpx
 
-from eddie import demo_week, inferences, store
+from eddie import demo_week, inferences, labels, store
 from eddie.labels import lookup
 
 MIN = 60 * 1000
@@ -41,6 +41,102 @@ class Facts(unittest.TestCase):
     def test_old_events_are_ignored(self):
         old = ev(self.now - 25 * 60 * MIN, 'device-metrics-us.amazon.com', 'block')
         self.assertEqual([], inferences.compute_facts([old], now_ms=self.now))
+
+
+class Labels(unittest.TestCase):
+    def test_new_topics_are_labelled_by_suffix(self):
+        cases = {
+            'www.youtubekids.com': ('YouTube Kids', 'kids'),
+            'spclient.wg.spotify.com': ('Spotify', 'music'),
+            'music.apple.com': ('Apple Music', 'music'),
+            'www.apple.com': ('Apple', 'services'),
+            'api.skybell.com': ('SkyBell', 'doorbell'),
+            'api.ecobee.com': ('ecobee', 'thermostat'),
+            'www.goodrx.com': ('GoodRx', 'health'),
+            'secure.chase.com': ('Chase', 'finance'),
+            'www.target.com': ('Target', 'shopping'),
+            'app.slack.com': ('Slack', 'work'),
+            'www.indeed.com': ('Indeed', 'jobs'),
+            'www.nytimes.com': ('The New York Times', 'news'),
+            'www.biblegateway.com': ('Bible Gateway', 'religion'),
+            'ballotpedia.org': ('Ballotpedia', 'politics'),
+            'avs-alexa-na.amazon.com': ('Amazon', 'assistant'),
+            'idsync.rlcdn.com': ('LiveRamp', 'id-sync'),
+        }
+        for domain, want in cases.items():
+            self.assertEqual(want, lookup(domain), domain)
+        self.assertEqual('unknown', lookup('notcvs.com')[1], 'labels match whole labels, never substrings')
+
+    def test_id_sync_counts_as_tracking(self):
+        self.assertIn('id-sync', labels.TRACKING)
+
+    def test_every_topic_is_a_label_category_and_report_category(self):
+        used = {category for _, category in labels.DOMAINS.values()}
+        for topic, (category, _) in inferences.TOPICS.items():
+            self.assertIn(category, inferences.CATEGORIES)
+            self.assertIn(topic, used | {'camera', 'alarm'}, topic)
+        self.assertEqual(10, len(inferences.CATEGORIES))
+        self.assertEqual({'Health', 'Beliefs', 'Kids'}, inferences.SENSITIVE)
+
+
+class CategoryFacts(unittest.TestCase):
+    def setUp(self):
+        self.now = int(datetime(2026, 11, 7, 23, 0).timestamp() * 1000)
+
+    def facts(self, events):
+        return {f['fact']: f for f in inferences.compute_facts(events, 48, now_ms=self.now)}
+
+    def test_every_fact_has_a_category_and_sensitivity(self):
+        start = self.now - 3 * 60 * MIN
+        events = [ev(start, 'device-metrics-us.amazon.com', 'block')]
+        events += [ev(start + m * MIN, 'nflxvideo.net') for m in (30, 31, 32, 150)]
+        for f in inferences.compute_facts(events, now_ms=self.now):
+            self.assertIn(f['category'], inferences.CATEGORIES)
+            self.assertIs(f['sensitive'], f['category'] in inferences.SENSITIVE)
+        with self.assertRaises(ValueError):
+            inferences.fact('x', 'y', 0.5, 'Weather')
+
+    def test_topic_fact_cites_lookups_companies_devices_and_days(self):
+        day = 24 * 60 * MIN
+        events = [ev(self.now - day - MIN, 'www.goodrx.com', device='Phone'),
+                  ev(self.now - 2 * MIN, 'member.teladoc.com', device='Phone'),
+                  ev(self.now - MIN, 'www.goodrx.com', device='Laptop')]
+        f = self.facts(events)['Someone here uses health, pharmacy or telehealth services']
+        self.assertEqual(('Health', True, 0.7), (f['category'], f['sensitive'], f['confidence']))
+        self.assertEqual('3 lookups to GoodRx and Teladoc from Phone and Laptop on 2 days', f['evidence'])
+
+    def test_one_day_is_less_sure_and_beliefs_are_sensitive(self):
+        f = self.facts([ev(self.now - MIN, 'ballotpedia.org', device='Phone')])['Someone here visits political sites']
+        self.assertEqual(('Beliefs', True, 0.5), (f['category'], f['sensitive'], f['confidence']))
+        self.assertEqual('1 lookup to Ballotpedia from Phone on 1 day', f['evidence'])
+
+    def test_unlabelled_traffic_makes_no_topic_fact(self):
+        facts = self.facts([ev(self.now - MIN, 'example.org'), ev(self.now - 2 * MIN, 'example.net')])
+        self.assertEqual([], [f for f in facts.values() if f['category'] not in ('Household', 'Safety')])
+
+    def test_cross_device_linking_needs_two_devices(self):
+        one = self.facts([ev(self.now - MIN, 'idsync.rlcdn.com', 'block', device='TV'),
+                          ev(self.now - 2 * MIN, 'www.target.com', device='Phone')])
+        self.assertFalse([k for k in one if 'can link' in k])
+        self.assertEqual('2 differently named devices made lookups in 48h',
+                         one['At least 2 devices are in use in this house']['evidence'])
+        two = self.facts([ev(self.now - MIN, 'idsync.rlcdn.com', 'block', device='TV'),
+                          ev(self.now - 2 * MIN, 'tapad.com', 'block', device='TV'),
+                          ev(self.now - 3 * MIN, 'idsync.rlcdn.com', 'block', device='Phone')])
+        f = two['LiveRamp can link 2 of your 2 devices']
+        self.assertEqual(('Identity linking', False), (f['category'], f['sensitive']))
+        self.assertEqual('tracking lookups to LiveRamp from Phone and TV', f['evidence'])
+        self.assertIn('Ad companies are syncing IDs for this house', two)
+
+    def test_single_device_has_no_household_fact(self):
+        facts = self.facts([ev(self.now - MIN, 'www.target.com', device='Phone')])
+        self.assertFalse([k for k in facts if 'devices are in use' in k])
+
+    def test_beacon_to_an_acr_domain_is_whats_on_screen(self):
+        events = [ev(self.now - 60 * MIN + i * 15_000, 'log-ingestion.samsungacr.com', 'block', device='TV')
+                  for i in range(20)]
+        [beacon] = [f for f in inferences.compute_facts(events, now_ms=self.now) if 'on a timer' in f['fact']]
+        self.assertEqual("What's on screen", beacon['category'])
 
 
 class Sessions(unittest.TestCase):
@@ -107,6 +203,19 @@ class DemoWeek(unittest.TestCase):
         self.assertLessEqual(self.events[-1]['ts'], self.now)
         self.assertGreater(self.events[0]['ts'], self.now - 7 * 24 * 60 * MIN)
 
+    def test_extra_devices_leave_the_original_week_alone(self):
+        extras = {demo_week.PHONE, demo_week.LAPTOP, demo_week.SPEAKER, demo_week.THERMOSTAT, demo_week.DOORBELL}
+        original = [e for e in self.events if e['device'] not in extras and e['domain'] not in
+                    ('idsync.rlcdn.com', 'www.youtubekids.com')]
+        with patch.object(demo_week, 'EXTRA_BACKGROUND', []), patch.object(demo_week, 'ROUTINE', []):
+            self.assertEqual(original, demo_week.events(self.now))
+
+    def test_report_covers_what_a_fire_stick_cannot_show(self):
+        facts = inferences.compute_facts(self.events, 168, now_ms=self.now)
+        self.assertEqual(set(inferences.CATEGORIES) - {"What's on screen"}, {f['category'] for f in facts})
+        for f in facts:
+            self.assertIs(f['sensitive'], f['category'] in ('Health', 'Beliefs', 'Kids'), f)
+
     def test_report_finds_the_scripted_patterns(self):
         facts = {f['fact']: f for f in inferences.compute_facts(self.events, 168, now_ms=self.now)}
         self.assertIn('Someone is up watching after midnight', facts)
@@ -130,6 +239,7 @@ class Endpoint(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(168, demo['hours'])
         self.assertTrue(demo['text'].startswith(demo_week.LABEL))
         self.assertTrue(demo['facts'])
+        self.assertTrue({'Health', 'Beliefs', 'Kids'} <= {f['category'] for f in demo['facts'] if f['sensitive']})
         self.assertEqual({'demo': False, 'hours': 168, 'facts': []}, {k: live[k] for k in ('demo', 'hours', 'facts')})
         self.assertIs(live['enough_data'], False)
         self.assertFalse(api.recent, 'demo events must never enter the live feed')
