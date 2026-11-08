@@ -1,0 +1,16 @@
+[Unit]
+Description=Eddie classifier (local Ollama, or EDDIE_OLLAMA_URL)
+PartOf=eddie.target
+After=network-online.target eddie-dns.service ollama.service
+Wants=ollama.service
+
+[Service]
+User=@USER@
+WorkingDirectory=@REPO@
+EnvironmentFile=@ENV@
+ExecStart=@REPO@/.venv/bin/python -m eddie.classifier
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=eddie.target

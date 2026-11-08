@@ -21,6 +21,8 @@ References: [openWakeWord training](https://github.com/dscripka/openWakeWord#tra
 
 Start the traffic API separately on port 8000, then run `python frontend/serve.py` in the voice environment. Open http://localhost:5173 and enable the microphone. Grant microphone permission to the host application on macOS. Start/stop controls are explicit; loading a page does not start capture.
 
+On the Pi (#18) the voice loop runs there too, with the speakerphone plugged into the Pi. Create the voice environment as `.venv-frontend` in the repo (`python3 -m venv .venv-frontend && .venv-frontend/bin/pip install -r voice/requirements.txt`, after `sudo apt install libportaudio2`), run `.venv-frontend/bin/python scripts/provision_voice.py`, then rerun `sudo ./scripts/install_pi.sh`. The `eddie-dashboard` service then runs `scripts/run_voice.sh` in the `audio` group, and Ollama runs on the Pi. Start the microphone from the dashboard on the Pi's own screen (`http://localhost:5173`); a paired iPad can type asks but can't turn the mic on. ARM64 wheels, the speakerphone, latency and memory alongside Ollama haven't been checked on the Pi yet.
+
 Configuration:
 
 | Variable | Default / purpose |

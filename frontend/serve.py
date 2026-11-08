@@ -427,8 +427,10 @@ if __name__ == '__main__':
     print(f'Eddie dashboard: http://localhost:{args.port}', flush=True)
     if not is_local(args.host):
         # The token rides in the fragment, which browsers never send, so it stays out of request logs.
+        # A pinned token outlives this run, so it isn't printed into a log (journald) that keeps it.
         address = lan_ip() or '<this computer IP>'
+        shown = '<EDDIE_DASHBOARD_TOKEN>' if os.environ.get('EDDIE_DASHBOARD_TOKEN') else token
         print(f'Viewable from the network on port {args.port}. To ask Eddie from another device, open '
-              f'http://{address}:{args.port}/#pair={token} there. '
+              f'http://{address}:{args.port}/#pair={shown} there. '
               'The microphone only works on this computer.', flush=True)
     ThreadingHTTPServer((args.host, args.port), Handler).serve_forever()
