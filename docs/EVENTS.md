@@ -31,7 +31,7 @@ Body is one event or a list of events.
 | `domain`     | string | lowercase, no trailing dot |
 | `qtype`      | string | `A`, `AAAA`, `HTTPS`, ... |
 | `action`     | string | `allow` \| `block` \| `flag` |
-| `source`     | string | `rule` \| `allowlist` \| `blocklist` \| `heuristic` \| `ai` \| `home_mode` \| `default` |
+| `source`     | string | `rule` \| `allowlist` \| `blocklist` \| `heuristic` \| `ai` \| `home_mode` \| `away_mode` \| `default` |
 | `reason`     | string | one short human line, shown on screen |
 
 The DNS server sends every lookup here through `eddie/feed.py`: fire-and-forget
@@ -69,6 +69,7 @@ Both are computed by the API from the events it has received, keyed by
 - `totals`: `{seen, blocked}`
 - `mode`: `{home_mode: bool}`
 - `offline_mode`: `{offline: bool, applied: bool}` after every `POST /offline-mode`
+- `away_mode`: `{away, away_until, away_applied, away_devices, away_exempt}` after every `POST /mode` with `away` (below)
 - `rule_change`: a rule was stored or deleted (see Rules below)
 
 ## Home mode: `GET/POST /mode`
@@ -77,7 +78,48 @@ Both are computed by the API from the events it has received, keyed by
 shares the state in-process later) and, while on, blocks a device's
 non-essential traffic with `source: "home_mode"`.
 
-`GET /mode` also returns `offline` and `offline_applied` (below).
+`GET /mode` also returns `offline` and `offline_applied` (below), and away mode's fields.
+
+## Away mode: `POST /mode {"away": ...}` (#109)
+
+`POST /mode {"away": true, "away_until": 1762750800000}` (`away_until` is
+optional: ms since epoch, in the next 30 days, only with `away: true`;
+anything else is 422). `home_mode` may be sent in the same body; away is
+handled first, so a failed away request (503 with `EDDIE_DB=off`) leaves home
+mode alone. A body with only `home_mode` answers `{home_mode}` as before.
+
+Turning away on ranks devices from the last week of `queries`
+(`eddie/away.py`): the occupancy leak score is the number of hours in which a
+device looked up media (`labels.HUMAN`, streaming) or made at least 3× its
+median hourly lookups (and at least 30). This is an interim score until the
+burglar's-eye report (#34) lands. Devices scoring 0 aren't covered. Security
+devices are never covered: Ring, Arlo or Wyze vendors, a label or DHCP
+hostname naming a camera, cam, doorbell, alarm or security, or any lookup of a
+camera, doorbell or alarm domain this week (only `ring.com` is labelled today).
+The covered and exempt devices are stored in `away_devices`, the state in
+`engine_state` (`away`, `away_until`, `away_rev`), and the API waits up to 2 s
+for the DNS server to write `away_loaded`, the same handshake as rules. It
+answers and broadcasts:
+
+```json
+{"away": true, "away_until": 1762750800000, "away_applied": true,
+ "away_devices": [{"key": "f0:4f:7c:11:22:33", "name": "Fire Stick", "score": 41}],
+ "away_exempt": [{"key": "a4:...", "name": "Ring device"}]}
+```
+
+`away_applied: false` means stored but no running DNS server confirmed it.
+Turning away off clears `away_devices` and answers `away_until: null` and
+empty lists. `GET /mode` reports the same five fields; `away` is false once
+`away_until` has passed (the DNS engine stops at that time without a reload),
+and with `EDDIE_DB=off` it's `away: false, away_applied: false`.
+
+While on, for a covered device only (by its key or client IP), the decision
+engine blocks with `source: "away_mode"` a domain labelled telemetry, ads,
+analytics or tracking in `eddie/labels.py`, a cached AI `tracker` verdict
+(otherwise a flag) and a beacon (otherwise a flag). It comes after rules, the
+allowlist, blocklists and the keyword heuristic, so a user allow rule or an
+essential still wins. Everything else, including unknown domains, is
+unchanged.
 
 ## Offline mode: `POST /offline-mode` (#26)
 
@@ -244,7 +286,7 @@ Relays to the traffic API (`EDDIE_API_URL`, default `http://127.0.0.1:8000`), so
 | `GET /api/devices` | `GET /devices?hours=24` | read-only |
 | `GET /api/mode` | `GET /mode` | read-only |
 | `GET /api/what-they-know[?demo=1]` | `GET /what-they-know?hours=168` or `?demo=true` | read-only |
-| `POST /api/mode` `{home_mode: bool}` | `POST /mode` | answers with the API's echo `{home_mode}` |
+| `POST /api/mode` `{home_mode: bool}` | `POST /mode` | answers with the API's echo `{home_mode}`; away mode isn't relayed, so a paired device can't set it |
 | `POST /api/offline-mode` `{offline: bool}` | `POST /offline-mode` | answers with `{offline, applied}`; `applied: false` is passed through |
 
 The two POSTs forward only that one boolean (anything else is 400) and wait up to 5 s for the API.

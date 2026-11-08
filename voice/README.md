@@ -37,7 +37,7 @@ Say “Hey Eddie,” then ask your question. The detector uses 16 kHz mono audio
 
 Questions go to the local Ollama agent (`voice/ollama_agent.py`, #29) when it's reachable: “What's the TV doing?”, “What got blocked recently?”, “Why was device-metrics-us.amazon.com blocked?”. It only reads traffic through four tools, every number it says must come from those tools, and if Ollama is down the keyword router below answers instead. `EDDIE_AGENT=off` disables it; `EDDIE_OLLAMA_URL` and `EDDIE_AGENT_MODEL` (default `llama3.2:3b`, provisioned with `ollama pull`) configure it. Try it typed with `EDDIE_API_URL=http://127.0.0.1:8000 python voice/ollama_agent.py "What's the TV doing?"`. See [architecture](../docs/ARCHITECTURE.md#local-tool-calling-agent-29).
 
-Keyword commands: “What's been going on?” (backend facts), “What do they know about me?” / “What do companies know about me?” (reads `GET /what-they-know?hours=168`, up to a week; the local model, when on, rewrites the backend's facts into at most five checked “Someone could guess …” lines, otherwise Eddie speaks the backend template), “turn on home mode”, “turn off home mode”, “block it” / “block device-metrics-us.amazon.com”, “allow Netflix” / “allow api.example.com” and “undo that” (below). Home mode updates backend state; actual network enforcement still depends on Will's decision engine. Lockdown and email are pending; the confirmation step lockdown and email will use is built and already guards service allows (see below). Typed questions use the same router. Do not claim these pending tools work.
+Keyword commands: “What's been going on?” (backend facts), “What do they know about me?” / “What do companies know about me?” (reads `GET /what-they-know?hours=168`, up to a week; the local model, when on, rewrites the backend's facts into at most five checked “Someone could guess …” lines, otherwise Eddie speaks the backend template), “turn on home mode”, “turn off home mode”, “I'm leaving for the weekend” / “I'm back” (away mode, below), “block it” / “block device-metrics-us.amazon.com”, “allow Netflix” / “allow api.example.com” and “undo that” (below). Home mode updates backend state; actual network enforcement still depends on Will's decision engine. Lockdown and email are pending; the confirmation step lockdown and email will use is built and already guards service allows (see below). Typed questions use the same router. Do not claim these pending tools work.
 
 ## Verification before demo
 
@@ -141,6 +141,28 @@ On yes Eddie adds one device allow rule per keep pattern, then the device block 
 Because the block rule is always last, a failure never leaves the device blocked. “Undo” after a lockdown removes all of its rules at once. The dashboard's rule list shows the block as `block * · TV · by voice`.
 
 Not yet checked on hardware: a real Fire Stick or TV under lockdown, including whether the keep patterns cover each app's sign-in and playback.
+
+## Away mode (#109)
+
+“I'm leaving for the weekend”, “we're going away until Tuesday”, “I'm away for 3 days” or “turn on away mode” turns away mode on after a spoken yes; “I'm back”, “we're home” or “turn off away mode” turns it off after a yes. The whole-utterance rule applies, so “don't turn on away mode” and “turn on away mode and block it” change nothing. A day means the end of that day, “the weekend” the end of the coming Sunday, and “for N hours/days” that long from now (up to 30 days; longer is refused with nothing changed). Eddie uses the worker's local clock.
+
+| Request | Eddie says |
+|---|---|
+| On | “Turn on away mode until the end of Sunday? I'll cut telemetry from the devices whose traffic shows when someone's home. Cameras, doorbells and alarms stay up. Say yes to confirm or no to cancel.” |
+| Off | “Turn off away mode? Say yes to confirm or no to cancel.” |
+| More than 30 days | “I can only set away mode for up to 30 days. Nothing changed.” |
+
+On yes Eddie sends `POST /mode {"away": …, "away_until": …}` and speaks only what it acknowledged:
+
+| Backend answer | Eddie says |
+|---|---|
+| On and loaded by DNS | “Away mode is on until the end of Sunday. Eddie's DNS has loaded it and is cutting telemetry from Fire Stick and Laptop. Ring device stays up.” Up to three names, then “and N more”; unlabelled devices are counted, never read out as a MAC or IP. |
+| On, no device scored | “Away mode is on, but I haven't seen a device whose traffic shows someone's home this week, so it isn't blocking anything.” |
+| On, not loaded within 2 s | “I saved away mode, but Eddie's DNS hasn't loaded it yet, so nothing is blocked yet.” |
+| Off and loaded / not loaded | “Away mode is off, and Eddie's DNS has loaded the change.” / “I turned away mode off, but Eddie's DNS hasn't loaded the change yet, so it may still block for a moment.” |
+| Backend down or a wrong echo | “I couldn't confirm that went through. Check the local backend before trying again.” |
+
+Away mode isn't on the undo list; say “I'm back” to turn it off. Tested with a fake backend (`tests/test_voice_away.py`); not yet tried by voice on the microphone.
 
 ## Confirmation for risky actions
 

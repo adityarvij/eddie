@@ -1,10 +1,11 @@
 """The shared event format. See docs/EVENTS.md."""
+import time
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 Action = Literal["allow", "block", "flag"]
-Source = Literal["rule", "allowlist", "blocklist", "heuristic", "ai", "home_mode", "default"]
+Source = Literal["rule", "allowlist", "blocklist", "heuristic", "ai", "home_mode", "away_mode", "default"]
 
 
 class QueryEvent(BaseModel):
@@ -24,8 +25,26 @@ class QueryEvent(BaseModel):
         return v.strip().lower().rstrip(".")
 
 
+MAX_AWAY_MS = 30 * 86_400_000  # away mode's end time is at most 30 days ahead
+
+
 class ModeUpdate(BaseModel):
-    home_mode: bool
+    """Home mode, away mode (#109) or both. away_until (ms) is optional and only with away on."""
+    home_mode: bool | None = None
+    away: bool | None = None
+    away_until: int | None = None
+
+    @model_validator(mode="after")
+    def check(self) -> "ModeUpdate":
+        if self.home_mode is None and self.away is None:
+            raise ValueError("expected home_mode or away")
+        if self.away_until is not None:
+            now = time.time() * 1000
+            if self.away is not True:
+                raise ValueError("away_until only goes with away: true")
+            if not now < self.away_until <= now + MAX_AWAY_MS:
+                raise ValueError("away_until must be in the next 30 days, in ms")
+        return self
 
 
 class OfflineUpdate(BaseModel):

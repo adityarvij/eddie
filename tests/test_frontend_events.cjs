@@ -160,6 +160,21 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   assert.equal(get('home-note').textContent, '');
   assert.equal(get('requests').textContent, '0', 'mode events are not DNS requests (the snapshot reset the count)');
 
+  // Away mode shows only once DNS has loaded it, with who it covers and who stays up.
+  const away = {type:'away_mode', away:true, away_until:null, away_applied:false,
+    away_devices:[{key:'a', name:'TV', score:3}, {key:'b', name:'Laptop', score:1}], away_exempt:[{key:'c', name:'Porch cam'}]};
+  socket.onmessage({data:JSON.stringify(away)});
+  assert.equal(get('away-note').textContent, 'away mode on not yet applied by DNS');
+  socket.onmessage({data:JSON.stringify({...away, away_applied:true})});
+  assert.equal(get('away-note').textContent, 'away mode: on · cutting telemetry from TV, Laptop · Porch cam stays up');
+  const until = Date.now() + 3600000;
+  socket.onmessage({data:JSON.stringify({...away, away_applied:true, away_until:until, away_exempt:[]})});
+  assert.equal(get('away-note').textContent, `away mode: on until ${new Date(until).toLocaleString([], {weekday:'short', hour:'numeric', minute:'2-digit'})} · cutting telemetry from TV, Laptop`);
+  socket.onmessage({data:JSON.stringify({...away, away_applied:true, away_until:Date.now() - 1})});
+  assert.equal(get('away-note').textContent, '', 'past its end time it is off');
+  socket.onmessage({data:JSON.stringify({type:'away_mode', away:false, away_until:null, away_applied:true, away_devices:[], away_exempt:[]})});
+  assert.equal(get('away-note').textContent, '');
+
   // No backend: the toggles say unavailable and can't be pressed.
   timers.filter(t => t.ms === 30000).at(-1).fn();
   await answer('/api/devices', 502, {message:'Devices unavailable.'});

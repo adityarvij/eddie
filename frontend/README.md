@@ -56,6 +56,7 @@ The toggles only ever show state the backend acknowledged:
 - If the API errors or doesn't answer within 10 seconds, a toast says "Home mode change not confirmed: …" and the toggle reloads its real state from the API.
 - Offline mode that the API stored but the DNS server hasn't loaded (`applied: false`) shows in red: "offline mode on not yet applied by DNS". It clears when the DNS server picks it up.
 - Home mode on always adds "home mode is a backend flag; DNS does not enforce it yet", because `decision.py` ignores it.
+- Away mode (#109, set by voice or `POST /mode`) has no toggle. Once DNS has loaded it, a note reads e.g. "away mode: on until Sun 11:59 PM · cutting telemetry from Fire Stick, Laptop · Ring device stays up"; before that, "away mode on not yet applied by DNS" in red. It follows the API's `away_mode` broadcast and the 30-second refresh, and disappears at its end time.
 
 From the iPad the toggles need the pairing link (`#pair=…`); without it they answer 401 and the toast says to pair. Tap targets are 44 px; nothing is hover-only.
 
