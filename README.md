@@ -242,6 +242,7 @@ CREATE INDEX t_dev ON traffic(device_mac, last_ts);
 1. Device rule, then the device's lockdown rule (`*`, block only; an allowlisted domain still passes), then global rule from `rules`.
 2. **Allowlist:** essentials so nothing breaks (Netflix, YouTube video CDNs, Amazon content and auth, Apple, NTP, captive-portal checks). Ship as `allowlist.txt`.
 3. **Blocklist:** StevenBlack hosts + a smart-TV list, loaded into a Python set at startup (`blocklists/*.txt`, downloaded once before the event). Then, only with `EDDIE_BLOCK_DOH=on`, the encrypted DNS resolver names in `eddie/bypass.py` (`dns.google`, `cloudflare-dns.com`, …) → `BLOCK`, source `blocklist`, reason "encrypted DNS resolver dns.google" (#97).
+   **ACR** (#104): a seeded smart-TV content recognition domain (`eddie/acr.py`: Samsung, LG/Alphonso, Vizio/Inscape, Samba TV) that the device looks up on a regular timer (same test as step 6) → `BLOCK`, source `heuristic`, reason "ACR (Samsung): looked up every 15 s, likely sending what's on screen". It stays blocked for that device until the DNS server restarts; until a timer is measured the lookup falls through to the steps below.
 4. **Keyword heuristic:** labels containing `metrics`, `telemetry`, `analytics`, `ads`, `adsystem`, `tracking`, `beacon`, `crashlytics`, `log` → `BLOCK`, source `heuristic`.
    **Away mode** (#109): for a device away mode covers, until its end time, a domain labelled telemetry, ads, analytics or tracking in `eddie/labels.py` → `BLOCK`, source `away_mode`; steps 5 and 6 then block a tracker verdict or a beacon instead of flagging it.
 5. **Cached AI verdict:** needed → `ALLOW`; tracker → `FLAG` as a likely tracker; unsure → `FLAG`. The AI never blocks on its own: on real traffic the local model called Google's static files, Apple's update servers and Safe Browsing trackers at 0.8–0.9 confidence. A user rule ("block it"), a list or the keyword heuristic does the blocking.
@@ -480,7 +481,7 @@ Break-ins are one category. Eddie's "What they know about you" report groups eve
 
 - **Sensitivity modes:** "Hey Eddie, protect anything health related" blocks third-party trackers for that whole category, not one domain at a time.
 - **Category privacy score:** the household gets a score per category (Safety B, Health D, Kids A) instead of one number, so people see what's actually exposed.
-- **ACR blocker:** a dedicated check for smart-TV content recognition, shown as "Your TV was sending what's on screen every 15 seconds. Blocked."
+- **ACR blocker (#104, built):** a dedicated check for smart-TV content recognition, shown as "Your TV was sending what's on screen every 15 seconds. Blocked." Seeded ACR domains that beacon are blocked at DNS, and the dashboard shows an `acr_detected` card with the interval Eddie measured. See docs/EVENTS.md. Not yet seen on a real smart TV on this network.
 - **Mic watch:** correlate speaker uploads with whether anyone spoke; flag uploads with no wake word.
 - **Cross-device map:** a visual of which companies see which of your devices, and how many devices each company can link.
 - **Data broker spotlight:** separate counter for known data brokers and ad exchanges, since that's where data gets sold on.
