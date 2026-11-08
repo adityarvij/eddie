@@ -162,9 +162,39 @@ The registered risky actions are `allow` (#13) and `lockdown` (#17), both parsed
 
 “Allow the new device” (also “approve” or “let in”) and “deny the new device” (also “block” or “reject”) act on the newest device `GET /devices` lists as `pending`. Eddie reads it back by name and first-seen time (“Allow the new device, kindle, first seen at 2:14 AM?”) and says how many others are waiting; only a yes posts `/devices/<mac>/approve` or `/deny`. The reply comes from the backend's stored status, and says Eddie's DNS has loaded it only when the API answered `applied: true`. With no pending device, or the backend down, nothing changes. Tested in `tests/test_voice_new_device.py`; not checked with a real device joining.
 
+## Text a contact
+
+“Text Will, I'm running late”, “message Sam: back by 6” or “send a text to Will saying on my way” drafts a text to someone in Eddie's contacts. Eddie reads it back word for word, the way Whisper heard it (“Text Will: "I'm running late." Send it? Say yes to confirm or no to cancel.”), and sends it only on a yes within **30 seconds** (longer than other confirmations, so there's time to hear the read-back). No, an unclear reply twice, the timeout or dismissing the conversation sends nothing. The text is never rewritten by the local model, and the model has no texting tool.
+
+**Where it goes.** Eddie sends through the Messages app on the Mac that runs the voice loop, signed in to your Apple ID: by iMessage (through Apple's servers, end-to-end encrypted) or, for contacts marked `SMS`, through your iPhone's Text Message Forwarding and then your carrier. The sent text shows up in Messages on your other Apple devices. There's no cloud SMS API and no texting on Linux yet (see [known gaps](#texting-gaps)).
+
+**Setup (macOS only):**
+
+1. Copy `voice/contacts.example.json` to `voice/contacts.json` (gitignored) and list the people Eddie may text: `{"Will": "+15551234567", "Sam": {"address": "+15557654321", "service": "SMS"}}`. An address is an E.164 number or an email; `service` is `iMessage` (default) or `SMS`. `EDDIE_CONTACTS` points at another file. Eddie never texts a number you say aloud, only a name on this list (a misheard digit would reach a stranger).
+2. Sign in to Messages on the Mac. For SMS, turn on Text Message Forwarding for the Mac on the iPhone (Settings → Apps → Messages).
+3. Start Eddie with `EDDIE_TEXTING=messages`. It's off by default, and refused on Linux.
+4. The first send asks to let the app running Eddie (Terminal, iTerm, …) control Messages. Allow it.
+5. To hear “Sent”, give that app **Full Disk Access** (System Settings → Privacy & Security). Eddie needs it to read `~/Library/Messages/chat.db`, where Messages records whether a text went out. Eddie reads only the newest outgoing message's sent and error flags for that contact, never message text.
+
+| After the yes | Eddie says |
+|---|---|
+| Messages marks it sent with no error (checked for up to 10 s) | “Sent to Will.” |
+| Messages records an error, or refuses the send | “Messages couldn't send that to Will. Check Messages before trying again.” |
+| Handed to Messages, not marked sent within 10 s | “I handed that to Messages, but it hasn't confirmed it went out to Will. …” |
+| Handed to Messages, but `chat.db` can't be read (no Full Disk Access) | “… I can't read its status on this Mac, so I can't confirm it went out to Will. …” |
+
+Unknown names (“I can only text Will or Sam”), an empty message, a message over 160 characters, missing or invalid `contacts.json` and texting being off are all spoken refusals; nothing is pending. Tested in `tests/test_voice_text.py` with a faked `osascript` and a stand-in `chat.db`; the AppleScript was compiled against macOS 26's Messages dictionary but **no real text has been sent by the tests**. Check a send to your own number on the Mac before relying on it.
+
+### Texting gaps
+
+- Linux and the Pi have no sender. A local Android SMS gateway would fit; an iPhone can't be driven from the LAN.
+- `is_sent` means Apple's server or the carrier took the text, not that it was delivered.
+- An iMessage to a number that isn't on iMessage fails; mark that contact `SMS`.
+- The read-back shows on the dashboard too (see the confirmation section).
+
 ## Confirmation for risky actions
 
-Risky actions (service and wildcard allows, lockdown, and every write the local model proposes; email once built) never run from the command that asks for them. `voice_agent.Confirmation` holds at most **one** pending action, `{kind, args, prompt, expires_at}`, and speaks the read-back prompt followed by “Say yes to confirm or no to cancel.”
+Risky actions (service and wildcard allows, lockdown, texts, and every write the local model proposes; email once built) never run from the command that asks for them. `voice_agent.Confirmation` holds at most **one** pending action, `{kind, args, prompt, expires_at}`, and speaks the read-back prompt followed by “Say yes to confirm or no to cancel.”
 
 | Next reply | Result |
 |---|---|
@@ -172,12 +202,12 @@ Risky actions (service and wildcard allows, lockdown, and every write the local 
 | Exactly “no”, “nope”, “no thanks”, “cancel”, “cancel it”, “stop”, “don't” or “never mind” | Discards it: “Cancelled. Nothing changed.” |
 | Another risky command | Replaces the pending action and says the earlier one was dropped. |
 | Anything else, including missed speech | Re-prompts once; a second unclear reply discards it without running. |
-| 15 seconds after the request | Expires. A late yes or no is told it expired; nothing runs. |
+| 15 seconds after the request (30 for a text) | Expires. A late yes or no is told it expired; nothing runs. |
 | Conversation dismissed, microphone stopped or errored | Discarded. |
 
-Replies must match the whole utterance after lowercasing and removing punctuation, so “yes, but not the TV” is unclear, not a yes. Typed asks use the same router. While an action is pending the bridge emits `voice_state: confirming` with `kind`, `prompt` and `expires_in_ms` (never the action's arguments); the dashboard shows “say yes or no” until the next reply, dismissal or expiry. No pending action, reply or transcript is persisted or logged.
+Replies must match the whole utterance after lowercasing and removing punctuation, so “yes, but not the TV” is unclear, not a yes. Typed asks use the same router. While an action is pending the bridge emits `voice_state: confirming` with `kind`, `prompt` and `expires_in_ms` (never the action's arguments); the dashboard shows “say yes or no” until the next reply, dismissal or expiry. A text's `prompt` contains the message, so it is on screen like the transcript. No pending action, reply or transcript is persisted or logged.
 
-The registered risky actions are `allow` (#13), `lockdown` (#17), and `approve` / `deny` for new devices (#98), all parsed in `route`: a typed wildcard needs the raw text's dots, and lockdown and new devices look the device up first. `block` and `home_mode` are registered for the model's write tools (#108) only; spoken “block x.com” and “turn on home mode” still run directly. `RISKY_COMMANDS` stays empty until email (#37) lands. Closing the dashboard overlay by hand does not notify the worker; the 15 second expiry still applies.
+The registered risky actions are `allow` (#13), `lockdown` (#17), `approve` / `deny` for new devices (#98) and `text`, all parsed in `route`: a typed wildcard needs the raw text's dots, lockdown and new devices look the device up first, and a text keeps the raw transcript word for word. `block` and `home_mode` are registered for the model's write tools (#108) only; spoken “block x.com” and “turn on home mode” still run directly. `RISKY_COMMANDS` stays empty until email (#37) lands. Closing the dashboard overlay by hand does not notify the worker; the 15 second expiry still applies.
 
 
 ## Noisy-room voice and ready cue (#38)

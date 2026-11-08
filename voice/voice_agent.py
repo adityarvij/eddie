@@ -10,6 +10,8 @@ import urllib.request
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import texting
+
 
 def request(path, body=None, timeout=3, method=None):
     base = os.environ.get('EDDIE_API_URL', 'http://127.0.0.1:8000').rstrip('/')
@@ -720,6 +722,55 @@ def set_away_mode(on, until=None, when=''):
     return f"Away mode is on{when}. Eddie's DNS has loaded it and is cutting telemetry from {some(covered)}.{kept}"
 
 
+# Sends confirmed texts (texting.py); None when EDDIE_TEXTING is off or unsupported here.
+text_sender = texting.configured_sender()
+# Long enough to hear a word-for-word read-back of up to texting.MAX_BODY characters and answer.
+TEXT_CONFIRM_SECONDS = 30
+TEXT_REPLIES = {
+    'sent': 'Sent to {name}.',
+    'failed': "Messages couldn't send that to {name}. Check Messages before trying again.",
+    'pending': "I handed that to Messages, but it hasn't confirmed it went out to {name}. Check Messages before sending it again.",
+    'unknown': ("I handed that to Messages, but I can't read its status on this Mac, so I can't confirm "
+                "it went out to {name}. Check Messages before sending it again."),
+}
+
+
+def text_request(raw):
+    """Confirmation.request args for "text <contact> <message>", a spoken refusal, or None.
+
+    Never speaks the message or the address except in the read-back prompt.
+    """
+    if not texting.VERB.fullmatch(raw):
+        return None
+    if text_sender is None:
+        return "Texting isn't set up on this Eddie. Nothing was sent."
+    try:
+        contacts = texting.load_contacts()
+    except texting.ContactsError as error:
+        return f"I can't text anyone because {error}. Nothing was sent."
+    if not contacts:
+        return "I don't have anyone to text yet. Add contacts to voice/contacts.json. Nothing was sent."
+    contact, body = texting.parse(raw, contacts)
+    if contact is None:
+        return f"I can only text {join([c['name'] for c in contacts.values()], 'or')}. Nothing was sent."
+    name = contact['name']
+    if not body:
+        return f"What should the text to {name} say? Say text {name}, then the message."
+    if len(body) > texting.MAX_BODY:
+        return f"That's too long for me to read back. Keep texts to {name} under about 30 words. Nothing was sent."
+    args = {'name': name, 'address': contact['address'], 'service': contact['service'], 'body': body}
+    return 'text', args, f'Text {name}: "{body}" Send it?'
+
+
+def send_text(name, address, service, body):
+    """RISKY_ACTIONS['text']: says sent only once the sender reports it sent."""
+    try:
+        status = text_sender.send(address, service, body)
+    except Exception:
+        status = 'pending'
+    return TEXT_REPLIES.get(status, TEXT_REPLIES['pending']).format(name=name)
+
+
 def forget_conversation():
     """Drop the remembered domain when the conversation or microphone session ends."""
     context['domain'] = None
@@ -735,9 +786,11 @@ NO = {'no', 'nope', 'no thanks', 'cancel', 'cancel it', 'stop', 'dont', 'never m
 # not RISKY_COMMANDS: allows need the raw text's dots, the others a /devices lookup.
 # block and home_mode are only requested by the local model's write tools
 # (ollama_agent.py); spoken "block x.com" and "turn on home mode" run directly.
-# question answers an API question read out on wake (#79).
+# question answers an API question read out on wake (#79). text is parsed in route
+# (it needs the raw transcript word for word).
 RISKY_ACTIONS = {'allow': allow_patterns, 'lockdown': lockdown_device, 'block': block_action,
                  'home_mode': home_mode_action, 'away': set_away_mode, 'question': answer_question,
+                 'text': send_text,
                  'approve': lambda **args: decide_new_device('approve', **args),
                  'deny': lambda **args: decide_new_device('deny', **args)}
 RISKY_COMMANDS = [away_command]
@@ -751,13 +804,13 @@ class Confirmation:
         self.pending = None
         self.lock = threading.Lock()
 
-    def request(self, kind, args, prompt):
+    def request(self, kind, args, prompt, seconds=None):
         if kind not in RISKY_ACTIONS:
             raise ValueError('Unknown risky action')
         with self.lock:
             replaced = self.pending is not None
             self.pending = {'kind': kind, 'args': dict(args), 'prompt': prompt,
-                            'expires_at': self.clock() + self.seconds, 'reprompted': False}
+                            'expires_at': self.clock() + (seconds or self.seconds), 'reprompted': False}
         lead = "Okay, I dropped the earlier request. " if replaced else ''
         return f'{lead}{prompt} Say yes to confirm or no to cancel.'
 
@@ -859,6 +912,9 @@ def route(text):
     if lockdown and lockdown[1]:
         command = lockdown_request(*lockdown)
         return command if isinstance(command, str) else confirmation.request(*command)
+    command = text_request(raw)
+    if command:
+        return command if isinstance(command, str) else confirmation.request(*command, seconds=TEXT_CONFIRM_SECONDS)
     for parse in RISKY_COMMANDS:
         command = parse(text)
         if command:
