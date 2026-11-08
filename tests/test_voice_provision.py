@@ -88,7 +88,8 @@ class Provisioning(unittest.TestCase):
 
     def test_shipped_manifest_pins_every_download(self):
         manifest = json.loads((ROOT / 'voice/assets.json').read_text())
-        self.assertEqual({g['name'] for g in manifest['groups']}, {'whisper', 'piper', 'vosk', 'openwakeword'})
+        self.assertEqual({g['name'] for g in manifest['groups']},
+                         {'intent-minilm', 'whisper', 'piper', 'vosk', 'openwakeword'})
         for group in manifest['groups']:
             sources = [group['archive']] if 'archive' in group else group['files']
             for item in sources + group['files']:
