@@ -151,6 +151,16 @@ def lookup(domain: str) -> tuple[str, str]:
     return company or registrable_domain(domain), category
 
 
+def id_sync(domain: str) -> str | None:
+    """The ad-ID sync domain (a DOMAINS key) this lookup belongs to, else None."""
+    parts = domain.strip().lower().rstrip('.').split('.')
+    for i in range(len(parts)):
+        suffix = '.'.join(parts[i:])
+        if suffix in DOMAINS:
+            return suffix if DOMAINS[suffix][1] == 'id-sync' else None
+    return None
+
+
 def broker(domain: str) -> dict | None:
     """{company, kind} when the domain belongs to a known data broker or ad exchange."""
     parts = domain.strip().lower().rstrip('.').split('.')

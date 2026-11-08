@@ -162,6 +162,8 @@ The Open logs control sits directly beneath Eddie, away from the ambient edge gl
 
 `labels.py` preserves precise local category overrides, supplements owner names with 37 public Tracker Radar entries (source/license in `eddie/data/README.md`), and uses tldextract's bundled PSL for unknown registrable domains. Fetching and disk caching are disabled. Owner names alone never trigger blocking or imply tracking. `/summary` adds top-company request/block/tracking counts over the past hour. This view is bounded by the API's in-memory feed and is not an all-time database report.
 
+Cross-device tracker map (#107): `insights.tracker_map` groups the feed's tracking-category lookups by company, with the set of devices behind each and the company's ad-ID sync domains (`labels.id_sync`, label boundaries, most specific suffix first). `GET /tracker-map` serves it with each sync domain's covering block rule; `POST /tracker-map/block` accepts only an `id-sync` domain and adds `*.<domain>` through the `/rules` path, so it waits for DNS's `applied` and is watched for breakage like any rule. The dashboard's **who sees what** panel draws it as a company × device grid.
+
 Data broker watch: `labels.broker` matches a domain (label boundaries, most specific first) against `eddie/data/brokers.json`, the tracker domains of companies in California's Data Broker Registry, each marked `data broker` or `ad exchange`. Ingest tags each event with its kind, `/summary` adds `brokers` counts per device and company over the requested window, and the dashboard shows a separate counter and highlighted feed lines. It never blocks anything by itself.
 
 

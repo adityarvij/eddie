@@ -40,13 +40,15 @@ token = os.environ.get('EDDIE_DASHBOARD_TOKEN') or secrets.token_urlsafe(24)
 # Controls a paired device may use. Starting or stopping the microphone, and feeding traffic
 # events, stay on the Eddie computer whatever token is sent.
 PAIRED_CONTROLS = {'/api/voice/ask', '/api/mode', '/api/offline-mode', '/api/quarantine', '/api/devices/decide',
-                   '/api/devices/update', '/api/kid-mode', '/api/questions/answer', '/api/questions/undo'}
+                   '/api/devices/update', '/api/kid-mode', '/api/questions/answer', '/api/questions/undo',
+                   '/api/tracker-map/block'}
 # Read-only relays to the traffic API, so the page (and the iPad) need no CORS or direct API access.
 READ_RELAYS = {'/api/rules': ('/rules', 'Rules unavailable.'),
                '/api/devices': ('/devices?hours=24', 'Devices unavailable.'),
                '/api/mode': ('/mode', 'Modes unavailable.'),
                '/api/questions': ('/questions', 'Questions unavailable.'),
-               '/api/suggestions': ('/suggestions', 'Suggestions unavailable.')}
+               '/api/suggestions': ('/suggestions', 'Suggestions unavailable.'),
+               '/api/tracker-map': ('/tracker-map?window=24h', 'Tracker map unavailable.')}
 # Mode toggles: bridge path -> (API path, the one boolean field it takes).
 # Rules written by dashboard answers (#79), question id -> rule rows, so its Undo removes only those.
 # Memory only, at most ANSWERS_KEPT answers.
@@ -389,6 +391,20 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.json_response(502, {'message': 'The traffic API did not confirm the change.'})
             except Exception:
                 return self.json_response(502, {'message': 'The traffic API did not confirm the change.'})
+        if self.path == '/api/tracker-map/block':
+            # Block one ad-ID sync domain (#107); the API checks it is one and reports DNS's `applied`.
+            domain = body.get('domain') if isinstance(body, dict) else None
+            if not isinstance(domain, str) or not 0 < len(domain) <= 253:
+                return self.json_response(400, {'message': 'Expected an ad-ID sync domain.'})
+            try:
+                return self.json_response(200, api_request('/tracker-map/block', {'domain': domain}, timeout=5))
+            except urllib.error.HTTPError as error:
+                error.close()
+                if error.code == 422:
+                    return self.json_response(422, {'message': 'Only ad-ID sync domains can be blocked here.'})
+                return self.json_response(502, {'message': 'The traffic API did not confirm the block.'})
+            except Exception:
+                return self.json_response(502, {'message': 'The traffic API did not confirm the block.'})
         if self.path == '/api/kid-mode':
             # The page's own confirm dialog was the yes; the reply says only what the API acknowledged.
             if not isinstance(body, dict) or not isinstance(body.get('on'), bool):
