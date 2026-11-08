@@ -578,6 +578,52 @@ def undo_command():
     return f"Undone. I removed the {what}, and Eddie's DNS has loaded the change."
 
 
+# Ask before blocking (#79): ids of API questions already read out, so each is spoken once per worker run.
+announced = set()
+QUESTION_TIMEOUT = 1  # on wake, before listening: never keep the user waiting on the backend
+
+
+def question_announcement():
+    """On wake: the newest unannounced API question as a pending confirmation, else None.
+
+    A spoken yes runs answer_question; no, silence or an expiry leave it open on the dashboard.
+    """
+    try:
+        questions = request('/questions', timeout=QUESTION_TIMEOUT)
+    except Exception:
+        return None
+    for question in reversed(questions if isinstance(questions, list) else []):
+        qid, prompt = question.get('id'), question.get('prompt')
+        if type(qid) is not int or not isinstance(prompt, str) or qid in announced:
+            continue
+        announced.add(qid)
+        return "I've got one question for you. " + confirmation.request('question', {'question_id': qid}, prompt)
+    return None
+
+
+def answer_question(question_id):
+    """RISKY_ACTIONS['question']: answer Block through the API; says blocked only on applied: true."""
+    try:
+        result = request(f'/questions/{question_id}', {'answer': 'block', 'by': 'voice'}, timeout=RULE_TIMEOUT)
+    except urllib.error.HTTPError as error:
+        error.close()
+        if error.code == 404:
+            return 'That question was already answered. Nothing changed.'
+        return RULE_FAILED
+    except Exception:
+        return RULE_FAILED
+    saved = [{'id': r['id'], 'pattern': r['pattern'], 'action': r['action'], 'ts': r.get('ts')}
+             for r in result.get('rules') or [] if isinstance(r, dict) and type(r.get('id')) is int
+             and r.get('action') == 'block' and r.get('created_by') == 'voice' and isinstance(r.get('pattern'), str)]
+    if not saved:
+        return RULE_FAILED
+    names = join([r['pattern'] for r in saved])
+    remember_rules(f"block on {names}" if len(saved) == 1 else f"blocks on {names}", saved)
+    if result.get('applied') is True:
+        return f"Blocked {names} on every device. Eddie's DNS has loaded the change."
+    return f"I saved a block for {names}, but Eddie's DNS hasn't loaded it, so it isn't confirmed blocked yet."
+
+
 LEAD = r'(?:(?:ok|okay|eddie|hey eddie|please) )*(?:(?:can|could|would|will) you (?:please )?)?'
 DAYS = ('monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday')
 NUMBERS = {'a': 1, 'an': 1, 'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
@@ -689,8 +735,9 @@ NO = {'no', 'nope', 'no thanks', 'cancel', 'cancel it', 'stop', 'dont', 'never m
 # not RISKY_COMMANDS: allows need the raw text's dots, the others a /devices lookup.
 # block and home_mode are only requested by the local model's write tools
 # (ollama_agent.py); spoken "block x.com" and "turn on home mode" run directly.
+# question answers an API question read out on wake (#79).
 RISKY_ACTIONS = {'allow': allow_patterns, 'lockdown': lockdown_device, 'block': block_action,
-                 'home_mode': home_mode_action, 'away': set_away_mode,
+                 'home_mode': home_mode_action, 'away': set_away_mode, 'question': answer_question,
                  'approve': lambda **args: decide_new_device('approve', **args),
                  'deny': lambda **args: decide_new_device('deny', **args)}
 RISKY_COMMANDS = [away_command]

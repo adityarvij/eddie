@@ -31,7 +31,7 @@ class RuleIn(BaseModel):
     pattern: str
     action: Literal["allow", "block", "spoof"]
     device_mac: str | None = None  # None for a rule that covers every device
-    created_by: Literal["user", "voice", "agent"] = "user"
+    created_by: Literal["user", "voice", "agent", "dashboard"] = "user"
     pinned: bool = False  # never rolled back as a likely breakage (#101, rollback.py)
 
     @field_validator("pattern")

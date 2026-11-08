@@ -168,11 +168,54 @@ async function setMode(key, on) {
     loadModes();
   } finally { clearTimeout(timer); delete modePending[key]; renderModes(); }
 }
+// Ask before blocking (#79): the API's open question as a Block / Allow / Ignore card. The result line
+// says "blocked" only when the API reports DNS applied the rule; Undo removes the rules this answer wrote.
+let question = null, questionBusy = false, answered = null;
+function renderQuestion() {
+  const shown = question || answered; $('question').hidden = !shown; if (!shown) return;
+  $('question-text').textContent = question ? question.prompt : 'answered';
+  $('question-domains').replaceChildren(...(question ? question.domains : []).map(d => {
+    const li = document.createElement('li'); li.textContent = d.domain; const small = document.createElement('small'); small.textContent = ` — ${d.reason}`; li.append(small); return li;
+  }));
+  $('question-actions').hidden = !question; for (const b of $('question-actions').children) b.disabled = questionBusy;
+  $('question-result').textContent = answered ? answered.text : ''; $('question-result').classList.toggle('alert', !!answered?.alert);
+  $('question-undo').hidden = !answered?.undo; $('question-undo').disabled = questionBusy;
+}
+function showQuestions(list) { question = Array.isArray(list) && list[0] || null; renderQuestion(); }
+async function loadQuestions() {
+  try { const r = await fetch('/api/questions'); if (!r.ok) throw Error(); showQuestions(await r.json()); } catch { /* keep what is shown */ }
+}
+function answerText(answer, result) {
+  if (answer === 'ignore') return {text: 'Ignored. It stays flagged; no rule was added.'};
+  const names = result.rules.map(r => r.pattern).join(', ');
+  if (result.applied === true) return {text: `${answer === 'block' ? 'Blocked' : 'Allowed'} ${names} on every device. Eddie's DNS has loaded it.`, undo: true};
+  return {text: `${answer === 'block' ? 'Block' : 'Allow'} saved for ${names}, but Eddie's DNS hasn't loaded it, so it isn't confirmed.`, alert: true, undo: true};
+}
+async function answerQuestion(answer) {
+  if (!question || questionBusy) return; const id = question.id; questionBusy = true; renderQuestion();
+  try {
+    const r = await control('/api/questions/answer', {id, answer}); const data = await r.json(); if (!r.ok) throw Error(data.message);
+    answered = {id, ...answerText(answer, data)}; if (question?.id === id) question = null;
+  } catch (e) { notice(`Answer not confirmed: ${e.message || 'the bridge did not answer.'}`); loadQuestions(); }
+  finally { questionBusy = false; renderQuestion(); }
+}
+async function undoAnswer() {
+  if (!answered?.undo || questionBusy) return; questionBusy = true; renderQuestion();
+  try {
+    const r = await control('/api/questions/undo', {id: answered.id}); const data = await r.json(); if (!r.ok) throw Error(data.message);
+    answered = {text: data.applied === false ? "Undone, but Eddie's DNS hasn't loaded the change yet." : 'Undone. The rule is removed.', alert: data.applied === false};
+  } catch (e) { notice(`Undo not confirmed: ${e.message || 'the bridge did not answer.'}`); }
+  finally { questionBusy = false; renderQuestion(); }
+}
+for (const b of $('question-actions').children) b.onclick = () => answerQuestion(b.dataset.answer);
+$('question-undo').onclick = undoAnswer;
 // Counts move with traffic, so the panels refresh every 30 s as well as on (re)connect.
-function refreshPanels() { clearTimeout(refreshPanels.timer); refreshPanels.timer = setTimeout(refreshPanels, 30000); loadDevices(); loadModes(); }
+function refreshPanels() { clearTimeout(refreshPanels.timer); refreshPanels.timer = setTimeout(refreshPanels, 30000); loadDevices(); loadModes(); loadQuestions(); }
 function consumeEvent(event) {
   if (event.type === 'ai_verdict') return feedNote('ai', `${event.domain}${event.reason ? ' — ' + event.reason : ''}`, event, AI_RESULTS[event.label] || [String(event.label), 'flag']);
   if (event.type === 'mode') return applyModes({home_mode: event.home_mode});
+  if (event.type === 'question') { question = event; return renderQuestion(); }
+  if (event.type === 'question_resolved') { if (question?.id === event.id) { question = null; renderQuestion(); } return; }
   if (event.type === 'offline_mode') return applyModes({offline: event.offline, offline_applied: event.applied});
   if (event.type === 'quarantine') return applyModes({quarantine: event.quarantine, quarantine_applied: event.applied});
   if (event.type === 'new_device') {
@@ -269,7 +312,7 @@ $('mic').onclick = async () => { try { const r = await control(voiceReady ? '/ap
 const stream = new EventSource('/events'); stream.onopen = () => { $('feed-status').textContent='Connected to local event bridge'; }; stream.onerror=()=>{ $('feed-status').textContent='Reconnecting to local event bridge…'; if(dialog.open) dismiss(); }; stream.onmessage=e=>{ try { const event=JSON.parse(e.data); if(event.type==='traffic_status'){ $('connection').firstChild.textContent=event.connected?'Connected':'Waiting'; $('source-label').textContent=event.connected?'LIVE TRAFFIC':'WAITING FOR TRAFFIC'; } else consumeEvent(event); } catch {} };
 // The traffic API runs on the same machine as this page (localhost on the Mac, its LAN IP from the iPad).
 const trafficUrl = new URLSearchParams(location.search).get('traffic') || `ws://${location.hostname || 'localhost'}:8000/ws/events`;
-function connectTraffic() { let ws; try { ws=new WebSocket(trafficUrl); } catch { return; } ws.onopen=()=>{ $('connection').firstChild.textContent='Connected'; $('source-label').textContent='LIVE TRAFFIC'; }; ws.onmessage=e=>{ try { const message=JSON.parse(e.data); if(message.type==='snapshot'){ total=0; blocked=0; allowedCount=0; deviceSet.clear(); $('feed').replaceChildren(); } let events=Array.isArray(message)?message:Array.isArray(message.events)?message.events:[message]; if(message.type==='snapshot'){ events=[...events, ...(message.ai_verdicts || []), ...(message.bypass || [])].sort((a,b)=>(dateOf(a).getTime()||0)-(dateOf(b).getTime()||0)); } events.forEach(consumeEvent); if(message.type==='snapshot'){ loadRules(); refreshPanels(); } const totals=message.totals || (message.type==='totals'?message:null); if(totals){ total=totals.seen; blocked=totals.blocked; $('requests').textContent=total.toLocaleString(); $('blocked').textContent=blocked.toLocaleString(); updateCounts(); } } catch {} }; ws.onclose=()=>{ $('connection').firstChild.textContent='Waiting'; $('source-label').textContent='WAITING FOR TRAFFIC'; setTimeout(connectTraffic,2500); }; ws.onerror=()=>ws.close(); }
+function connectTraffic() { let ws; try { ws=new WebSocket(trafficUrl); } catch { return; } ws.onopen=()=>{ $('connection').firstChild.textContent='Connected'; $('source-label').textContent='LIVE TRAFFIC'; }; ws.onmessage=e=>{ try { const message=JSON.parse(e.data); if(message.type==='snapshot'){ total=0; blocked=0; allowedCount=0; deviceSet.clear(); $('feed').replaceChildren(); } let events=Array.isArray(message)?message:Array.isArray(message.events)?message.events:[message]; if(message.type==='snapshot'){ events=[...events, ...(message.ai_verdicts || []), ...(message.bypass || [])].sort((a,b)=>(dateOf(a).getTime()||0)-(dateOf(b).getTime()||0)); } events.forEach(consumeEvent); if(message.type==='snapshot'){ showQuestions(message.questions); loadRules(); refreshPanels(); } const totals=message.totals || (message.type==='totals'?message:null); if(totals){ total=totals.seen; blocked=totals.blocked; $('requests').textContent=total.toLocaleString(); $('blocked').textContent=blocked.toLocaleString(); updateCounts(); } } catch {} }; ws.onclose=()=>{ $('connection').firstChild.textContent='Waiting'; $('source-label').textContent='WAITING FOR TRAFFIC'; setTimeout(connectTraffic,2500); }; ws.onerror=()=>ws.close(); }
 $('home-mode').onclick = () => setMode('home_mode', !modes.home_mode);
 $('offline-mode').onclick = () => setMode('offline', !modes.offline);
 $('quarantine-mode').onclick = () => setMode('quarantine', !modes.quarantine);

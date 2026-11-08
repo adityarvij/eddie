@@ -56,6 +56,10 @@
 .device-panel li{color:#ddd;padding:2px 0;overflow-wrap:anywhere}.device-panel li small{display:block;color:#777;font-size:11px}
 .device-panel li.pending,.device-panel li.denied{color:#fbbf24}.device-panel li.denied{color:#f87171}.device-panel li button{margin:0 0 0 8px;font:inherit;font-size:11px}
 @media(max-width:700px){.panels{grid-template-columns:1fr}}
+/* Ask before blocking (#79): the AI only flags, so the person decides. */
+.question{border:1px solid #fff;padding:12px 16px;margin:-6px 0 20px;font-size:12px;color:#aaa}.question[hidden]{display:none}
+.question ul{list-style:none;margin:6px 0 10px;padding:0}.question li{color:#ddd;overflow-wrap:anywhere}.question li small{color:#777}
+.question-actions{display:flex;flex-wrap:wrap;gap:10px}.question-actions[hidden]{display:none}.question-result{margin:8px 0 0;color:#ddd}.question-result:empty{display:none}
 /* Home mode is a house icon beside the heading: outlined off, filled on, dashed while waiting for the backend. */
 .terminal-heading{display:flex;align-items:center}
 .home-toggle{width:44px;height:44px;margin:-12px 0 -12px -4px;padding:12px;border:0;background:none;color:#fff;touch-action:manipulation}

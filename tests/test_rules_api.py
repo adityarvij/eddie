@@ -159,7 +159,6 @@ class RulesAPITests(unittest.IsolatedAsyncioTestCase):
                {'pattern': '2001:db8::1', 'action': 'block'},
                {'pattern': 'a.com', 'action': 'block', 'created_by': 'Voice Agent'},
                {'pattern': 'a.com', 'action': 'block', 'created_by': 'api'},
-               {'pattern': 'a.com', 'action': 'block', 'created_by': 'dashboard'},
                {'pattern': 'a.com', 'action': 'block', 'created_by': None}]
         for body in bad:
             with self.subTest(body=body):
@@ -174,11 +173,11 @@ class RulesAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((201, 'spoof'), (r.status_code, r.json()['action']))
         self.assertEqual(['spoof'], [rule['action'] for rule in (await self.http.get('/rules')).json()])
 
-    async def test_created_by_is_user_voice_or_agent(self):
+    async def test_created_by_is_user_voice_agent_or_dashboard(self):
         with patch.object(api, 'APPLY_TIMEOUT', 0):
             default = await self.http.post('/rules', json={'pattern': 'a.example', 'action': 'block'})
             self.assertEqual('user', default.json()['created_by'])
-            for who in ('user', 'voice', 'agent'):
+            for who in ('user', 'voice', 'agent', 'dashboard'):
                 r = await self.http.post('/rules', json={'pattern': 'a.example', 'action': 'block', 'created_by': who})
                 self.assertEqual((201, who), (r.status_code, r.json()['created_by']))
 

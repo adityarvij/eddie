@@ -19,6 +19,7 @@ const timers=[];
 const context={document:{getElementById:get,createElement:()=>new Element(),addEventListener(){},activeElement:{tagName:'BODY'}},window:{},location:{search:'',hostname:'localhost'},URLSearchParams,Date,console,
   setTimeout(fn,ms){timers.push({fn,ms});return timers.length;},clearTimeout(){},fetch(){},AbortController,EventSource:class{},WebSocket:class{constructor(){socket=this;}}};
 const source=fs.readFileSync('frontend/app.js','utf8');
+for (const a of ['block','allow','ignore']) { const b = new Element(); b.dataset.answer = a; get('question-actions').append(b); }
 vm.runInNewContext(source,context);
 socket.onmessage({data:JSON.stringify({domain:'example.org',device:'TV',action:'allow',ts:Date.now()})});
 assert.equal(get('requests').textContent,'1');
@@ -214,4 +215,28 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   assert.equal(get('home-mode').attrs['aria-label'], 'home mode: unavailable');
   assert.equal(get('offline-mode').disabled, true);
   console.log('Frontend device panel and mode toggle checks passed');
+
+  // Ask before blocking (#79): the card shows the API's question and says blocked only on applied: true.
+  const q = {id:1, device:'Laptop', domains:[{domain:'px.example', reason:'Fingerprinting'}], prompt:'A new likely tracker on Laptop: px.example. Block it?', ts:1};
+  socket.onmessage({data:JSON.stringify({type:'snapshot',events:[],totals:{seen:0,blocked:0},home_mode:false,questions:[q]})});
+  assert.equal(get('question').hidden, false);
+  assert.equal(get('question-text').textContent, q.prompt);
+  assert.equal(get('feed').children.length, 0, 'a question is not a feed line');
+  get('question-actions').children[0].onclick();
+  assert.equal(get('question-actions').children[0].disabled, true);
+  assert.deepEqual(JSON.parse(calls.find(c => c.path === '/api/questions/answer').init.body), {id:1, answer:'block'});
+  await answer('/api/questions/answer', 200, {id:1, answer:'block', rules:[{id:9, pattern:'px.example'}], applied:false});
+  assert.doesNotMatch(get('question-result').textContent, /^Blocked/);
+  assert.match(get('question-result').textContent, /isn't confirmed/);
+  assert.equal(get('question-undo').hidden, false);
+  assert.equal(get('question-actions').hidden, true);
+  socket.onmessage({data:JSON.stringify({type:'question', ...q, id:2})});
+  assert.equal(get('question-actions').hidden, false);
+  get('question-actions').children[0].onclick();
+  await answer('/api/questions/answer', 200, {id:2, answer:'block', rules:[{id:10, pattern:'px.example'}], applied:true});
+  assert.match(get('question-result').textContent, /^Blocked px\.example on every device/);
+  socket.onmessage({data:JSON.stringify({type:'question', ...q, id:3})});
+  socket.onmessage({data:JSON.stringify({type:'question_resolved', id:3, answer:'ignore', by:'voice', applied:null})});
+  assert.equal(get('question-actions').hidden, true);
+  console.log('Frontend question card checks passed');
 })().catch(error => { console.error(error); process.exit(1); });

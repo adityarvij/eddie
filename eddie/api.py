@@ -8,6 +8,8 @@ encrypted DNS resolver's name also pushes a bypass_suspected event (bypass.py).
 waits for the DNS server to load them before answering; see docs/EVENTS.md.
 /devices lists the devices the DNS server recorded there, with lookup counts
 from its query log, and stores user labels (devices.py).
+/questions holds "block this likely tracker?" questions from AI tracker verdicts
+in memory, and an answer writes a rule like /rules does (questions.py, #79).
 /devices/new takes the DNS server's new_device alerts and pushes them to the
 feed; /quarantine and /devices/{key}/approve|deny change quarantine (#98,
 quarantine.py) and wait for DNS to load it like rules.
@@ -44,7 +46,7 @@ from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocket
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 
-from . import away, baselines, beacons, bypass, demo_week, devices, inferences, insights, labels, occupancy, offline, quarantine, rollback, rules, store
+from . import away, baselines, beacons, bypass, decision, demo_week, devices, inferences, insights, labels, occupancy, offline, quarantine, questions, rollback, rules, store
 from .events import Action, AIVerdictEvent, ModeUpdate, NewDeviceEvent, OfflineUpdate, QuarantineUpdate, QueryEvent
 
 # In memory for now; SQLite (store.py) replaces this once the DNS side lands.
@@ -55,6 +57,7 @@ totals = {"seen": 0, "blocked": 0}
 state = {"home_mode": False}
 clients: set[WebSocket] = set()
 ai_verdicts: dict[str, dict] = {}
+asking = questions.Questions()  # ask before blocking (#79)
 timing = {"beacons": beacons.Beacons(), "idle": beacons.Idle()}  # beacon_s and idle on each event (#24)
 suspicions = bypass.Suspicions()  # bypass_suspected events (#97)
 bypass_recent: deque[dict] = deque(maxlen=50)
@@ -168,6 +171,7 @@ async def ingest(body: QueryEvent | list[QueryEvent]):
     for notice in baseline_events([ev for ev in events if ev.ts >= cutoff]):
         await broadcast(notice)
     await broadcast({"type": "totals", **totals})
+    await ask_due()
     return {"ok": True, "count": len(events)}
 
 
@@ -199,7 +203,57 @@ async def ai_verdict(body: AIVerdictEvent):
         ai_verdicts.pop(next(iter(ai_verdicts)))
     ai_verdicts[body.domain] = event
     await broadcast(event)
+    if body.label == 'tracker' and not decision.is_plumbing(body.domain):
+        # The device that looked it up most recently names the question; the rule covers every device.
+        device = next((e['device'] for e in reversed(feed()) if e['domain'] == body.domain), None)
+        asking.offer(body.domain, body.reason, device)
+        await ask_due()
     return {'ok': True}
+
+
+async def ask_due() -> None:
+    question = asking.release()
+    if question:
+        await broadcast({'type': 'question', **question})
+
+
+class AnswerIn(BaseModel):
+    answer: Literal['block', 'allow', 'ignore']
+    by: Literal['dashboard', 'voice']
+
+
+@app.get('/questions')
+async def open_questions():
+    await ask_due()
+    return asking.pending()
+
+
+@app.post('/questions/{question_id}')
+async def answer_question(question_id: int, body: AnswerIn):
+    """Block or Allow writes one global rule per domain (created_by: body.by); Ignore writes none.
+
+    applied is DNS's acknowledgment of the last rule, as in POST /rules (null for Ignore).
+    """
+    conn = None if body.answer == 'ignore' else rules_db()
+    question = asking.take(question_id)
+    if question is None:
+        raise HTTPException(404, f'No open question {question_id}.')
+    added, rev = [], None
+    try:
+        for item in question['domains'] if conn else []:
+            row, rev = rules.add(conn, rules.RuleIn(pattern=item['domain'], action=body.answer, created_by=body.by))
+            added.append(row)
+            watcher.watch(row)  # a block from an answer can be rolled back like any other (#101)
+            await rule_change(conn, 'added', row)
+    except Exception:
+        if not added:
+            asking.open[question_id] = question  # nothing changed: it can be answered again
+        raise
+    applied = None if rev is None else await wait_applied(conn, rev)
+    await broadcast({'type': 'question_resolved', 'id': question_id, 'answer': body.answer, 'by': body.by,
+                     'applied': applied})
+    await ask_due()
+    return {'id': question_id, 'answer': body.answer, 'rules': added, 'applied': applied}
 
 
 @app.get('/ai/verdicts')
@@ -563,6 +617,7 @@ async def ws_events(ws: WebSocket):
         "events": list(feed())[-60:],
         "ai_verdicts": list(ai_verdicts.values()),
         "bypass": list(bypass_recent),
+        "questions": asking.pending(),
         "totals": totals,
         "home_mode": state["home_mode"],
     }))

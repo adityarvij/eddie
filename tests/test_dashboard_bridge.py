@@ -240,3 +240,67 @@ class Dismiss(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class QuestionControls(unittest.TestCase):
+    """The dashboard's question card (#79): answers go to the API as `by: dashboard`; Undo removes only those rules."""
+
+    def setUp(self):
+        self.server = ThreadingHTTPServer(('127.0.0.1', 0), serve.Handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.addCleanup(self.server.server_close)
+        self.addCleanup(self.server.shutdown)
+        p = patch.object(serve, 'answered', {})
+        p.start()
+        self.addCleanup(p.stop)
+        self.rows, self.sent = {}, []
+
+    def api(self, path, body=None, timeout=3, method=None):
+        self.sent.append((method or ('POST' if body else 'GET'), path, body))
+        if path == '/questions/4':
+            row = {'id': 9, 'pattern': 'px.example', 'action': body['answer'], 'created_by': body['by'], 'ts': 5}
+            self.rows[9] = row
+            return {'id': 4, 'answer': body['answer'], 'rules': [row], 'applied': False}
+        if path.startswith('/questions/'):
+            raise urllib.error.HTTPError(path, 404, 'Not Found', {}, None)
+        if path == '/rules':
+            return list(self.rows.values())
+        if method == 'DELETE':
+            return {**self.rows.pop(int(path.rsplit('/', 1)[1])), 'deleted': True, 'applied': True}
+        raise AssertionError(path)
+
+    def post(self, path, body):
+        request = urllib.request.Request(f'http://127.0.0.1:{self.server.server_address[1]}{path}',
+                                         data=json.dumps(body).encode(), method='POST')
+        with patch.object(serve, 'api_request', self.api):
+            try:
+                with urllib.request.urlopen(request, timeout=3) as r:
+                    return r.status, json.load(r)
+            except urllib.error.HTTPError as error:
+                return error.code, json.loads(error.read())
+
+    def test_answer_is_forwarded_and_applied_false_passes_through(self):
+        status, reply = self.post('/api/questions/answer', {'id': 4, 'answer': 'block', 'by': 'voice'})
+        self.assertEqual((200, False), (status, reply['applied']))
+        self.assertEqual([('POST', '/questions/4', {'answer': 'block', 'by': 'dashboard'})], self.sent)
+
+    def test_bad_answers_are_refused_and_nothing_is_forwarded(self):
+        for body in ({}, {'id': '4', 'answer': 'block'}, {'id': 4, 'answer': 'delete'}, {'id': True, 'answer': 'block'}):
+            self.assertEqual(400, self.post('/api/questions/answer', body)[0], body)
+        self.assertEqual([], self.sent)
+
+    def test_already_answered_is_404(self):
+        self.assertEqual(404, self.post('/api/questions/answer', {'id': 5, 'answer': 'ignore'})[0])
+
+    def test_undo_deletes_the_answers_rules_once(self):
+        self.post('/api/questions/answer', {'id': 4, 'answer': 'block'})
+        self.assertEqual((200, {'removed': 1, 'applied': True}), self.post('/api/questions/undo', {'id': 4}))
+        self.assertEqual({}, self.rows)
+        self.assertEqual(404, self.post('/api/questions/undo', {'id': 4})[0])
+
+    def test_undo_skips_a_rule_whose_id_now_holds_another(self):
+        self.post('/api/questions/answer', {'id': 4, 'answer': 'block'})
+        self.rows[9] = {**self.rows[9], 'pattern': 'other.example', 'created_by': 'voice'}
+        self.assertEqual((200, {'removed': 0, 'applied': None}), self.post('/api/questions/undo', {'id': 4}))
+        self.assertIn(9, self.rows)
+        self.assertFalse([s for s in self.sent if s[0] == 'DELETE'])

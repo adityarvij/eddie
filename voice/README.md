@@ -117,6 +117,19 @@ The list lives in the worker's memory: up to 20 commands, kept across conversati
 
 Undo has no read-back confirmation; it only puts back the previous decision. A failed block or allow leaves nothing to undo. A rule a timed-out add stored anyway isn't on the list; remove it from the dashboard.
 
+## Ask before blocking (#79)
+
+The AI only flags likely trackers; Eddie asks before anything is blocked. When you wake Eddie and the dashboard has an open question he hasn't read yet, he reads it first: “I've got one question for you. 3 new likely trackers on the TV: a.example, b.example and c.example. Block them? Say yes to confirm or no to cancel.” Each question is read once.
+
+| Reply | Eddie says |
+|---|---|
+| Yes, DNS loaded the rules | “Blocked a.example, b.example and c.example on every device. Eddie's DNS has loaded the change.” |
+| Yes, DNS didn't confirm (stopped or slow) | “I saved a block for …, but Eddie's DNS hasn't loaded it, so it isn't confirmed blocked yet.” |
+| Yes, but it was answered on the dashboard first | “That question was already answered. Nothing changed.” |
+| No, silence, or 15 s pass | Nothing is written; the question stays on the dashboard. |
+
+“Undo” removes the rules a yes created, like any voice block. The question lookup waits at most 1 s; if the backend is down Eddie skips it and listens as usual. A spoken yes on the real microphone still needs a hardware check.
+
 ## Lock down a device (#17)
 
 “Lock down the TV”, “please lock down my Fire Stick” or “can you lockdown the kids' iPad?” blocks everything for one device except a keep list, after a spoken yes. The device name is matched against the labels set on the dashboard's device panel (`GET /devices`): an exact label wins, otherwise a label containing the words (“TV” finds “Living Room TV” if it's the only one). Vendor names like “Amazon device” don't count; label the device first. The keep list is every service in `voice/services.json` (Netflix, YouTube, Prime Video, Apple TV); there's no spoken way to change it yet, so “lock down the TV to Netflix” changes nothing. The allowlist's essentials (sign-in, updates, time, captive-portal checks) always survive a lockdown, so it can't brick the device.
