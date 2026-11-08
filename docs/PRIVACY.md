@@ -120,7 +120,7 @@ Owner: [eddie/store.py](../eddie/store.py), written by [eddie/dns_server.py](../
 
 | Outbound | Carries | Status |
 | --- | --- | --- |
-| Upstream DNS (`1.1.1.1`, then `9.9.9.9`), plain UDP | Every **allowed** domain name, from Eddie's IP | implemented. Blocked lookups never leave. With offline mode on (`POST /offline-mode`, #26) nothing is forwarded; it covers Eddie's DNS only, not packets a router-mode Eddie forwards. "Data never leaves the house" means device data and history, not the lookups we forward. Encrypted upstream (DoT/DoH) is not built. |
+| Upstream DNS (`1.1.1.1`, then `9.9.9.9`), plain UDP, or plain TCP for lookups a device makes over TCP | Every **allowed** domain name, from Eddie's IP | implemented. Blocked lookups never leave. With offline mode on (`POST /offline-mode`, #26) nothing is forwarded; it covers Eddie's DNS only, not packets a router-mode Eddie forwards. "Data never leaves the house" means device data and history, not the lookups we forward. Encrypted upstream (DoT/DoH) is not built. |
 | Gmail API | The report email, only on request and after confirmation | planned |
 | Tavily / Exa (optional) | One unknown domain name, never user data | planned, optional |
 | Model downloads | Nothing about the household | setup only (`scripts/provision_voice.py`, Ollama pulls), never at runtime |
