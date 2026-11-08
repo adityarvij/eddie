@@ -13,6 +13,7 @@ import numpy as np
 
 MODEL_DIR = Path(__file__).with_name('models') / 'all-MiniLM-L6-v2'
 THRESHOLD = 0.56
+NAME = re.compile(r'\b(?:(?:hey|hi|ok|okay)\s+)?(?:eddie|eddy|edie)\b', re.I)
 EXAMPLES = {
     'device_activity': (
         "what's the TV doing", "what's my TV been up to",
@@ -29,7 +30,7 @@ EXAMPLES = {
         'show me the whole picture',
         "what's new", 'any updates', 'how are things at home', 'give me a quick recap',
         'what happened recently', 'anything going on lately', 'how is everything in the house',
-        'summarize what happened today',
+        'summarize what happened today', "what's up", "what's the word", "what's new with the house",
     ),
     'recent_blocks': (
         'what got blocked recently', 'show me the latest blocks',
@@ -104,6 +105,8 @@ class Matcher:
         self.examples = self.encoder.encode(phrases)
 
     def match(self, text):
+        # The name carries no intent, and "Eddie" pulls "what's up, Eddie" toward "thank you Eddie".
+        text = NAME.sub(' ', text).strip(' ,.?!') or text
         scores = self.examples @ self.encoder.encode([text])[0]
         best = int(np.argmax(scores))
         return self.intents[best] if float(scores[best]) >= self.threshold else None
