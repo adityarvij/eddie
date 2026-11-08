@@ -2,6 +2,16 @@ const $ = id => document.getElementById(id);
 let total = 0, blocked = 0, deviceSet = new Set(), voiceReady = false, speaking = false, closeTimer;
 let is_eddie_active = false, exitTimer, confirming = false, confirmTimer, userClosed = false;
 const dialog = $('assistant');
+// The same Eddie moves between the dashboard and focused voice view; it is never cloned.
+const dashboardEddieSlot = document.createElement('aside');
+dashboardEddieSlot.id = 'dashboard-eddie'; dashboardEddieSlot.className = 'dashboard-eddie';
+dashboardEddieSlot.setAttribute('aria-label', 'Eddie');
+const dashboard = document.querySelector?.('main');
+if (dashboard) { dashboard.append(dashboardEddieSlot); dashboardEddieSlot.append($('character')); }
+function transitionEddie(update) {
+  if (document.startViewTransition && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) return document.startViewTransition(update);
+  update(); return null;
+}
 function updateCounts() { $('allowed').textContent = allowedCount.toLocaleString(); $('blocked-count').textContent = blocked.toLocaleString(); $('broker-count').textContent = brokerCount.toLocaleString(); }
 let allowedCount = 0, brokerCount = 0;
 function notice(message) { $('notice').textContent = message; $('notice').hidden = false; clearTimeout(notice.timer); notice.timer = setTimeout(() => $('notice').hidden = true, 7000); }
@@ -469,20 +479,22 @@ function setAssistantState(state) {
   $('character').classList.toggle('talking', state === 'speaking');
   $('assistant-state').textContent = display === 'ready' ? 'WAITING FOR YOUR NEXT QUESTION' : display === 'confirming' ? 'SAY YES TO CONFIRM OR NO TO CANCEL' : 'EDDIE IS ' + display.toUpperCase();
 }
-function wake(preview = false) { userClosed = false; clearTimeout(exitTimer); dialog.classList.remove('closing'); is_eddie_active = true; clearTimeout(closeTimer); if (preview || !voiceReady) closeTimer = setTimeout(dismiss, 4000); if (!dialog.open) dialog.showModal(); const topics = guestTopics(); $('assistant-title').textContent = guest?.active ? 'Welcome! How can I help?' : "Hey, what's up?"; $('assistant-description').textContent = !guest?.active ? 'Ask me what your devices have been up to.' : topics.length ? `Ask me about ${topics.slice(0, 3).join(', ')} and more.` : 'I’m in guest mode.'; setAssistantState('listening'); }
+function wake(preview = false) { userClosed = false; clearTimeout(exitTimer); dialog.classList.remove('closing'); is_eddie_active = true; clearTimeout(closeTimer); if (preview || !voiceReady) closeTimer = setTimeout(dismiss, 4000); if (!dialog.open) transitionEddie(() => { dialog.prepend($('character')); dialog.showModal(); }); const topics = guestTopics(); $('assistant-title').textContent = guest?.active ? 'Welcome! How can I help?' : "Hey, what's up?"; $('assistant-description').textContent = !guest?.active ? 'Ask me what your devices have been up to.' : topics.length ? `Ask me about ${topics.slice(0, 3).join(', ')} and more.` : 'I’m in guest mode.'; setAssistantState('listening'); }
 // Closing Eddie returns to the live feed, scrolled to the newest activity.
 function dismiss() {
   is_eddie_active = false;
   setConfirming(false);
   clearTimeout(closeTimer);
   if (!dialog.open || dialog.classList.contains('closing')) return;
-  dialog.classList.add('closing');
-  const duration = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 320;
+  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const sharedTransition = Boolean(document.startViewTransition) && !reduced;
+  if (!sharedTransition) dialog.classList.add('closing');
+  const duration = sharedTransition || reduced ? 0 : 320;
   exitTimer = setTimeout(() => {
-    dialog.close();
-    dialog.classList.remove('closing');
-    toggleLogs(false);
-    $('feed').scrollTop = $('feed').scrollHeight;
+    transitionEddie(() => {
+      dialog.close(); dialog.classList.remove('closing'); dashboardEddieSlot.append($('character'));
+      toggleLogs(false); $('feed').scrollTop = $('feed').scrollHeight;
+    });
   }, duration);
 }
 // The user closed Eddie: end the voice conversation too, so the next request needs the wake phrase,
