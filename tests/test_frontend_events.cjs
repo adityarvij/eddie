@@ -36,6 +36,10 @@ assert.match(fs.readFileSync('frontend/index.html','utf8'), /<g class="role-acce
 const page = fs.readFileSync('frontend/index.html','utf8');
 assert.match(page, /<footer>.*id="open-rules"[^>]*>rules \(<span id="rules-count">.*id="open-devices".*id="offline-mode".*id="suggestions-open"[^>]*>suggestions<.*id="capabilities-open"[^>]*>capabilities<\/button><\/div><\/footer>/, 'footer: rules, devices, online/offline, suggestions, capabilities last');
 assert.doesNotMatch(page, /learn more/, 'learn more is gone');
+assert.match(page, /id="suggestions-open"[^>]*hidden>/, 'no suggestions link in the footer');
+assert.match(page, /id="capabilities-close"[^>]*hidden>/, 'capabilities has no close button');
+assert.match(page, /id="close-devices"[^>]*hidden>/, 'devices has no close button');
+assert.match(page, /<div class="devices-controls" hidden>.*id="kid-mode".*id="guest-mode".*id="quarantine-mode".*class="devices-hint".*<\/div><ul id="device-list">/, 'devices sheet shows just the devices');
 assert.match(styles, /footer button span\{margin-left:0\}/, 'no stray space in "rules (7)"');
 assert.doesNotMatch(page, /class="panels"|id="rules" class="rules"/, 'no rules panel on the main screen');
 assert.match(page, /id="tracker-map-open"[^>]*hidden/, 'who sees what is hidden for now');
@@ -356,6 +360,7 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   assert.equal(get('character').dataset.role, 'regular', 'exiting Home Mode removes the roof');
   assert.equal(get('home-mode').attrs['aria-label'], 'home mode: off');
   assert.equal(get('home-note').textContent, '', 'home mode off says nothing; the hollow house shows it');
+  assert.equal(get('home-mode').hidden, true, 'the house flag hides when home mode is off');
   // Phone presence (#20): shown as on only once DNS has loaded it.
   socket.onmessage({data:JSON.stringify({type:'mode', home_mode:true, home_manual:false, home_applied:false, reason:'presence'})});
   assert.equal(get('character').dataset.role, 'home', 'backend-acknowledged Home Mode adds the roof while DNS catches up');
@@ -363,6 +368,7 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   socket.onmessage({data:JSON.stringify({type:'mode', home_mode:true, home_manual:false, home_applied:true, reason:'presence'})});
   assert.equal(get('character').dataset.role, 'home');
   assert.equal(get('home-note').textContent, 'home mode: blocking camera uploads · a household phone is home');
+  assert.equal(get('home-mode').hidden, false, 'the house flag shows while home mode is on');
   socket.onmessage({data:JSON.stringify({type:'mode', home_mode:false, home_manual:false, home_applied:true, reason:'presence'})});
   assert.equal(get('home-note').textContent, '');
   assert.equal(get('requests').textContent, '0', 'mode events are not DNS requests (the snapshot reset the count)');

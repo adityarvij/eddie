@@ -255,6 +255,8 @@ function renderModes() {
     button.setAttribute('aria-busy', String(pending !== undefined)); button.setAttribute('aria-pressed', String(on === true));
     // Home mode is the house icon beside the heading, so its state is in the label, not the text.
     if (key === 'home_mode') {
+      // A flag, not a switch: the house shows only while home mode is on (or the Pinocchio nose while spoof rules exist).
+      button.hidden = !(on === true || pending === true || modes.spoofing > 0);
       const label = modes.spoofing ? `${text} · spoofing ${modes.spoofing} rule${modes.spoofing === 1 ? '' : 's'}` : text;
       button.setAttribute('aria-label', label); button.setAttribute('title', label); button.setAttribute('data-spoofing', String(modes.spoofing > 0));
     } else button.textContent = text;
