@@ -192,7 +192,7 @@ Not yet checked on hardware: a real Fire Stick or TV under lockdown, including w
 
 ## Kid mode (#119)
 
-Mark a device as a child's in the dashboard's device list (the `devices` link, bottom right: each row's `adult` / `child` button). Then “turn on kid mode”, “kid mode on” or “lock down the kids' devices” locks down every child's device not already locked down, and “turn off kid mode” or “unlock the kids' devices” unlocks them. Both run at once, with no yes/no, like home and guest mode; the dashboard's `kid mode` switch does the same. A guest gets the household refusal.
+Mark a device as a child's in the dashboard's device list (the `devices` link, bottom right: each row's `adult` / `child` button). Then “turn on kid mode”, “kid mode on” or “lock down the kids' devices” (Whisper's mishearings “kit”, “hit” and “hidden mode” count too) locks down every child's device not already locked down, and “turn off kid mode” or “unlock the kids' devices” unlocks them. Both run at once, with no yes/no, like home and guest mode; the dashboard's `kid mode` switch does the same. A guest gets the household refusal.
 
 The kid-safe keep list is `voice/kid_safe.json` (seeded with YouTube Kids and PBS Kids, both defined in `voice/services.json` with `"kids": true`); edit it to change what kid mode allows, then restart the worker. DNS can't tell the YouTube Kids app from YouTube: YouTube Kids keeps `youtubei.googleapis.com` and the video CDNs, which the YouTube app also uses, but not `youtube.com`.
 

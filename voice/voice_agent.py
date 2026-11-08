@@ -657,10 +657,12 @@ def unlock_device(device, name, keep, by='voice'):
 
 # Kid mode (#119): every device marked as a child's on the dashboard, locked down to KID_KEEP
 # ("turn on kid mode", "lock down the kids' devices") or unlocked ("turn off kid mode").
+# On the Pi, Whisper has heard "kid mode" as "kit", "hit" and "hidden mode"; only before "mode" are they kid.
+_KID = r'(?:kids?|kits?|hit|hidden)'
 KID_MODE = re.compile(
     r'(?:(?:ok|okay|eddie|please) )*(?:(?:can|could|would|will) you (?:please )?)?(?:go ahead and )?'
-    r'(?:(?:turn|switch) (?P<on>on|off) (?:the )?kids? mode|(?:turn|switch) (?:the )?kids? mode (?P<on2>on|off)'
-    r'|(?P<verb>enable|disable|start|stop) (?:the )?kids? mode|kids? mode (?P<on3>on|off)'
+    rf'(?:(?:turn|switch) (?P<on>on|off) (?:the )?{_KID} mode|(?:turn|switch) (?:the )?{_KID} mode (?P<on2>on|off)'
+    rf'|(?P<verb>enable|disable|start|stop) (?:the )?{_KID} mode|{_KID} mode (?P<on3>on|off)'
     r'|(?P<lock>lock ?down|unlock) (?:the |my |our |all (?:of )?(?:the |my |our )?)?(?:kids?|childrens?|childs) devices)'
     r'(?: (?:please|for me|now))*')
 KID_UNREACHABLE = UNREACHABLE

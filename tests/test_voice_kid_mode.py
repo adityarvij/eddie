@@ -19,6 +19,10 @@ class Phrasing(unittest.TestCase):
             'kid mode on': True, "Lock down the kids' devices": True, 'lock down all the children’s devices': True,
             'turn off kid mode': False, 'switch kid mode off': False, 'disable kids mode': False,
             "unlock the kids' devices": False,
+            # Whisper's mishearings on the Pi
+            'Turn off hidden mode.': False, 'turn on hit mode': True, 'turn off kit mode': False, 'kits mode on': True,
+            'hidden mode off': False, 'enable hit mode': True, 'turn off the hidden mode': False,
+            'hit the mode': None, 'turn off hidden': None, 'lock down the hidden devices': None,
             "lock down the kids' tablet": None, "don't turn on kid mode": None, 'what is kid mode': None,
             'turn on kid mode and block netflix.com': None,
         }

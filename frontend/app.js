@@ -366,14 +366,15 @@ function renderGuest() {
   }) : []));
   renderGuestCapabilities();
 }
-// Guest mode's own pane (#162/#165): the person flag next to home (filled while on; tapping it is the guest switch), and capabilities swapped for what guests may ask.
+// Guest mode's own pane (#162/#165): the person flag next to home, solid and shown only while on (tapping it turns guest mode off;
+// it's turned on by voice), and capabilities swapped for what guests may ask.
 // Topic names only, never the guide's answers. It opens by itself when a guest session starts.
 let guestShown = false;
 function guestTopics() { return guest?.active && guest.allowed.includes('house_guide') ? guest.topics || [] : []; }
 function renderGuestCapabilities() {
   const active = guest?.active === true, topics = guestTopics(), item = text => { const li = document.createElement('li'); li.textContent = text; return li; };
-  const flag = $('guest-flag'), label = `guest mode: ${!guest ? 'unavailable' : active ? 'on' : 'off'}`;
-  flag.disabled = !guest; flag.setAttribute('aria-pressed', String(active)); flag.setAttribute('aria-label', label); flag.title = label;
+  const flag = $('guest-flag'), label = 'guest mode on · tap to turn it off';
+  flag.hidden = !active; flag.setAttribute('aria-pressed', String(active)); flag.setAttribute('aria-label', label); flag.title = label;
   $('capabilities-title').textContent = active ? 'guest mode · ask eddie' : 'what to ask eddie';
   $('capabilities-owner').hidden = active; $('guest-capabilities').hidden = !active;
   $('guest-intro').textContent = topics.length ? 'Say “Hey Eddie”, then ask about:' : guest?.allowed.includes('timers') ? 'Say “Hey Eddie”, then:' : 'Your host hasn’t turned anything on for guests yet.';
