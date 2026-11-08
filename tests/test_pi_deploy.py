@@ -74,6 +74,12 @@ class InstallPi(unittest.TestCase):
         self.assertEqual(voice, f'ExecStart={ROOT}/scripts/run_voice.sh' in text)
         self.assertEqual(not voice, 'frontend/serve.py' in text)
 
+    def test_dashboard_listens_from_boot(self):
+        install(self.dest)
+        text = (Path(self.dest) / 'eddie-dashboard.service').read_text()
+        # Before EnvironmentFile, so EDDIE_MIC_AUTOSTART=0 in eddie.env turns it off.
+        self.assertLess(text.index('Environment=EDDIE_MIC_AUTOSTART=1'), text.index('EnvironmentFile='))
+
     def test_token_file_is_owner_only_and_kept_on_rerun(self):
         self.assertEqual(0, install(self.dest).returncode)
         mode = stat.S_IMODE((Path(self.dest) / 'eddie.env').stat().st_mode)
