@@ -11,7 +11,7 @@ import httpx2 as httpx
 from dnslib import DNSRecord
 
 from eddie import api, decision, devices, dns_server, quarantine, store
-from tests.test_dns_server import REAL_IP, Client, FakeUpstream
+from tests.test_dns_server import REAL_IP, Client, FakeUpstream, watch
 
 FIRE_STICK = 'f0:4f:7c:11:22:33'  # Amazon OUI: the household, there before quarantine
 NEWCOMER = 'f0:4f:7c:aa:bb:cc'  # Amazon OUI, joins later
@@ -167,8 +167,8 @@ class QuarantineDNSTests(unittest.IsolatedAsyncioTestCase):
         server = await dns_server.serve('127.0.0.1', 0, [up.get_extra_info('sockname')], 0.3, device_map=self.map)
         client, self.replies = await loop.create_datagram_endpoint(Client, remote_addr=server.get_extra_info('sockname'))
         watcher = dns_server.StoreWatcher(self.path, decision.engine)
-        task = asyncio.create_task(dns_server.watch_store(watcher, every=0.01))
-        self.closers[:0] = [task.cancel, watcher.conn.close, client.close, server.close, up.close]
+        stop_watching = watch(watcher, 0.01)
+        self.closers[:0] = [stop_watching, client.close, server.close, up.close]
         self.client = client
 
     async def ask(self, name):

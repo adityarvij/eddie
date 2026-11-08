@@ -9,7 +9,7 @@ import httpx2 as httpx
 from dnslib import QTYPE, RCODE, RR, A, DNSRecord
 
 from eddie import api, decision, dns_server, offline
-from tests.test_dns_server import BLOCKED, REAL_IP, Client, FakeUpstream
+from tests.test_dns_server import BLOCKED, REAL_IP, Client, FakeUpstream, watch
 
 
 def upstream_answer(name, ttl=300):
@@ -118,8 +118,8 @@ class OfflineAPITests(unittest.IsolatedAsyncioTestCase):
         server = await dns_server.serve('127.0.0.1', 0, [up.get_extra_info('sockname')], 0.3)
         client, proto = await loop.create_datagram_endpoint(Client, remote_addr=server.get_extra_info('sockname'))
         watcher = dns_server.StoreWatcher(self.path, decision.engine)
-        task = asyncio.create_task(dns_server.watch_store(watcher, every=0.02))
-        self.closers += [up.close, server.close, client.close, task.cancel, watcher.conn.close]
+        stop_watching = watch(watcher, 0.02)
+        self.closers += [up.close, server.close, client.close, stop_watching]
         self.dns = client, proto
         await asyncio.sleep(0.05)  # first load
 
