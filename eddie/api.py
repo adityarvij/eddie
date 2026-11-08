@@ -8,6 +8,9 @@ encrypted DNS resolver's name also pushes a bypass_suspected event (bypass.py).
 waits for the DNS server to load them before answering; see docs/EVENTS.md.
 /devices lists the devices the DNS server recorded there, with lookup counts
 from its query log, and stores user labels (devices.py).
+/devices/new takes the DNS server's new_device alerts and pushes them to the
+feed; /quarantine and /devices/{key}/approve|deny change quarantine (#98,
+quarantine.py) and wait for DNS to load it like rules.
 /offline-mode turns the DNS server's upstream forwarding off or on through
 eddie.db and waits for DNS to load it the same way (offline.py).
 POST /mode {"away": ...} does the same for away mode (away.py), after
@@ -35,8 +38,8 @@ from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocket
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 
-from . import away, beacons, bypass, demo_week, devices, inferences, insights, labels, occupancy, offline, rules, store
-from .events import Action, AIVerdictEvent, ModeUpdate, OfflineUpdate, QueryEvent
+from . import away, beacons, bypass, demo_week, devices, inferences, insights, labels, occupancy, offline, quarantine, rules, store
+from .events import Action, AIVerdictEvent, ModeUpdate, NewDeviceEvent, OfflineUpdate, QuarantineUpdate, QueryEvent
 
 # In memory for now; SQLite (store.py) replaces this once the DNS side lands.
 recent: deque[dict] = deque(maxlen=20000)
@@ -255,7 +258,7 @@ def report_events(hours: int) -> tuple[list[dict], str]:
 
 @app.get("/mode")
 async def get_mode():  # async: the shared connection stays on the event loop thread
-    return {"home_mode": state["home_mode"], **offline_state(), **away_state()}
+    return {"home_mode": state["home_mode"], **offline_state(), **away_state(), **quarantine_state()}
 
 
 @app.post("/mode")
@@ -305,6 +308,24 @@ def offline_state() -> dict:
         return {"offline": False, "offline_applied": False}
     conn = rules_db()
     return {"offline": offline.wanted(conn), "offline_applied": offline.loaded(conn) >= offline.revision(conn)}
+
+
+def quarantine_state() -> dict:
+    """quarantine: the state last asked for. quarantine_applied: whether DNS has loaded every quarantine change."""
+    if os.environ.get("EDDIE_DB", "eddie.db") == "off":
+        return {"quarantine": False, "quarantine_applied": False}
+    conn = rules_db()
+    return {"quarantine": quarantine.wanted(conn),
+            "quarantine_applied": quarantine.loaded(conn) >= quarantine.revision(conn)}
+
+
+@app.post("/quarantine")
+async def set_quarantine(body: QuarantineUpdate):
+    conn = rules_db()
+    rev = quarantine.write(conn, body.quarantine)
+    applied = await wait_applied(conn, rev, quarantine.loaded)
+    await broadcast({"type": "quarantine", "quarantine": body.quarantine, "applied": applied})
+    return {"quarantine": body.quarantine, "applied": applied}
 
 
 @app.post("/offline-mode")
@@ -383,7 +404,40 @@ class LabelIn(BaseModel):
 @app.get("/devices")
 async def list_devices(hours: int = Query(24, ge=1, le=168)):
     since = int(time.time() * 1000) - hours * 3_600_000
-    return {"hours": hours, "devices": devices.all_devices(rules_db(), since)}
+    return {"hours": hours, "devices": devices.all_devices(rules_db(), since), **quarantine_state()}
+
+
+@app.post("/devices/new")
+async def new_devices(body: NewDeviceEvent | list[NewDeviceEvent]):
+    # Sent by the DNS server once the MAC is stored as pending; says nothing about enforcement.
+    alerts = body if isinstance(body, list) else [body]
+    for alert in alerts:
+        await broadcast(alert.model_dump())
+    return {"ok": True, "count": len(alerts)}
+
+
+async def decide_device(key: str, status: str) -> dict:
+    key = key.strip().lower()
+    if devices.normalize_mac(key) != key:
+        raise HTTPException(422, "Expected a MAC address: a device known only by its IP can't be approved or denied.")
+    conn = rules_db()
+    row, rev = quarantine.decide(conn, key, status)
+    if row is None:
+        raise HTTPException(404, f"Eddie hasn't seen a device {key}.")
+    applied = await wait_applied(conn, rev, quarantine.loaded)
+    out = {"mac": key, "name": devices.name_of(conn, key), "status": row["status"], "applied": applied}
+    await broadcast({"type": "device_status", **out})
+    return out
+
+
+@app.post("/devices/{key}/approve")
+async def approve_device(key: str):
+    return await decide_device(key, quarantine.APPROVED)
+
+
+@app.post("/devices/{key}/deny")
+async def deny_device(key: str):
+    return await decide_device(key, quarantine.DENIED)
 
 
 @app.put("/devices/{key}")

@@ -273,8 +273,11 @@ Writes from anywhere but loopback need `Authorization: Bearer $EDDIE_API_TOKEN`,
 | GET | `/rules` | Every rule, newest first |
 | POST | `/rules` | `{pattern, action, device_mac?, created_by?}` add rule; answers with the stored id and `applied` once DNS has loaded it (see docs/EVENTS.md) |
 | DELETE | `/rules/{id}` | Remove rule; answers with the removed rule and `applied` |
-| GET | `/mode` | `{home_mode, offline, offline_applied, away, away_until, away_applied, away_devices, away_exempt}` |
+| GET | `/mode` | `{home_mode, offline, offline_applied, away, away_until, away_applied, away_devices, away_exempt, quarantine, quarantine_applied}` |
 | POST | `/mode` | `{home_mode?, away?, away_until?}`. Away mode ranks devices by occupancy leak, stores the covered and exempt ones, and answers with `away_applied` once DNS has loaded it (see docs/EVENTS.md) |
+| POST | `/quarantine` | `{quarantine: bool}` holds new devices to the essentials until approved; answers with `applied` once DNS has loaded it |
+| POST | `/devices/{mac}/approve`, `/devices/{mac}/deny` | Decide about a new device; answers with `status` and `applied` (see docs/EVENTS.md) |
+| POST | `/devices/new` | New device alerts from the DNS server, pushed to `/ws/events` as `new_device` |
 | POST | `/offline-mode` | `{offline: bool}` stops (or restarts) forwarding to upstream; allowed lookups get cached answers or SERVFAIL. Answers with `applied` once DNS has loaded it (see docs/EVENTS.md) |
 | WS | `/ws/events` | Pushes events typed `query`, `ai_verdict`, `voice_state` or `agent_reply` |
 
@@ -410,7 +413,7 @@ The most dangerous thing smart devices leak isn't what you watch. It's when you'
 - **Simulated cloud camera (demo stand-in for Ring):** no Ring camera needed. Home mode is a rule that blocks a seeded list of camera upload domains (for Ring, a broad rule like `*.ring.com`, since exact upload domains aren't confirmed; the real product learns each camera's domains by watching its traffic). `fake_camera.py` runs on Will's laptop with its DNS pointed at Eddie: it grabs a webcam frame every few seconds and, before each "upload", does a fresh DNS lookup for a camera domain through Eddie. The dashboard shows "Living room cam: uploading" with the live frame; when Adi's phone is on the Wi-Fi, the lookup is blocked and the screen flips to "Upload blocked: home mode"; phone off the Wi-Fi → uploads resume. Call it a simulated camera in the pitch.
 - **Streaming caveat:** blocking DNS doesn't cut a stream that's already running, because the device already knows the server's address. The fake camera re-looks up before every upload, so the demo is reliable. Roadmap: as the router, the real Eddie can cut open connections immediately with a firewall rule, not just block new lookups. If testing in a browser instead, turn off the browser's secure DNS (Chrome: Settings → Privacy → Use secure DNS) or it skips Eddie.
 - **Camera account hardening coach:** walks you through two-factor login, end-to-end encryption where the camera offers it, and removing old shared users and logged-in devices. Eddie can't stop someone logging into your camera account from elsewhere, so this covers that gap.
-- **New device alert:** "A device I've never seen joined your network at 2:14 AM." Unknown devices are quarantined (no internet) until you approve them.
+- **New device alert (#98, implemented):** "A device I've never seen joined your network at 2:14 AM." With quarantine on (opt-in), a new device gets only Eddie's essentials until you approve it on the dashboard or say "allow the new device". DNS-only for now: a device with hard-coded IPs still gets out until router mode (#22/#23).
 - **Presence masking (stretch):** in away mode, keep presence-revealing devices at a steady, normal-looking traffic level so the pattern looks occupied.
 
 ### Home mode demo with a real stream (Option A, planned)

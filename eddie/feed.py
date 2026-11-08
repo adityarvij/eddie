@@ -10,6 +10,10 @@ the query log): network plumbing (decision.is_plumbing: reverse lookups,
 service discovery), and repeats of the same device, domain and decision
 within REPEAT_MS, such as a browser asking for A and AAAA at once.
 
+New device alerts (#98) go to POST /devices/new, sent by send_new_devices
+from the device watcher's thread: rare, so not queued, and dropped if the API
+doesn't answer (the device stays pending in eddie.db for the dashboard).
+
 Events use the query format in docs/EVENTS.md. Until devices.py (#14) maps an
 IP to a MAC and label, device_mac is "ip:<client IP>" and device is the IP.
 
@@ -105,8 +109,12 @@ class FeedPublisher:
             if events:
                 self._send(events)
 
-    def _send(self, events: list[dict]) -> None:
-        req = urllib.request.Request(self.url + "/ingest", data=json.dumps(events).encode(),
+    def send_new_devices(self, alerts: list[dict]) -> bool:
+        """POST new_device alerts to the API. Blocking (one timeout): call from a worker thread."""
+        return self._send(alerts, "/devices/new")
+
+    def _send(self, events: list[dict], path: str = "/ingest") -> bool:
+        req = urllib.request.Request(self.url + path, data=json.dumps(events).encode(),
                                      headers={"Content-Type": "application/json", **auth_headers()})
         try:
             with _OPENER.open(req, timeout=self.timeout) as response:
@@ -116,10 +124,11 @@ class FeedPublisher:
                 log.warning("live feed unreachable at %s (%s)", self.url, type(exc).__name__)
             self.failing = True
             self.dropped += len(events)
-            return
+            return False
         if self.failing:
             log.info("live feed reachable again at %s", self.url)
             self.failing = False
+        return True
 
 
 def feed_from_env() -> FeedPublisher | None:

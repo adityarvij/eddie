@@ -67,10 +67,19 @@ async function loadRules() {
   catch { $('rules-count').textContent = 'unavailable'; $('rules-list').replaceChildren(); modes.spoofing = 0; renderModes(); }
 }
 // Device panel (#35): each device's name, distinct domains blocked and the latest of them, from eddie.db.
+// New (pending) and denied devices (#98) come first, with approve / deny buttons that ask before acting.
+const STATUS_TEXT = { pending: 'new', denied: 'denied' };
 function renderDevices(list) {
   $('device-count').textContent = list.length;
+  list = [...list.filter(d => STATUS_TEXT[d.status]), ...list.filter(d => !STATUS_TEXT[d.status])];
   const items = list.slice(0, 5).map(d => {
-    const li = document.createElement('li'); li.textContent = `${d.name} · ${d.trackers} tracker${d.trackers === 1 ? '' : 's'} blocked`;
+    const li = document.createElement('li'); li.textContent = `${STATUS_TEXT[d.status] ? `[${STATUS_TEXT[d.status]}] ` : ''}${d.name} · ${d.trackers} tracker${d.trackers === 1 ? '' : 's'} blocked`;
+    if (STATUS_TEXT[d.status]) {
+      li.className = d.status;
+      for (const decision of d.status === 'pending' ? ['approve', 'deny'] : ['approve']) {
+        const button = document.createElement('button'); button.textContent = decision; button.onclick = () => decideDevice(d, decision); li.append(button);
+      }
+    }
     const recent = (d.recent_blocks || []).map(b => b.domain);
     if (recent.length) { const small = document.createElement('small'); small.textContent = `recent: ${recent.join(', ')}`; li.append(small); }
     return li;
@@ -78,18 +87,30 @@ function renderDevices(list) {
   if (list.length > 5) { const more = document.createElement('li'); more.textContent = `+${list.length - 5} more`; items.push(more); }
   $('device-list').replaceChildren(...items);
 }
+// The answer shown is the API's: stored, and whether DNS has loaded it.
+async function decideDevice(d, decision) {
+  const ask = decision === 'approve' ? `Approve ${d.name}? It gets full internet through Eddie.`
+    : `Deny ${d.name}? Eddie blocks everything it looks up except the essentials, even with quarantine off.`;
+  if (!confirm(ask)) return;
+  try {
+    const r = await control('/api/devices/decide', {mac: d.mac, decision}); const data = await r.json(); if (!r.ok) throw Error(data.message || data.detail);
+    notice(`${data.name} ${data.status}${data.applied ? '' : ', not yet loaded by DNS'}.`);
+  } catch (e) { notice(`Device change not confirmed: ${e.message || 'the traffic API did not answer.'}`); }
+  loadDevices();
+}
 async function loadDevices() {
-  try { const r = await fetch('/api/devices'); if (!r.ok) throw Error(); renderDevices((await r.json()).devices || []); }
+  try { const r = await fetch('/api/devices'); if (!r.ok) throw Error(); const data = await r.json(); renderDevices(data.devices || []); applyModes(data); }
   catch { $('device-count').textContent = 'unavailable'; $('device-list').replaceChildren(); }
 }
 // Mode toggles show only state the backend acknowledged: a click shows "turning on…" until the API
 // answers, and offline mode says when DNS hasn't loaded the change. Home mode is a backend flag only.
 // Away mode (voice or the API) is shown only once DNS has loaded it, and drops at its end time.
 // spoofing counts the stored spoof rules (#99); the house icon turns into Pinocchio while there are any.
-const modes = {home_mode: null, offline: null, offline_applied: false, spoofing: 0, away: null}, modePending = {};
+const modes = {home_mode: null, offline: null, offline_applied: false, spoofing: 0, away: null, quarantine: null, quarantine_applied: false}, modePending = {};
 function applyModes(state) {
   if (typeof state.home_mode === 'boolean') modes.home_mode = state.home_mode;
   if (typeof state.offline === 'boolean') { modes.offline = state.offline; modes.offline_applied = state.offline_applied === true; }
+  if (typeof state.quarantine === 'boolean') { modes.quarantine = state.quarantine; modes.quarantine_applied = state.quarantine_applied === true; }
   if (typeof state.away === 'boolean') modes.away = {on: state.away, until: state.away_until || null, applied: state.away_applied === true,
     devices: state.away_devices || [], exempt: state.away_exempt || []};
   renderModes();
@@ -106,7 +127,7 @@ function awayNote(away = modes.away) {
   return [`away mode: on${until} · ${cut}${kept}`, false];
 }
 function renderModes() {
-  for (const [id, label, key] of [['home-mode', 'home mode', 'home_mode'], ['offline-mode', 'offline mode', 'offline']]) {
+  for (const [id, label, key] of [['home-mode', 'home mode', 'home_mode'], ['offline-mode', 'offline mode', 'offline'], ['quarantine-mode', 'quarantine new devices', 'quarantine']]) {
     const button = $(id), pending = modePending[key], on = modes[key];
     const text = pending !== undefined ? `${label}: turning ${pending ? 'on' : 'off'}…` : `${label}: ${on === null ? 'unavailable' : on ? 'on' : 'off'}`;
     button.disabled = pending !== undefined || on === null;
@@ -120,6 +141,10 @@ function renderModes() {
   renderMic();
   const waiting = modes.offline !== null && modePending.offline === undefined && !modes.offline_applied;
   $('offline-note').textContent = waiting ? `offline mode ${modes.offline ? 'on' : 'off'} not yet applied by DNS` : '';
+  const qWaiting = modes.quarantine !== null && modePending.quarantine === undefined && !modes.quarantine_applied;
+  $('quarantine-note').textContent = qWaiting ? 'quarantine change not yet applied by DNS'
+    : 'DNS-only: a device using hard-coded IPs or its own DNS still gets out; router mode (#22/#23) stops that';
+  $('quarantine-note').classList.toggle('alert', qWaiting);
   $('home-note').textContent = modes.home_mode ? 'home mode is a backend flag; DNS does not enforce it yet' : '';
   const [away, alert] = awayNote();
   $('away-note').textContent = away; $('away-note').classList.toggle('alert', alert);
@@ -135,11 +160,11 @@ async function setMode(key, on) {
   modePending[key] = on; renderModes();
   const abort = new AbortController(), timer = setTimeout(() => abort.abort(), 10000);
   try {
-    const r = await control(key === 'home_mode' ? '/api/mode' : '/api/offline-mode', {[key]: on}, abort.signal);
+    const r = await control({home_mode: '/api/mode', offline: '/api/offline-mode', quarantine: '/api/quarantine'}[key], {[key]: on}, abort.signal);
     const data = await r.json(); if (!r.ok) throw Error(data.message);
-    applyModes({...data, offline_applied: data.applied});
+    applyModes({...data, [`${key}_applied`]: data.applied});
   } catch (e) {
-    notice(`${key === 'home_mode' ? 'Home' : 'Offline'} mode change not confirmed: ${e.name === 'AbortError' || !e.message ? 'the traffic API did not answer.' : e.message}`);
+    notice(`${{home_mode: 'Home mode', offline: 'Offline mode', quarantine: 'Quarantine'}[key]} change not confirmed: ${e.name === 'AbortError' || !e.message ? 'the traffic API did not answer.' : e.message}`);
     loadModes();
   } finally { clearTimeout(timer); delete modePending[key]; renderModes(); }
 }
@@ -149,6 +174,15 @@ function consumeEvent(event) {
   if (event.type === 'ai_verdict') return feedNote('ai', `${event.domain}${event.reason ? ' — ' + event.reason : ''}`, event, AI_RESULTS[event.label] || [String(event.label), 'flag']);
   if (event.type === 'mode') return applyModes({home_mode: event.home_mode});
   if (event.type === 'offline_mode') return applyModes({offline: event.offline, offline_applied: event.applied});
+  if (event.type === 'quarantine') return applyModes({quarantine: event.quarantine, quarantine_applied: event.applied});
+  if (event.type === 'new_device') {
+    // Stored as new; "quarantine on" is the setting, not proof DNS is blocking it yet.
+    const seen = timeOf(event).textContent, extra = [event.vendor, event.hostname].filter(Boolean).join(', ');
+    const text = `A device I've never seen joined at ${seen}: ${event.device}${extra && extra !== event.device ? ` (${extra})` : ''}. ${event.quarantine ? 'Quarantine is on until you approve it.' : 'Approve or deny it in the device panel.'}`;
+    feedNote('rule', text, event); notice(text); loadDevices();
+    return;
+  }
+  if (event.type === 'device_status') { loadDevices(); return; }
   if (event.type === 'away_mode') return applyModes(event);
   // A suspicion, never proof: the reason says what was looked up and never that a device is covered.
   if (event.type === 'bypass_suspected') { feedNote('bypass', event.reason, event); notice(event.reason); return; }
@@ -232,6 +266,7 @@ const trafficUrl = new URLSearchParams(location.search).get('traffic') || `ws://
 function connectTraffic() { let ws; try { ws=new WebSocket(trafficUrl); } catch { return; } ws.onopen=()=>{ $('connection').firstChild.textContent='Connected'; $('source-label').textContent='LIVE TRAFFIC'; }; ws.onmessage=e=>{ try { const message=JSON.parse(e.data); if(message.type==='snapshot'){ total=0; blocked=0; allowedCount=0; deviceSet.clear(); $('feed').replaceChildren(); } let events=Array.isArray(message)?message:Array.isArray(message.events)?message.events:[message]; if(message.type==='snapshot'){ events=[...events, ...(message.ai_verdicts || []), ...(message.bypass || [])].sort((a,b)=>(dateOf(a).getTime()||0)-(dateOf(b).getTime()||0)); } events.forEach(consumeEvent); if(message.type==='snapshot'){ loadRules(); refreshPanels(); } const totals=message.totals || (message.type==='totals'?message:null); if(totals){ total=totals.seen; blocked=totals.blocked; $('requests').textContent=total.toLocaleString(); $('blocked').textContent=blocked.toLocaleString(); updateCounts(); } } catch {} }; ws.onclose=()=>{ $('connection').firstChild.textContent='Waiting'; $('source-label').textContent='WAITING FOR TRAFFIC'; setTimeout(connectTraffic,2500); }; ws.onerror=()=>ws.close(); }
 $('home-mode').onclick = () => setMode('home_mode', !modes.home_mode);
 $('offline-mode').onclick = () => setMode('offline', !modes.offline);
+$('quarantine-mode').onclick = () => setMode('quarantine', !modes.quarantine);
 connectTraffic();
 loadRules();
 refreshPanels();
