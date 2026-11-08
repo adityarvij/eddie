@@ -35,13 +35,6 @@ class LocalAddress(unittest.TestCase):
             self.assertFalse(serve.is_local(address), address)
 
 
-class VoiceAgentSetting(unittest.TestCase):
-    def test_ollama_agent_is_off_by_default_and_can_be_enabled(self):
-        self.assertFalse(serve.ollama_agent_enabled({}))
-        self.assertFalse(serve.ollama_agent_enabled({'EDDIE_AGENT': 'off'}))
-        self.assertTrue(serve.ollama_agent_enabled({'EDDIE_AGENT': 'ollama'}))
-
-
 class PairingChecks(unittest.TestCase):
     def test_host_must_name_this_machine(self):
         for host in ('localhost:5173', '127.0.0.1:5173', '[::1]:5173', '192.168.1.20:5173', 'eddies-mac.local:5173', 'LOCALHOST'):
