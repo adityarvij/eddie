@@ -9,6 +9,10 @@ First match wins:
 2. Allowlist: essentials, so a rule or list can't brick a device.
 3. Blocklist, then, only while block_doh is on (EDDIE_BLOCK_DOH=on), the
    encrypted DNS resolver names in bypass.RESOLVERS (#97).
+   ACR (#104, acr.py): a seeded content recognition domain this device looks
+   up on a regular timer (beacons.py) is blocked, source heuristic, and stays
+   blocked for that device until restart. Until it's seen beaconing it falls
+   through to the steps below.
 4. Keyword heuristic on the domain's labels.
    Away mode (#109, away.py): for a device it covers, until its end time, a
    domain labelled telemetry, ads, analytics or tracking (labels.py) is
@@ -27,7 +31,7 @@ First match wins:
 
 This runs on the DNS hot path: no model calls, no network, no disk. Everything
 it reads is in memory; the only state it writes is the bounded in-memory
-lookup timing for unknown domains (beacons.Beacons). Writers (rules API #12, list loader #8, classifier #27, quarantine #98)
+lookup timing for unknown and ACR domains (beacons.Beacons, acr_caught). Writers (rules API #12, list loader #8, classifier #27, quarantine #98)
 replace whole snapshots with set_rules / set_lists / set_verdicts / set_quarantined instead of
 mutating them, so a lookup never sees a half-updated table.
 
@@ -43,9 +47,10 @@ Matching:
 import re
 import sqlite3
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
 
-from . import quarantine
+from . import acr, quarantine
 from .beacons import Beacons
 from .bypass import RESOLVERS
 from .events import Action, Source
@@ -57,6 +62,8 @@ KEYWORDS = ("metrics", "telemetry", "analytics", "adsystem", "tracking", "beacon
 WHOLE_WORDS = {"ads": "ads", "log": "log", "logs": "log"}
 UNKNOWN = "unknown, waiting for classifier"
 BEACON = "looked up every {} s, likely telemetry; waiting for classifier"
+ACR_BLOCK = "ACR ({}): looked up every {} s, likely sending what's on screen"
+MAX_ACR = 10_000  # device and ACR domain pairs kept blocked; least recently seen are dropped
 QUARANTINE = "new device, quarantined until approved"
 DENIED = "device denied"
 
@@ -180,6 +187,7 @@ class Engine:
         self.away = Away()
         self.quarantined: dict[str, str] = {}  # device MAC -> reason its lookups are blocked
         self.beacons = Beacons()
+        self.acr_caught: OrderedDict[tuple[str, str], int] = OrderedDict()  # (device, domain) -> interval ms
         self.block_doh = False  # block the resolver names in bypass.RESOLVERS
 
     def set_rules(self, rules) -> None:
@@ -213,6 +221,17 @@ class Engine:
         self.set_quarantined({mac: QUARANTINE if status[mac] == quarantine.PENDING else DENIED
                               for mac in quarantine.blocked(conn)})
 
+    def acr_timer(self, device: str, domain: str, now_ms: int) -> int | None:
+        """The ACR domain's beacon interval for this device, kept once seen so a block can't undo it."""
+        key = (device, domain)
+        every = self.beacons.observe(device, domain, now_ms) or self.acr_caught.get(key)
+        if every:
+            self.acr_caught[key] = every
+            self.acr_caught.move_to_end(key)
+            if len(self.acr_caught) > MAX_ACR:
+                self.acr_caught.popitem(last=False)
+        return every
+
     def evaluate(self, domain: str, device: str, ip: str | None = None, now_ms: int | None = None) -> Decision:
         domain = normalize(domain)
         if not domain:
@@ -235,9 +254,11 @@ class Engine:
             return Decision("block", "blocklist", entry)
         if self.block_doh and (entry := matches(domain, RESOLVERS)):
             return Decision("block", "blocklist", f"encrypted DNS resolver {entry}")
+        now_ms = int(time.time() * 1000) if now_ms is None else now_ms
+        if (found := acr.endpoint(domain)) and (every := self.acr_timer(device, domain, now_ms)):
+            return Decision("block", "heuristic", ACR_BLOCK.format(found[1], round(every / 1000)))
         if kw := keyword(domain):
             return Decision("block", "heuristic", f'keyword "{kw}"')
-        now_ms = int(time.time() * 1000) if now_ms is None else now_ms
         away = self.away.covers(device, ip, now_ms)
         if away and (entry := matches(domain, TELEMETRY)):
             return Decision("block", "away_mode", f"away mode: {entry} telemetry")

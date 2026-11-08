@@ -2,7 +2,8 @@
 
 The fake generator (scripts/fake_traffic.py) and the DNS server (eddie/feed.py)
 both POST here; Codex's frontend listens on the WebSocket. A lookup of an
-encrypted DNS resolver's name also pushes a bypass_suspected event (bypass.py).
+encrypted DNS resolver's name also pushes a bypass_suspected event (bypass.py),
+and a blocked, beaconing lookup of a smart-TV ACR domain an acr_detected event (acr.py).
 
 /rules writes user rules to eddie.db (EDDIE_DB, the DNS server's database) and
 waits for the DNS server to load them before answering; see docs/EVENTS.md.
@@ -46,7 +47,7 @@ from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocket
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 
-from . import away, baselines, beacons, bypass, decision, demo_week, devices, inferences, insights, labels, occupancy, offline, quarantine, questions, rollback, rules, store
+from . import acr, away, baselines, beacons, bypass, decision, demo_week, devices, inferences, insights, labels, occupancy, offline, quarantine, questions, rollback, rules, store
 from .events import Action, AIVerdictEvent, ModeUpdate, NewDeviceEvent, OfflineUpdate, QuarantineUpdate, QueryEvent
 
 # In memory for now; SQLite (store.py) replaces this once the DNS side lands.
@@ -61,6 +62,8 @@ asking = questions.Questions()  # ask before blocking (#79)
 timing = {"beacons": beacons.Beacons(), "idle": beacons.Idle()}  # beacon_s and idle on each event (#24)
 suspicions = bypass.Suspicions()  # bypass_suspected events (#97)
 bypass_recent: deque[dict] = deque(maxlen=50)
+acr_sightings = acr.Sightings()  # acr_detected events (#104)
+acr_recent: deque[dict] = deque(maxlen=20)
 watcher = rollback.Watcher()  # new block rules that may have broken a device (#101)
 rollbacks: set[asyncio.Task] = set()  # rollbacks waiting for DNS, so ingest doesn't
 ids = itertools.count(1)
@@ -164,6 +167,10 @@ async def ingest(body: QueryEvent | list[QueryEvent]):
         if suspect := suspicions.observe(row):
             bypass_recent.append(suspect)
             await broadcast(suspect)
+        lookups = len(timing["beacons"].seen.get((ev.device_mac, ev.domain), ()))
+        if sighting := acr_sightings.observe(row, lookups):
+            acr_recent.append(sighting)
+            await broadcast(sighting)
         for found in watcher.observe(row):
             task = asyncio.create_task(roll_back(found))
             rollbacks.add(task)
@@ -617,6 +624,7 @@ async def ws_events(ws: WebSocket):
         "events": list(feed())[-60:],
         "ai_verdicts": list(ai_verdicts.values()),
         "bypass": list(bypass_recent),
+        "acr": list(acr_recent),
         "questions": asking.pending(),
         "totals": totals,
         "home_mode": state["home_mode"],

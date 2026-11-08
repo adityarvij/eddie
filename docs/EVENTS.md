@@ -67,7 +67,7 @@ Both are still answered and written to `eddie.db`. So `totals.seen`,
 The API adds `id`, `company` and `category` (from `eddie/labels.py`), plus
 `beacon_s` and `idle` (from `eddie/beacons.py`, #24), and pushes:
 
-- `snapshot`: sent once on connect: `{events, ai_verdicts, bypass, totals, home_mode}`
+- `snapshot`: sent once on connect: `{events, ai_verdicts, bypass, acr, questions, totals, home_mode}`
 - `query`: the event above plus `id`, `company`, `category`, `beacon_s`, `idle`
 
 | Added field | Notes |
@@ -85,6 +85,7 @@ Both are computed by the API from the events it has received, keyed by
 - `question` / `question_resolved`: Eddie is asking whether to block a likely tracker, and its answer (see Ask before blocking below)
 - `new_device`, `quarantine`, `device_status`: see New devices and quarantine below
 - `bypass_suspected`: a device looked up an encrypted DNS resolver (see Bypass detection below)
+- `acr_detected`: the DNS server blocked a smart TV's content recognition server it was checking in with on a timer (see ACR blocker below)
 - `rule_rolled_back`: Eddie deleted a new block rule that looked like it broke a device (see Self-correcting blocks below)
 
 ## Bypass detection: `bypass_suspected` (#97)
@@ -111,6 +112,32 @@ pushes, right after the query:
 - Not a lookup: it doesn't change `totals`. The last 50 are kept in memory
   and sent as `bypass` in the `snapshot`; a restart clears them.
 - The dashboard shows it as a `[bypass?]` feed row and a toast with `reason`.
+
+## ACR blocker: `acr_detected` (#104)
+
+For each query event whose `domain` is, or is under, a name in `eddie/acr.py`
+`ACR` (`samsungacr.com`, `alphonso.tv`, `tvinteractive.tv`, `samba.tv`;
+sources listed in the module), with `action == "block"` and a `beacon_s`, the
+API pushes, right after the query:
+
+```json
+{"type": "acr_detected", "ts": 1762531200123, "device_mac": "f0:4f:7c:11:22:33", "device": "Living Room TV",
+ "domain": "acr.samsungacr.com", "acr_name": "samsungacr.com", "provider": "Samsung",
+ "interval_s": 15, "lookups": 6, "source": "heuristic",
+ "reason": "Living Room TV was checking in with Samsung's content recognition (ACR) server acr.samsungacr.com every 15 seconds. ACR is how TVs report what's on screen. Blocked."}
+```
+
+- `interval_s` is the query's `beacon_s`: the mean gap the API measured over
+  the last `lookups` lookups (6 to 12). It is never estimated; with no
+  measured timer there is no event.
+- Only for a lookup the DNS server blocked (`source` says why: `heuristic`
+  for the ACR step in decision.py, or `blocklist`, `rule`, …). A user allow
+  rule or the allowlist means no block and no event.
+- At most once per `device_mac` and `domain` an hour.
+- Not a lookup: it doesn't change `totals`. The last 20 are kept in memory and
+  sent as `acr` in the `snapshot`; a restart clears them.
+- The dashboard shows an `[acr blocked]` feed row, a toast with `reason`, and
+  the "acr blocked" card with the latest one per device and domain.
 
 ## Device baselines: `new_domain`, `baseline_state`, `/baselines`
 

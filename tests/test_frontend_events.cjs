@@ -64,6 +64,21 @@ assert.equal(tag(get('feed').children.at(-1)).className,'tag tag-bypass');
 assert.equal(get('notice').textContent,bypassReason);
 assert.equal(get('requests').textContent,'4','bypass suspicions are not DNS requests');
 
+// ACR (#104): an [acr blocked] row, a toast and the card, all with the API's reason; not a DNS request.
+const acrReason="TV was checking in with Samsung's content recognition (ACR) server log-ingestion.samsungacr.com every 15 seconds. ACR is how TVs report what's on screen. Blocked.";
+assert.equal(get('acr').hidden,true,'no card before any detection');
+socket.onmessage({data:JSON.stringify({type:'acr_detected',ts:Date.now(),device_mac:'f0:4f:7c:11:22:33',device:'TV',domain:'log-ingestion.samsungacr.com',acr_name:'samsungacr.com',provider:'Samsung',interval_s:15,lookups:8,source:'blocklist',reason:acrReason})});
+assert.equal(tag(get('feed').children.at(-1)).parent.textContent,`[acr blocked] ${acrReason}`);
+assert.equal(tag(get('feed').children.at(-1)).className,'tag tag-acr');
+assert.equal(get('notice').textContent,acrReason);
+assert.equal(get('acr').hidden,false);
+assert.equal(get('acr-count').textContent,1);
+assert.equal(get('acr-list').children[0].textContent,acrReason);
+socket.onmessage({data:JSON.stringify({type:'acr_detected',ts:Date.now()+1,device_mac:'f0:4f:7c:11:22:33',device:'TV',domain:'log-ingestion.samsungacr.com',acr_name:'samsungacr.com',provider:'Samsung',interval_s:16,lookups:12,source:'blocklist',reason:acrReason.replace('15','16')})});
+assert.equal(get('acr-count').textContent,1,'one card line per device and domain, the latest');
+assert.match(get('acr-list').children[0].textContent,/every 16 seconds/);
+assert.equal(get('requests').textContent,'4','ACR detections are not DNS requests');
+
 // Rollbacks: a [rolled back?] row and a toast with the API's reason, which says it's a guess.
 const rollbackReason="I removed the block on a.example for TV: it asked for a.example 14 times in a minute after the block, which can mean it stopped working. That's a guess, not proof it broke. Block it again as a pinned rule to keep it.";
 const rolledBack=applied=>socket.onmessage({data:JSON.stringify({type:'rule_rolled_back',ts:Date.now(),rule:{id:9,pattern:'a.example',action:'block',device_mac:'f0:4f:7c:11:22:33',device:'TV',created_by:'voice',pinned:false},device_mac:'f0:4f:7c:11:22:33',device:'TV',sign:'retry_storm',reason:rollbackReason,applied})});
