@@ -70,6 +70,16 @@ DENIED = "device denied"
 _WORD_SPLIT = re.compile(r"[^a-z]+")
 # Labelled tracking domains (labels.py) away mode blocks for the devices it covers.
 TELEMETRY = frozenset(d for d, (_, category) in DOMAINS.items() if category in TRACKING)
+# Camera upload domains blocked when home mode is active (#43).
+CAMERA_DOMAINS = frozenset({
+    "ring.com",
+    "arlo.com",
+    "fakecamera.example",
+    "camera.local",
+    "a.rtmp.youtube.com",
+    "b.rtmp.youtube.com",
+    "upload.youtube.com",
+})
 
 
 @dataclass(frozen=True)
@@ -189,6 +199,7 @@ class Engine:
         self.beacons = Beacons()
         self.acr_caught: OrderedDict[tuple[str, str], int] = OrderedDict()  # (device, domain) -> interval ms
         self.block_doh = False  # block the resolver names in bypass.RESOLVERS
+        self.home_mode = False
 
     def set_rules(self, rules) -> None:
         self.rules = RuleIndex(rules)
@@ -204,6 +215,9 @@ class Engine:
         self.quarantined = dict(held)
 
 
+    def set_home_mode(self, on: bool) -> None:
+        self.home_mode = bool(on)
+
     def set_away(self, devices, until: int = 0) -> None:
         self.away = Away(frozenset(devices), until)
 
@@ -213,6 +227,8 @@ class Engine:
             "SELECT id, scope, device_mac, pattern, action FROM rules"))
         self.set_verdicts({d: Verdict(label, confidence, reason or "") for d, label, confidence, reason
                            in conn.execute("SELECT domain, label, confidence, reason FROM ai_verdicts")})
+        home_on = conn.execute("SELECT value FROM engine_state WHERE key = 'home_mode'").fetchone()
+        self.set_home_mode(bool(home_on and home_on[0]))
         on = conn.execute("SELECT value FROM engine_state WHERE key = 'away'").fetchone()
         end = conn.execute("SELECT value FROM engine_state WHERE key = 'away_until'").fetchone()
         devices = [r[0] for r in conn.execute("SELECT mac FROM away_devices WHERE security = 0")]
@@ -250,6 +266,8 @@ class Engine:
             return Decision(rule.action, "rule", f"{scope} rule {rule.pattern}")
         if entry := matches(domain, self.allowlist):
             return Decision("allow", "allowlist", entry)
+        if self.home_mode and (entry := matches(domain, CAMERA_DOMAINS)):
+            return Decision("block", "home_mode", f"home mode: {entry} camera upload blocked")
         if entry := matches(domain, self.blocklist):
             return Decision("block", "blocklist", entry)
         if self.block_doh and (entry := matches(domain, RESOLVERS)):

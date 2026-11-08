@@ -370,6 +370,18 @@ async def set_mode(body: ModeUpdate):
         result.update(await set_away(body.away, body.away_until))
     if body.home_mode is not None:
         state["home_mode"] = body.home_mode
+        if db["conn"] is not None or os.environ.get("EDDIE_DB") != "off":
+            conn = rules_db()
+            conn.execute(
+                "INSERT INTO engine_state (key, value) VALUES ('home_mode', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (int(body.home_mode),),
+            )
+            conn.execute(
+                "INSERT INTO engine_state (key, value) VALUES ('home_rev', 1) "
+                "ON CONFLICT(key) DO UPDATE SET value = value + 1"
+            )
+            conn.commit()
         await broadcast({"type": "mode", "home_mode": body.home_mode})
         result["home_mode"] = body.home_mode
     return result

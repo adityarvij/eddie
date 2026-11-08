@@ -344,6 +344,7 @@ class StoreWatcher:
             " (SELECT ifnull(max(value), 0) FROM engine_state WHERE key = 'rules_rev'),"
             " (SELECT ifnull(max(value), 0) FROM engine_state WHERE key = 'offline_rev'),"
             " (SELECT ifnull(max(value), 0) FROM engine_state WHERE key = 'away_rev'),"
+            " (SELECT ifnull(max(value), 0) FROM engine_state WHERE key = 'home_rev'),"
             " (SELECT ifnull(max(value), 0) FROM engine_state WHERE key = 'quarantine_rev')").fetchone()
         if changed == self.seen:
             return False
