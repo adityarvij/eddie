@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -59,7 +60,7 @@ class RulesAPITests(unittest.IsolatedAsyncioTestCase):
         client, proto = await loop.create_datagram_endpoint(Client, remote_addr=server.get_extra_info('sockname'))
         watcher = dns_server.StoreWatcher(self.path, decision.engine)
         task = asyncio.create_task(dns_server.watch_store(watcher, every=0.02))
-        self.closers += [up.close, server.close, client.close, task.cancel, watcher.conn.close]
+        self.closers += [up.close, server.close, client.close, task.cancel, watcher.close]
         self.dns = client, proto
         await asyncio.sleep(0.05)  # first load
 
@@ -245,8 +246,33 @@ class WatcherAckTests(unittest.TestCase):
             self.assertEqual(rev, rules.loaded(conn))
             self.assertEqual('block', engine.evaluate(DOMAIN, 'x').action)
             self.assertFalse(watcher.poll())
-            watcher.conn.close()
+            watcher.close()
             conn.close()
+
+    def test_close_waits_for_a_poll_in_progress(self):
+        """Teardown or shutdown can't close the connection under a poll running in a worker thread."""
+        with tempfile.TemporaryDirectory() as tmp:
+            watcher = dns_server.StoreWatcher(os.path.join(tmp, 'eddie.db'), decision.Engine())
+            started, release, order = threading.Event(), threading.Event(), []
+            real = watcher._poll
+
+            def slow_poll():
+                started.set()
+                release.wait(2)
+                order.append('polled')
+                return real()
+
+            with patch.object(watcher, '_poll', slow_poll):
+                poller = threading.Thread(target=watcher.poll)
+                poller.start()
+                started.wait(2)
+                closer = threading.Thread(target=lambda: (watcher.close(), order.append('closed')))
+                closer.start()
+                release.set()
+                poller.join(2)
+                closer.join(2)
+            self.assertEqual(['polled', 'closed'], order)
+            self.assertFalse(watcher.poll())
 
 
 if __name__ == '__main__':

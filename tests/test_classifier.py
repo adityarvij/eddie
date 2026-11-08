@@ -178,7 +178,7 @@ class ClassifierTests(DBTestCase):
         self.assertFalse(watcher.poll())
         self.assertEqual(('flag', 'ai'), (engine.evaluate('t.example', TV_IP).action,
                                           engine.evaluate('t.example', TV_IP).source))  # AI never blocks alone
-        watcher.conn.close()
+        watcher.close()
 
 
 class FakeOllama(http.server.BaseHTTPRequestHandler):

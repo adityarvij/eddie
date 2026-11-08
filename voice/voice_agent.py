@@ -893,6 +893,71 @@ def set_away_mode(on, until=None, when=''):
     return f"Away mode is on{when}. Eddie's DNS has loaded it and is cutting telemetry from {some(covered)}.{kept}"
 
 
+# Sensitivity modes (#110): spoken category word -> the mode POST /sensitivity takes.
+SENSITIVITY_WORDS = {
+    'health': 'health', 'medical': 'health', 'pharmacy': 'health',
+    'kid': 'kids', 'kids': 'kids', 'children': 'kids', 'childrens': 'kids',
+    'money': 'money', 'finance': 'money', 'finances': 'money', 'financial': 'money', 'banking': 'money',
+    'shopping': 'money',
+    'belief': 'beliefs', 'beliefs': 'beliefs', 'religion': 'beliefs', 'religious': 'beliefs',
+    'politics': 'beliefs', 'political': 'beliefs', 'news': 'beliefs',
+}
+SENSITIVITY_MINUTES = 5  # eddie/sensitivity.py WINDOW_MS
+SENSITIVITY_SITES = {'health': 'health', 'kids': "kids'", 'money': 'banking or shopping',
+                     'beliefs': 'news, religious or political'}
+_CATEGORY = r'(?P<cat>' + '|'.join(sorted(SENSITIVITY_WORDS, key=len, reverse=True)) + r')'
+_THINGS = r'(?: (?:related|stuff|sites|apps|things|data|traffic))*'
+SENSITIVITY_ON = [re.compile(LEAD + p + r'(?: please)?') for p in (
+    r'protect (?:(?:anything|everything|all|my|our|the) )?(?:to do with )?' + _CATEGORY + _THINGS,
+    r'(?:turn|switch) on ' + _CATEGORY + ' protection',
+    r'(?:turn|switch) ' + _CATEGORY + ' protection on',
+    r'enable ' + _CATEGORY + ' protection')]
+SENSITIVITY_OFF = [re.compile(LEAD + p + r'(?: please)?') for p in (
+    r'(?:stop|dont keep) protecting (?:(?:anything|everything|all|my|our|the) )?(?:to do with )?' + _CATEGORY + _THINGS,
+    r'(?:turn|switch) off ' + _CATEGORY + ' protection',
+    r'(?:turn|switch) ' + _CATEGORY + ' protection off',
+    r'(?:disable|stop) ' + _CATEGORY + ' protection')]
+
+
+def sensitivity_target(text):
+    """(mode, on) for a whole-utterance sensitivity command in normalized text, else None."""
+    for patterns, on in ((SENSITIVITY_OFF, False), (SENSITIVITY_ON, True)):
+        for pattern in patterns:
+            match = pattern.fullmatch(text)
+            if match:
+                return SENSITIVITY_WORDS[match['cat']], on
+    return None
+
+
+def sensitivity_reply(mode, on):
+    """POST /sensitivity and read back only what the backend acknowledged.
+
+    On means DNS loaded the mode; never that a tracker was seen blocked.
+    """
+    name = mode.capitalize()
+    try:
+        result = request('/sensitivity', {'mode': mode, 'on': on}, timeout=RULE_TIMEOUT)
+        if result.get('mode') != mode or result.get('on') is not on:
+            raise ValueError('Sensitivity mode was not acknowledged')
+    except Exception:
+        return f"I couldn't change {mode} protection. Check the local backend before trying again."
+    applied = result.get('applied') is True
+    if not on:
+        if not applied:
+            return (f"I turned {mode} protection off, but Eddie's DNS hasn't loaded the change yet, "
+                    "so it may still block for a moment.")
+        return f"{name} protection is off, and Eddie's DNS has loaded the change."
+    if not applied:
+        return f"I saved {mode} protection, but Eddie's DNS hasn't loaded it yet, so nothing is blocked yet."
+    examples = result.get('examples') or []
+    like = f" like {join(examples, 'or')}" if examples else ''
+    count = result.get('trackers')
+    trackers = f"the {count} trackers and data brokers I know" if isinstance(count, int) else "the trackers I know"
+    sites = SENSITIVITY_SITES[mode]
+    return (f"{name} protection is on, and Eddie's DNS has loaded it. For {SENSITIVITY_MINUTES} minutes after a "
+            f"device opens a {sites} site{like}, I block {trackers} on it. The {sites} sites themselves keep working.")
+
+
 # Sends confirmed texts (texting.py); None when EDDIE_TEXTING is off or unsupported here.
 text_sender = texting.configured_sender()
 # Long enough to hear a word-for-word read-back of up to texting.MAX_BODY characters and answer.
@@ -1146,6 +1211,9 @@ def route(text):
     off = re.fullmatch(r'(?:please )?(?:(?:turn|switch) off home mode|(?:turn|switch) home mode off|disable home mode|(?:i want|id like) home mode (?:off|disabled)|(?:can|could|would) you (?:turn off|disable) home mode)(?: please)?', text)
     if on or off:
         return home_mode_reply(bool(on))
+    sensitive = sensitivity_target(text)
+    if sensitive:
+        return sensitivity_reply(*sensitive)
     block = block_target(raw)
     if block and block != ('domain', None):
         return block_command(*block)
@@ -1163,7 +1231,7 @@ def route(text):
             return NOT_RESOLVED
         if allow:
             return ALLOW_UNRESOLVED
-        return "I haven't changed anything. I can block or allow a domain, allow a service like Netflix, lock down a device, allow or deny a new device, undo my last rule, or turn home, away or kid mode on or off; email isn't connected yet."
+        return "I haven't changed anything. I can block or allow a domain, allow a service like Netflix, lock down a device, allow or deny a new device, undo my last rule, protect a category like health, or turn home, away or kid mode on or off; email isn't connected yet."
     if WHAT_THEY_KNOW.search(text):
         try:
             report = what_they_know(report_hours(raw))

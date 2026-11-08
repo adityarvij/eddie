@@ -23,6 +23,8 @@ ranking which devices it covers from the query log.
 POST /mode {"home_mode": ...} does it for home mode (home.py, #20) as a manual
 change that holds until {"home_auto": true}; until then watch_presence turns
 home mode on and off as marked household phones come and go.
+/sensitivity turns sensitivity modes (#110, sensitivity.py) on or off and waits
+for DNS to load the change the same way.
 Each new block rule is watched for signs it broke a device and deleted
 through DELETE /rules if it looks like it did (#101, rollback.py).
 /ingest also runs each event through the device's baseline in eddie.db and
@@ -55,8 +57,8 @@ from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocket
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, StrictBool, field_validator
 
-from . import acr, away, coach, baselines, beacons, bypass, decision, demo_week, devices, home, inferences, insights, labels, occupancy, offline, quarantine, questions, rollback, rules, store
-from .events import Action, AIVerdictEvent, GeoAlertEvent, ModeUpdate, NewDeviceEvent, OfflineUpdate, QuarantineUpdate, QueryEvent
+from . import acr, away, coach, baselines, beacons, bypass, decision, demo_week, devices, home, inferences, insights, labels, occupancy, offline, quarantine, questions, rollback, rules, sensitivity, store
+from .events import Action, AIVerdictEvent, GeoAlertEvent, ModeUpdate, NewDeviceEvent, OfflineUpdate, QuarantineUpdate, QueryEvent, SensitivityUpdate
 
 # In memory for now; SQLite (store.py) replaces this once the DNS side lands.
 recent: deque[dict] = deque(maxlen=20000)
@@ -549,6 +551,29 @@ async def set_quarantine(body: QuarantineUpdate):
     applied = await wait_applied(conn, rev, quarantine.loaded)
     await broadcast({"type": "quarantine", "quarantine": body.quarantine, "applied": applied})
     return {"quarantine": body.quarantine, "applied": applied}
+
+
+def sensitivity_state() -> dict:
+    """protected: the modes last turned on. applied: whether DNS has loaded every change. modes: each rule set."""
+    conn = rules_db()
+    on = sensitivity.wanted(conn)
+    return {"protected": on, "applied": sensitivity.loaded(conn) >= sensitivity.revision(conn),
+            "modes": [{**sensitivity.describe(m), "on": m in on} for m in sensitivity.MODES]}
+
+
+@app.get("/sensitivity")
+async def get_sensitivity():  # async: the shared connection stays on the event loop thread
+    return sensitivity_state()
+
+
+@app.post("/sensitivity")
+async def set_sensitivity(body: SensitivityUpdate):
+    conn = rules_db()
+    rev = sensitivity.write(conn, body.mode, body.on)
+    result = {**sensitivity.describe(body.mode), "on": body.on, "protected": sensitivity.wanted(conn),
+              "applied": await wait_applied(conn, rev, sensitivity.loaded)}
+    await broadcast({"type": "sensitivity", **result})
+    return result
 
 
 @app.post("/offline-mode")
