@@ -29,7 +29,7 @@ import time
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS devices (mac TEXT PRIMARY KEY, ip TEXT, hostname TEXT, vendor TEXT, label TEXT, first_seen INTEGER, last_seen INTEGER);
 CREATE TABLE IF NOT EXISTS queries (id INTEGER PRIMARY KEY, ts INTEGER, device_mac TEXT, domain TEXT, qtype TEXT, action TEXT, source TEXT, reason TEXT);
-CREATE TABLE IF NOT EXISTS rules (id INTEGER PRIMARY KEY, scope TEXT, device_mac TEXT, pattern TEXT, action TEXT, created_by TEXT, ts INTEGER);
+CREATE TABLE IF NOT EXISTS rules (id INTEGER PRIMARY KEY, scope TEXT, device_mac TEXT, pattern TEXT, action TEXT, created_by TEXT, ts INTEGER, pinned INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS ai_verdicts (domain TEXT PRIMARY KEY, label TEXT, confidence REAL, reason TEXT, ts INTEGER);
 CREATE TABLE IF NOT EXISTS engine_state (key TEXT PRIMARY KEY, value INTEGER);
 CREATE TABLE IF NOT EXISTS device_status (mac TEXT PRIMARY KEY, status TEXT, first_seen INTEGER, decided_at INTEGER);
@@ -68,6 +68,8 @@ def connect(path: str) -> sqlite3.Connection:
     conn.execute("PRAGMA secure_delete=ON")  # pruned rows are zeroed on disk
     conn.execute("PRAGMA journal_mode=WAL")  # readers (API, agent) don't block the writer
     conn.executescript(SCHEMA)
+    if "pinned" not in {r[1] for r in conn.execute("PRAGMA table_info(rules)")}:  # an eddie.db from before #101
+        conn.execute("ALTER TABLE rules ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0")
     conn.commit()
     return conn
 

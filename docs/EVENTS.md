@@ -84,6 +84,7 @@ Both are computed by the API from the events it has received, keyed by
 - `rule_change`: a rule was stored or deleted (see Rules below)
 - `new_device`, `quarantine`, `device_status`: see New devices and quarantine below
 - `bypass_suspected`: a device looked up an encrypted DNS resolver (see Bypass detection below)
+- `rule_rolled_back`: Eddie deleted a new block rule that looked like it broke a device (see Self-correcting blocks below)
 
 ## Bypass detection: `bypass_suspected` (#97)
 
@@ -195,12 +196,13 @@ before every list: device rule, then the device's lockdown rule, then global rul
 | `action`     | `block` \| `allow` \| `spoof`. `spoof` (#99) answers the domain with Eddie's IP (`EDDIE_SPOOF_IP`) so the stub server (`eddie/spoof_server.py`) returns 200 OK with an empty body over plain HTTP; without `EDDIE_SPOOF_IP` DNS blocks it instead. `spoof` is a normal rule, not a lockdown: `*` takes only `block`. |
 | `device_mac` | optional; omit for every device. Use the device's `mac` from `GET /devices` (its MAC, or its client IP while the MAC is unknown). A rule made with a client IP also matches the device after its MAC becomes known. |
 | `created_by` | optional, default `"user"`; exactly `user` \| `voice` \| `agent` |
+| `pinned`     | optional, default `false`. A pinned rule is never rolled back by self-correcting blocks (#101). `POST /rules/{id}/pin` pins a stored rule (404 if there is none) and answers the row with `device`; it changes nothing DNS enforces, so it has no `applied`. |
 
 Answers `201` with the stored row plus the DNS acknowledgment:
 
 ```json
 {"id": 7, "scope": "device", "device_mac": "172.20.10.5", "pattern": "device-metrics-us.amazon.com",
- "action": "block", "created_by": "voice", "ts": 1762531200123, "applied": true}
+ "action": "block", "created_by": "voice", "ts": 1762531200123, "pinned": false, "applied": true}
 ```
 
 - `id` is the stored rule. Keep it: undo is `DELETE /rules/{id}`.
@@ -244,6 +246,55 @@ Every successful add or delete also pushes a `rule_change` on `/ws/events`:
 
 Devices cache answers (60 s for blocked lookups, the upstream TTL for allowed
 ones), so a device may not ask Eddie again until its cache expires.
+
+## Self-correcting blocks: `rule_rolled_back` (#101)
+
+For 10 minutes after `POST /rules` stores a block rule, the API watches the
+query events on `/ingest` (`eddie/rollback.py`; never on the DNS hot path). A
+lookup counts as blocked by the rule when it is `action: block`, `source:
+rule`, its `reason` names the rule (`device rule <pattern>` or `global rule
+<pattern>`) and, for a device rule, the device matches. For each device:
+
+| Sign | Threshold |
+|------|-----------|
+| `retry_storm` | 12 or more lookups blocked by the rule within 60 s. A healthy device caches the 60 s block answer and asks about once a minute; the feed sends a repeat at most every 2 s, so this is a device asking at least every 5 s. |
+| `traffic_collapse` | The device made 20 or more other (not blocked) lookups in the 10 minutes before the rule, has made 3 or more lookups the rule blocked, and at least 3 minutes after the first of them its other lookups since then are at most 10% of its earlier rate. A device that was switched off stops asking for the blocked domain too, so silence alone never counts. |
+
+The first sign on one device rolls the rule back (for a global rule, any
+device): the API deletes it through the `DELETE /rules/{id}` handler, so a
+`rule_change` `removed` goes out as usual, waits for DNS like any delete, then pushes:
+
+```json
+{"type": "rule_rolled_back", "ts": 1762531320000,
+ "rule": {"id": 7, "scope": "device", "device_mac": "f0:4f:7c:11:22:33", "device": "Fire Stick",
+          "pattern": "device-metrics-us.amazon.com", "action": "block", "created_by": "voice",
+          "ts": 1762531200123, "pinned": false},
+ "device_mac": "f0:4f:7c:11:22:33", "device": "Fire Stick", "sign": "retry_storm",
+ "reason": "I removed the block on device-metrics-us.amazon.com for Fire Stick: it asked for device-metrics-us.amazon.com 14 times in a minute after the block, which can mean it stopped working. That's a guess, not proof it broke. Block it again as a pinned rule to keep it.",
+ "applied": true}
+```
+
+- `device_mac` / `device` are the device that looked broken; `rule` is the
+  deleted row as in `GET /rules`.
+- `reason` is the copy to show or say. It always says it's a guess: an app
+  may retry a blocked tracker forever and work fine, and a household may just
+  stop using a device. Nothing here proves a device broke or that it works again.
+- `applied` is the delete's DNS acknowledgment, as for `DELETE /rules/{id}`.
+  `false` means the rule is deleted from `eddie.db` but no DNS server confirmed
+  it; the dashboard then adds that DNS hasn't confirmed the block is gone.
+- Never rolled back: allow and spoof rules, lockdown (`*`), pinned rules, a
+  rule pinned or deleted before the rollback runs (or whose id now holds
+  another rule), and rules stored before the API started (watches are memory
+  only, so an API restart forgets them). The essentials allowlist is
+  untouched: a rollback only ever deletes the one rule, and lookups the
+  allowlist answers count as the device's other traffic.
+- The dashboard shows it as a `[rolled back?]` feed row and a toast with
+  `reason`. Voice doesn't announce feed events yet, so it isn't spoken unprompted.
+
+Known gaps: Eddie only sees DNS, so a device that breaks without retrying
+(or caches its failure) isn't caught; the feed's 2 s de-duplication caps the
+retry count it can see at 30 a minute; and a block that's rolled back can be
+re-added and rolled back again unless it is pinned.
 
 ## Devices: `GET /devices`, `PUT /devices/{mac}`
 

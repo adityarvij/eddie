@@ -63,6 +63,17 @@ assert.equal(tag(get('feed').children.at(-1)).className,'tag tag-bypass');
 assert.equal(get('notice').textContent,bypassReason);
 assert.equal(get('requests').textContent,'4','bypass suspicions are not DNS requests');
 
+// Rollbacks: a [rolled back?] row and a toast with the API's reason, which says it's a guess.
+const rollbackReason="I removed the block on a.example for TV: it asked for a.example 14 times in a minute after the block, which can mean it stopped working. That's a guess, not proof it broke. Block it again as a pinned rule to keep it.";
+const rolledBack=applied=>socket.onmessage({data:JSON.stringify({type:'rule_rolled_back',ts:Date.now(),rule:{id:9,pattern:'a.example',action:'block',device_mac:'f0:4f:7c:11:22:33',device:'TV',created_by:'voice',pinned:false},device_mac:'f0:4f:7c:11:22:33',device:'TV',sign:'retry_storm',reason:rollbackReason,applied})});
+rolledBack(true);
+assert.equal(tag(get('feed').children.at(-1)).parent.textContent,`[rolled back?] ${rollbackReason}`);
+assert.equal(tag(get('feed').children.at(-1)).className,'tag tag-rollback');
+assert.equal(get('notice').textContent,rollbackReason);
+rolledBack(false);
+assert.equal(get('notice').textContent,`${rollbackReason} Eddie's DNS hasn't confirmed the block is gone yet.`);
+assert.equal(get('requests').textContent,'4','rollbacks are not DNS requests');
+
 // Confirming shows the pending read-back, and clears on expiry and on dismissal.
 const confirm=()=>socket.onmessage({data:JSON.stringify({type:'voice_state',state:'confirming',kind:'lockdown',prompt:'Lock down the TV?',expires_in_ms:15000})});
 confirm();
