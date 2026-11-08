@@ -113,7 +113,7 @@ def usual_quiet(grid: dict[datetime, bool], kind: str, days: set) -> dict | None
     return {"when": when, "pattern": True, **fact(
         f"The house looks empty {when}",
         f"no streaming in those hours on {q} of the {s} {noun} Eddie saw",
-        min(0.8, 0.4 + 0.05 * s))}
+        min(0.8, 0.4 + 0.05 * s), "Safety")}
 
 
 def one_day_quiet(grid: dict[datetime, bool]) -> list[dict]:
@@ -130,7 +130,7 @@ def one_day_quiet(grid: dict[datetime, bool]) -> list[dict]:
             out.append({"when": when, "pattern": False, **fact(
                 f"The house looked empty {when}",
                 f"no streaming in those {plural(quiet, 'hour')}; under {MIN_DAYS} days of data, so not a pattern",
-                0.3)})
+                0.3, "Safety")})
     return out
 
 

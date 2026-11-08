@@ -24,13 +24,13 @@ Then open `http://<Mac IP>:5173` on the iPad. Other devices can view the page, t
 
 The voice pipeline now uses openWakeWord and faster-whisper. Follow [offline model provisioning and voice setup](../voice/README.md) before enabling the microphone. Custom models are not bundled. Piper supplies portable speech; installed macOS speech remains a development fallback.
 
-Supported voice tools: factual backend summaries, explicit home-mode on/off, block, allow, undo, “lock down <device>” and kid mode on/off (see [voice/README.md](../voice/README.md)). Email remains pending.
+Supported voice tools: factual backend summaries, explicit home-mode on/off, block, allow, undo, “lock down <device>”, kid mode on/off and privacy suggestions (see [voice/README.md](../voice/README.md)). Email remains pending.
 
 ## Rules and confirmations (#19)
 
 Under the counts, **rules** lists up to five active rules, newest first (`block device-metrics-us.amazon.com · Fire Stick · by voice`), from `GET /api/rules`, which `serve.py` relays read-only from the traffic API (`EDDIE_API_URL`, default `http://127.0.0.1:8000`) so the iPad needs no CORS or direct API access. It refreshes on connect and on every `rule_change` event, and says `unavailable` if the API or `eddie.db` is not reachable. The devices link (#35, #119, below) sits bottom right.
 
-The page no longer has buttons for the report; `window.eddie.renderReport(report)` still shows a report panel above the feed with each fact, its evidence and confidence, from `GET /api/what-they-know` (live, all retained history, from `eddie.db` when the DNS server has logged lookups, else the in-memory feed; the title says “from eddie.db” in the first case) or `GET /api/what-they-know?demo=1`, both still relayed read-only by `serve.py` (voice uses the live report). The demo report always carries an inverted "DEMO DATA · …" banner and "DEMO WEEK" in its title; live reports never do.
+The page no longer has buttons for the report; `window.eddie.renderReport(report)` still shows a report panel above the feed with each fact, its evidence and confidence, prefixed with its category ("Health · sensitive: …"), from `GET /api/what-they-know` (live, all retained history, from `eddie.db` when the DNS server has logged lookups, else the in-memory feed; the title says “from eddie.db” in the first case) or `GET /api/what-they-know?demo=1`, both still relayed read-only by `serve.py` (voice uses the live report). The demo report always carries an inverted "DEMO DATA · …" banner and "DEMO WEEK" in its title; live reports never do.
 
 Each `rule_rolled_back` (#101) adds a `[rolled back?]` feed row and a toast with the API's reason, which says the rollback is a guess, not proof the device broke; with `applied: false` it adds that Eddie's DNS hasn't confirmed the block is gone. The rules list re-reads too.
 
@@ -47,6 +47,10 @@ Manual check (needs the API and DNS server sharing one `eddie.db`, plus this bri
 5. Reload the iPad page: the list comes back from the API; no toast, feed row or prompt is restored.
 
 Not yet run on hardware: steps 1 to 5 on the iPad in kiosk mode. For step 4, “allow Netflix” or “lock down the TV” (with a device labelled TV) reach the confirmation slot; `node tests/test_frontend_events.cjs` covers expiry and dismissal.
+
+## Privacy suggestions (#112)
+
+The **suggestions** button beside the mode toggles opens a panel (from `GET /api/suggestions`, relayed read-only from the traffic API's `/suggestions`) with, for each device Eddie recognises as a Fire TV or a Ring, where the settings live, each setting to change and why, and the maker's help pages as links. It loads each time it opens; with nothing recognised it says which guides Eddie has, and if the API doesn't answer it says `unavailable`. Guidance only: nothing on it changes a setting. Voice reads the same guide ("how can I improve my privacy?").
 
 ## Devices and mode toggles (#35)
 

@@ -42,7 +42,8 @@ PAIRED_CONTROLS = {'/api/voice/ask', '/api/mode', '/api/offline-mode', '/api/qua
 READ_RELAYS = {'/api/rules': ('/rules', 'Rules unavailable.'),
                '/api/devices': ('/devices?hours=24', 'Devices unavailable.'),
                '/api/mode': ('/mode', 'Modes unavailable.'),
-               '/api/questions': ('/questions', 'Questions unavailable.')}
+               '/api/questions': ('/questions', 'Questions unavailable.'),
+               '/api/suggestions': ('/suggestions', 'Suggestions unavailable.')}
 # Mode toggles: bridge path -> (API path, the one boolean field it takes).
 # Rules written by dashboard answers (#79), question id -> rule rows, so its Undo removes only those.
 # Memory only, at most ANSWERS_KEPT answers.

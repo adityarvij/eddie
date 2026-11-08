@@ -113,10 +113,21 @@ EMPTY_HOUSE = re.compile(
 
 
 # A domain as POST /rules accepts it (no wildcard), and a domain inside a spoken reply.
+# Privacy settings coach (#112): guidance only; the reply text comes from /suggestions.
+PRIVACY_TIPS = re.compile(
+    r'\b(?:(?:how|what) (?:can|could|should|do) (?:i|we) (?:do to )?(?:improve|better|protect|boost|increase) '
+    r'(?:my|our) privacy|(?:make|keep) (?:my|our|the) (?:\w+ ){0,2}more private|privacy (?:tips|suggestions|advice)'
+    r'|what (?:privacy )?settings should (?:i|we) change|(?:any|some|your|give me) suggestions)\b')
+
+
+def privacy_suggestions():
+    return request('/suggestions')
+
+
 DOMAIN = re.compile(r'[a-z0-9_-]+(?:\.[a-z0-9_-]+)+')
 SPOKEN_DOMAIN = re.compile(r'\b[a-z0-9_-]+(?:\.[a-z0-9_-]+)*\.[a-z]{2,}\b')
 # eddie/labels.py TRACKING; copied so the voice worker doesn't import the backend.
-TRACKING = {'telemetry', 'ads', 'analytics', 'tracking'}
+TRACKING = {'telemetry', 'ads', 'analytics', 'tracking', 'id-sync'}
 IT_WINDOW_MS = 15 * 60 * 1000  # "it" never reaches back further than this in /events
 RULE_TIMEOUT = 5  # POST /rules waits up to 2 s for the DNS engine before answering
 IT_WORDS = r'it|that|this|that one|this one|that domain|this domain|that tracker|this tracker'
@@ -1069,6 +1080,11 @@ def route(text):
             return str(burglars_eye(report_hours(raw))['text'])
         except Exception:
             return "I can't reach Eddie’s traffic backend, so I can't say when the house looked empty right now."
+    if PRIVACY_TIPS.search(text):
+        try:
+            return str(privacy_suggestions()['text'])
+        except Exception:
+            return "I can't read Eddie's device list right now, so I can't suggest privacy settings."
     if text in ('hello', 'hi', 'hey', 'hey eddie'):
         return "Hey, I'm Eddie. Ask me what's been going on, tell me to block a domain, or to turn home mode on or off."
     if ask_model is not None:

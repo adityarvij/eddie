@@ -19,6 +19,9 @@ const timers=[];
 const context={document:{getElementById:get,createElement:()=>new Element(),addEventListener(){},activeElement:{tagName:'BODY'}},window:{},location:{search:'',hostname:'localhost'},URLSearchParams,Date,console,
   setTimeout(fn,ms){timers.push({fn,ms});return timers.length;},clearTimeout(){},fetch(){},AbortController,EventSource:class{},WebSocket:class{constructor(){socket=this;}}};
 const source=fs.readFileSync('frontend/app.js','utf8');
+// getElementById returns the first match, so a repeated id makes one element overwrite another.
+const pageIds=[...fs.readFileSync('frontend/index.html','utf8').matchAll(/\sid="([^"]+)"/g)].map(m=>m[1]);
+assert.deepEqual(pageIds.filter((id,i)=>pageIds.indexOf(id)!==i),[],'every id in index.html is unique');
 for (const a of ['block','allow','ignore']) { const b = new Element(); b.dataset.answer = a; get('question-actions').append(b); }
 vm.runInNewContext(source,context);
 socket.onmessage({data:JSON.stringify({domain:'example.org',device:'TV',action:'allow',ts:Date.now()})});
@@ -132,6 +135,9 @@ assert.equal(get('report-demo').hidden,false);
 assert.match(get('report-demo').textContent,/^DEMO DATA · Demo data/);
 assert.match(get('report-title').textContent,/DEMO WEEK/);
 assert.equal(get('report-facts').children[0].textContent,'Streaming happens most on Sundays — 450 of 1691 streaming minutes (confidence 65%)');
+context.window.eddie.renderReport({demo:true,label:'Demo data',hours:168,facts:[{fact:'Someone here uses health, pharmacy or telehealth services',evidence:'14 lookups to GoodRx',confidence:.7,category:'Health',sensitive:true},{fact:'Someone here shops online',evidence:'19 lookups to Target',confidence:.5,category:'Money',sensitive:false}]});
+assert.equal(get('report-facts').children[0].textContent,'Health · sensitive: Someone here uses health, pharmacy or telehealth services — 14 lookups to GoodRx (confidence 70%)');
+assert.equal(get('report-facts').children[1].textContent,'Money: Someone here shops online — 19 lookups to Target (confidence 50%)');
 context.window.eddie.renderReport({demo:false,hours:24,facts:[]});
 assert.equal(get('report-demo').hidden,true);
 assert.equal(get('report-title').textContent,'what they know · last 24h');
@@ -224,12 +230,12 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
 
   // The devices link opens and closes the list.
   get('open-devices').onclick();
-  assert.equal(get('devices').hidden, false);
+  assert.equal(get('devices-sheet').hidden, false);
   assert.equal(get('open-devices').attrs['aria-expanded'], 'true');
   await answer('/api/rules', 200, []); await answer('/api/devices', 200, {hours:24, devices:[]});
   context.flashDevice('ip:172.20.10.9');  // a lookup lights up its row; no row, nothing happens
   get('close-devices').onclick();
-  assert.equal(get('devices').hidden, true);
+  assert.equal(get('devices-sheet').hidden, true);
 
   // Modes: the initial state comes from the backend; until then the toggles can't be pressed.
   assert.equal(get('home-mode').disabled, true);

@@ -110,7 +110,7 @@ function renderDevices(list) {
 }
 // Light up a device's row while it looks something up: the easiest way to tell which device is which.
 function flashDevice(key) {
-  if ($('devices').hidden || !key) return; key = String(key).replace(/^ip:/, '');
+  if ($('devices-sheet').hidden || !key) return; key = String(key).replace(/^ip:/, '');
   const row = $('device-list').children && [...$('device-list').children].find(li => li.dataset.mac === key); if (!row) return;
   row.classList.add('seen'); clearTimeout(row.seenTimer); row.seenTimer = setTimeout(() => row.classList.remove('seen'), 900);
 }
@@ -154,7 +154,7 @@ async function toggleKidMode() {
   finally { kidPending = null; loadRules(); loadDevices(); }
 }
 function toggleDevices(open) {
-  $('devices').hidden = !open; $('open-devices').setAttribute('aria-expanded', String(open));
+  $('devices-sheet').hidden = !open; $('open-devices').setAttribute('aria-expanded', String(open));
   if (open) { loadRules(); loadDevices(); }
 }
 // The answer shown is the API's: stored, and whether DNS has loaded it.
@@ -371,11 +371,32 @@ function renderReport(report) {
   const demo = report.demo === true;
   $('report-title').textContent = demo ? `what they know · DEMO WEEK` : `what they know · last ${report.hours}h${report.source === 'eddie.db' ? ' · from eddie.db' : ''}`;
   $('report-demo').textContent = demo ? `DEMO DATA · ${report.label}` : ''; $('report-demo').hidden = !demo;
-  const items = (report.facts || []).map(f => { const li = document.createElement('li'); li.textContent = `${f.fact} — ${f.evidence} (confidence ${Math.round(f.confidence * 100)}%)`; return li; });
+  const items = (report.facts || []).map(f => { const li = document.createElement('li'); li.textContent = `${f.category ? `${f.category}${f.sensitive ? ' · sensitive' : ''}: ` : ''}${f.fact} — ${f.evidence} (confidence ${Math.round(f.confidence * 100)}%)`; return li; });
   if (!items.length) { const li = document.createElement('li'); li.textContent = 'Not enough traffic yet to say what anyone could guess.'; items.push(li); }
   $('report-facts').replaceChildren(...items); $('report').hidden = false;
 }
-window.eddie = { pushEvent: addEvent, wake, voiceEvent, renderReport, ask: text => control('/api/voice/ask', {text}) };
+// Privacy settings coach (#112): the hand-written guide for each recognised device, with its sources.
+function showSuggestions(open) { $('suggestions').hidden = !open; $('suggestions-open').setAttribute('aria-expanded', String(open)); if (open) loadSuggestions(); }
+function renderSuggestions(data) {
+  const blocks = (data.devices || []).map(({name, guide: d}) => {
+    const div = document.createElement('div'); div.className = 'suggestion';
+    const head = document.createElement('div'); head.className = 'suggestion-head'; head.textContent = `${name} · ${d.name}`;
+    const steps = document.createElement('ol'); steps.append(...d.steps.map(s => { const li = document.createElement('li'); li.textContent = `${s.do}: ${s.setting} — ${s.why}`; return li; }));
+    const sources = document.createElement('p'); sources.className = 'modes-note'; sources.append('sources: ');
+    d.sources.forEach((s, i) => { const a = document.createElement('a'); a.href = s.url; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.textContent = s.title; sources.append(...(i ? ['; ', a] : [a])); });
+    const where = document.createElement('p'); where.textContent = d.where; const note = document.createElement('p'); note.className = 'modes-note'; note.textContent = d.note;
+    div.append(head, where, steps, note, sources); return div;
+  });
+  if (!blocks.length) { const p = document.createElement('p'); p.textContent = data.text || 'No recognised devices yet.'; blocks.push(p); }
+  $('suggestions-list').replaceChildren(...blocks);
+}
+async function loadSuggestions() {
+  try { const r = await fetch('/api/suggestions'); const data = await r.json(); if (!r.ok) throw Error(data.message || data.detail); renderSuggestions(data); }
+  catch (e) { const p = document.createElement('p'); p.textContent = `unavailable${e.message ? `: ${e.message}` : ''}`; $('suggestions-list').replaceChildren(p); }
+}
+$('suggestions-open').onclick = () => showSuggestions($('suggestions').hidden);
+$('suggestions-close').onclick = () => { showSuggestions(false); $('suggestions-open').focus(); };
+window.eddie = { pushEvent: addEvent, wake, voiceEvent, renderReport, renderSuggestions, ask: text => control('/api/voice/ask', {text}) };
 $('report-close').onclick = () => { $('report').hidden = true; };
 $('open-logs').onclick = () => toggleLogs($('assistant-logs').hidden);
 $('close-logs').onclick = () => { toggleLogs(false); $('open-logs').focus(); };
@@ -383,7 +404,7 @@ dialog.addEventListener('cancel', event => { event.preventDefault(); closeByUser
 dialog.addEventListener('close', () => { clearTimeout(exitTimer); dialog.classList.remove('closing'); toggleLogs(false); });
 $('close').onclick = closeByUser;
 dialog.addEventListener('click', e => { if (e.target === dialog) { const r=dialog.getBoundingClientRect(); if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom) closeByUser(); } });
-document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('devices').hidden && !dialog.open && e.target.tagName !== 'INPUT') { toggleDevices(false); return; } if (e.code === 'Space' && !['INPUT','TEXTAREA','BUTTON'].includes(document.activeElement.tagName)) { e.preventDefault(); wake(true); } });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('devices-sheet').hidden && !dialog.open && e.target.tagName !== 'INPUT') { toggleDevices(false); return; } if (e.code === 'Space' && !['INPUT','TEXTAREA','BUTTON'].includes(document.activeElement.tagName)) { e.preventDefault(); wake(true); } });
 // A paired device (the iPad) opens the link the Eddie computer prints; the token stays in the
 // URL fragment, which is never sent in a request line and is not written to browser storage.
 const pairToken = new URLSearchParams(String(location.hash || '').slice(1)).get('pair');
@@ -397,7 +418,7 @@ $('home-mode').onclick = () => setMode('home_mode', !modes.home_mode);
 $('offline-mode').onclick = () => setMode('offline', !modes.offline);
 $('quarantine-mode').onclick = () => setMode('quarantine', !modes.quarantine);
 $('kid-mode').onclick = toggleKidMode;
-$('open-devices').onclick = () => toggleDevices($('devices').hidden);
+$('open-devices').onclick = () => toggleDevices($('devices-sheet').hidden);
 $('close-devices').onclick = () => { toggleDevices(false); $('open-devices').focus(); };
 connectTraffic();
 loadRules();

@@ -271,7 +271,7 @@ Writes from anywhere but loopback need `Authorization: Bearer $EDDIE_API_TOKEN`,
 | PUT | `/devices/{mac}` | `{label?, kid?}`: `label` names a device ("Fire Stick"; `""` or `null` clears it), `kid` marks it as a child's for kid mode (#119) |
 | GET | `/events?since=&device=` | Recent query rows |
 | GET | `/summary?window=1h` | Totals: queries, blocked, top blocked domains, top companies, per device, data broker and ad exchange counts |
-| GET | `/what-they-know?hours=24` | "What they know about you" facts `{fact, evidence, confidence}` + spoken text, from `eddie.db` (else the in-memory feed); `?demo=true` returns the labelled seeded demo week instead (see docs/EVENTS.md) |
+| GET | `/what-they-know?hours=24` | "What they know about you" facts `{fact, evidence, confidence, category, sensitive}` + spoken text, from `eddie.db` (else the in-memory feed); `?demo=true` returns the labelled seeded demo week instead (see docs/EVENTS.md) |
 | GET | `/burglars-eye?hours=168` | Burglar's-eye report: when the house looked empty, devices ranked by occupancy leak score, security devices flagged `never_block`, and whether the data covered the range asked for; `?demo=true` uses the demo week (see docs/EVENTS.md) |
 | GET | `/rules` | Every rule, newest first |
 | POST | `/rules` | `{pattern, action, device_mac?, created_by?}` add rule; answers with the stored id and `applied` once DNS has loaded it (see docs/EVENTS.md) |
@@ -377,7 +377,7 @@ Rewrite `dns_server.py`, `decision.py` and the traffic monitor in Rust on Tokio 
 
 The model reads a day of facts and writes what a company (or a burglar) could infer: "you're home after 6 PM", "someone watches TV past 1 AM", "a kids' app runs on weekend mornings", "the house is empty weekdays 8 to 6".
 
-1. Label domains with a hand-written table (streaming, kids, music, telemetry, ads, camera, doorbell, thermostat).
+1. Label domains with a hand-written table (streaming, kids, music, telemetry, ads, camera, doorbell, thermostat; built, plus health, finance, shopping, work, jobs, news, religion, politics, voice assistants and ad ID syncing, #134; sources in eddie/data/README.md).
 2. Group requests into sessions: same category, gaps under 10 minutes.
 3. Compute facts in Python: first and last activity per day, after-midnight sessions, category by weekday, idle telemetry, longest gap with no human activity.
 4. Pass only a JSON list of `{fact, evidence, confidence}` to the model.
@@ -415,7 +415,7 @@ The most dangerous thing smart devices leak isn't what you watch. It's when you'
 - **Home mode for cameras (Ring and other indoor cams):** stops anyone outside the house (an employee, a hacker, the company) from seeing you while you're home. Eddie detects a household phone on the home Wi-Fi (seen in the last 10 minutes, matched by its per-network address) and blocks the indoor cameras' cloud upload domains (for Ring, its AWS-hosted endpoints). The camera app then shows those cameras as offline, which is intended: the video can't leave the house, and you don't need to watch your own living room. The moment the last household phone leaves, Eddie unblocks the domains and the cameras show up in the app again (e.g. to check on the dog). Override any time: "Hey Eddie, turn off home mode" or the dashboard toggle. Outdoor cameras, doorbells and alarms are never blocked. Motivated by the FTC's 2023 Ring case, where employees could view customer videos, including indoor cameras. Demo it on the Fire Stick ("the TV can't phone home while you're home") and pitch cameras as the main use case.
 - **Simulated cloud camera (demo stand-in for Ring):** no Ring camera needed. Home mode is a rule that blocks a seeded list of camera upload domains (for Ring, a broad rule like `*.ring.com`, since exact upload domains aren't confirmed; the real product learns each camera's domains by watching its traffic). `fake_camera.py` runs on Will's laptop with its DNS pointed at Eddie: it grabs a webcam frame every few seconds and, before each "upload", does a fresh DNS lookup for a camera domain through Eddie. The dashboard shows "Living room cam: uploading" with the live frame; when Adi's phone is on the Wi-Fi, the lookup is blocked and the screen flips to "Upload blocked: home mode"; phone off the Wi-Fi → uploads resume. Call it a simulated camera in the pitch.
 - **Streaming caveat:** blocking DNS doesn't cut a stream that's already running, because the device already knows the server's address. The fake camera re-looks up before every upload, so the demo is reliable. Roadmap: as the router, the real Eddie can cut open connections immediately with a firewall rule, not just block new lookups. If testing in a browser instead, turn off the browser's secure DNS (Chrome: Settings → Privacy → Use secure DNS) or it skips Eddie.
-- **Camera account hardening coach:** walks you through two-factor login, end-to-end encryption where the camera offers it, and removing old shared users and logged-in devices. Eddie can't stop someone logging into your camera account from elsewhere, so this covers that gap.
+- **Camera account hardening coach (built for Ring, #112):** walks you through two-step verification, end-to-end encryption where the camera offers it, and removing old shared users and logged-in devices. Eddie can't stop someone logging into your camera account from elsewhere, so this covers that gap. Part of the settings coach below.
 - **New device alert (#98, implemented):** "A device I've never seen joined your network at 2:14 AM." With quarantine on (opt-in), a new device gets only Eddie's essentials until you approve it on the dashboard or say "allow the new device". DNS-only for now: a device with hard-coded IPs still gets out until router mode (#22/#23).
 - **Presence masking (stretch):** in away mode, keep presence-revealing devices at a steady, normal-looking traffic level so the pattern looks occupied.
 
@@ -449,7 +449,7 @@ Not built yet. Goal: show the audience what would happen to a Ring camera, using
 
 - **Bypass detection:** a lookup of a known encrypted DNS resolver name now raises `bypass_suspected` and `EDDIE_BLOCK_DOH=on` blocks those names (#97). Still open: flagging devices that go quiet on DNS while clearly active, and spotting plain DNS sent to another resolver (needs router mode).
 - **Privacy grade per device (A to F):** phone-home rate, idle activity, number of tracking companies, occupancy leak score, how much could be blocked without breakage.
-- **Settings coach:** for each device, tells you which built-in privacy toggles to switch off (e.g. Fire TV usage data, interest-based ads), so the choice sticks at the source too.
+- **Settings coach (built, #112):** for each recognised device, tells you which built-in privacy settings to change (Fire TV usage data and interest-based ads; Ring two-step verification, end-to-end encryption, shared users), so the choice sticks at the source too. Hand-written guides with their sources in `eddie/coach.py`; the dashboard's **suggestions** button shows them and "Hey Eddie, how can I improve my privacy?" reads them out (`GET /suggestions`). Guidance only: Eddie never signs in or changes a setting. More device types still to write.
 - **Data broker watch (implemented):** highlight traffic to known data brokers and ad exchanges separately; these are where data gets sold on. Counter and feed highlight on the dashboard, counts in `/summary` (see [EVENTS](docs/EVENTS.md)).
 - **Night report:** a short spoken summary each morning: what was blocked, anything new, any occupancy leak.
 
@@ -465,6 +465,8 @@ Not built yet. Goal: show the audience what would happen to a Ring camera, using
 ## Beyond break-ins: the full map of what devices leak
 
 Break-ins are one category. Eddie's "What they know about you" report groups every inference into these categories, each with a plain-English line, the evidence, and what Eddie did about it.
+
+Built (#134): every `/what-they-know` fact carries one of these ten as `category`, and `sensitive: true` for Health, Beliefs and Kids. Per-category facts come from labelled domains (`eddie/labels.py`), a cross-device count of the tracking company that sees the most devices, and a device count. Not built yet: the "What Eddie does" column (sensitivity modes, kid mode, forget timer, mic watch, category scores); Listening only shows that an assistant is connected, never that audio was sent.
 
 | Category | What it reveals | Signal Eddie sees | What Eddie does |
 |---|---|---|---|
@@ -491,7 +493,7 @@ Break-ins are one category. Eddie's "What they know about you" report groups eve
 
 ### For the demo
 
-With a Fire Stick you'll mainly see Safety, What's on screen, Identity linking and some Household and Kids signals (if you open a kids' app). Show those live, and show the other categories on the seeded week of demo data, clearly labelled.
+With a Fire Stick you'll mainly see Safety, What's on screen, Identity linking and some Household and Kids signals (if you open a kids' app). Show those live, and show the other categories on the seeded week of demo data, clearly labelled. The demo week (`GET /what-they-know?demo=true`) has a fact in every category except What's on screen, which is the live ACR card.
 
 
 ## Voice implementation update

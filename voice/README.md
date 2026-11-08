@@ -130,6 +130,10 @@ The AI only flags likely trackers; Eddie asks before anything is blocked. When y
 
 “Undo” removes the rules a yes created, like any voice block. The question lookup waits at most 1 s; if the backend is down Eddie skips it and listens as usual. A spoken yes on the real microphone still needs a hardware check.
 
+## Privacy suggestions (#112)
+
+“How can I improve my privacy?”, “privacy tips”, “any suggestions?”, “how do I make my Fire Stick more private?” or “what settings should I change?” reads the backend's guide for each recognised device (`GET /suggestions`): “For Fire Stick, on the TV open Settings, Preferences, Privacy Settings and turn off Device Usage Data, Collect App Usage Data and Interest-based Ads. … I haven't changed any of these myself.” Guidance only: nothing is confirmed or written. With nothing recognised Eddie names the guides he has (Fire TV and Ring); if the backend is down he says he can't read the device list. The steps and source links are under **suggestions** on the dashboard.
+
 ## Lock down a device (#17)
 
 “Lock down the TV”, “please lock down my Fire Stick” or “can you lockdown the kids' iPad?” blocks everything for one device except a keep list, after a spoken yes. The device name is matched against the names set in the dashboard's device list (`GET /devices`): an exact label wins, otherwise a label containing the words (“TV” finds “Living Room TV” if it's the only one). Vendor names like “Amazon device” don't count, and nor does `---`, which is how the list shows a device with no name; name the device first. The keep list is every streaming service in `voice/services.json` (Netflix, YouTube, Prime Video, Apple TV), or the kid-safe list for a device marked as a child's (below); there's no spoken way to change it yet, so “lock down the TV to Netflix” changes nothing. The allowlist's essentials (sign-in, updates, time, captive-portal checks) always survive a lockdown, so it can't brick the device.

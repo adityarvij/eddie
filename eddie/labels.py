@@ -55,9 +55,67 @@ DOMAINS = {
     "simplisafe.com": ("SimpliSafe", "alarm"),
     # Misc
     "pool.ntp.org": ("NTP", "time"),
+    # Inference topics (#134); each service's own public domain, see eddie/data/README.md.
+    # Kids
+    "youtubekids.com": ("YouTube Kids", "kids"),
+    "pbskids.org": ("PBS Kids", "kids"),
+    "abcmouse.com": ("ABCmouse", "kids"),
+    "roblox.com": ("Roblox", "kids"),
+    # Music
+    "spotify.com": ("Spotify", "music"),
+    "scdn.co": ("Spotify", "music"),
+    "pandora.com": ("Pandora", "music"),
+    "music.apple.com": ("Apple Music", "music"),
+    # Doorbells and thermostats
+    "skybell.com": ("SkyBell", "doorbell"),
+    "ecobee.com": ("ecobee", "thermostat"),
+    "tccna.honeywell.com": ("Honeywell Home", "thermostat"),
+    # Health, pharmacy and telehealth
+    "goodrx.com": ("GoodRx", "health"),
+    "cvs.com": ("CVS", "health"),
+    "walgreens.com": ("Walgreens", "health"),
+    "teladoc.com": ("Teladoc", "health"),
+    "betterhelp.com": ("BetterHelp", "health"),
+    "myfitnesspal.com": ("MyFitnessPal", "health"),
+    # Banking, payments and credit
+    "chase.com": ("Chase", "finance"),
+    "venmo.com": ("Venmo", "finance"),
+    "affirm.com": ("Affirm", "finance"),
+    "creditkarma.com": ("Credit Karma", "finance"),
+    # Shopping
+    "target.com": ("Target", "shopping"),
+    "walmart.com": ("Walmart", "shopping"),
+    "ebay.com": ("eBay", "shopping"),
+    # Work tools and job sites
+    "slack.com": ("Slack", "work"),
+    "zoom.us": ("Zoom", "work"),
+    "teams.microsoft.com": ("Microsoft Teams", "work"),
+    "indeed.com": ("Indeed", "jobs"),
+    "glassdoor.com": ("Glassdoor", "jobs"),
+    "ziprecruiter.com": ("ZipRecruiter", "jobs"),
+    # News, religion and politics
+    "nytimes.com": ("The New York Times", "news"),
+    "foxnews.com": ("Fox News", "news"),
+    "cnn.com": ("CNN", "news"),
+    "npr.org": ("NPR", "news"),
+    "biblegateway.com": ("Bible Gateway", "religion"),
+    "quran.com": ("Quran.com", "religion"),
+    "chabad.org": ("Chabad.org", "religion"),
+    "democrats.org": ("Democratic Party", "politics"),
+    "gop.com": ("Republican Party", "politics"),
+    "ballotpedia.org": ("Ballotpedia", "politics"),
+    # Voice assistants
+    "avs-alexa-na.amazon.com": ("Amazon", "assistant"),
+    "alexa.na.gateway.devices.a2z.com": ("Amazon", "assistant"),
+    "guzzoni.apple.com": ("Apple", "assistant"),
+    # Ad ID syncing: matching one person's IDs across companies and devices
+    "rlcdn.com": ("LiveRamp", "id-sync"),
+    "id5-sync.com": ("ID5", "id-sync"),
+    "tapad.com": ("Tapad", "id-sync"),
+    "uidapi.com": ("The Trade Desk", "id-sync"),
 }
 
-TRACKING = {"telemetry", "ads", "analytics", "tracking"}
+TRACKING = {"telemetry", "ads", "analytics", "tracking", "id-sync"}
 HUMAN = {"streaming"}  # traffic that means a person is using the device
 SECURITY = {"camera", "doorbell", "alarm"}  # devices protecting the house; Eddie advises never blocking them
 
