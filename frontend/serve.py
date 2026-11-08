@@ -374,12 +374,14 @@ class Handler(SimpleHTTPRequestHandler):
             except Exception:
                 return self.json_response(502, {'message': 'The traffic API did not confirm the change.'})
         if self.path == '/api/devices/update':
-            # Name a device, or mark it as a child's or an adult's (#119): {mac, label?, kid?} -> PUT /devices/<mac>.
+            # Name a device, or mark it as a child's, phone, or security device: {mac, label?, kid?, phone?, security?} -> PUT /devices/<mac>.
             mac = body.get('mac') if isinstance(body, dict) else None
-            change = {k: body[k] for k in ('label', 'kid') if isinstance(body, dict) and k in body}
+            change = {k: body[k] for k in ('label', 'kid', 'phone', 'security') if isinstance(body, dict) and k in body}
             if (not device_key(mac) or not change or ('kid' in change and not isinstance(change['kid'], bool))
-                    or ('label' in change and not isinstance(change['label'], (str, type(None))))):
-                return self.json_response(400, {'message': 'Expected a device and a label or kid.'})
+                    or ('phone' in change and not isinstance(change['phone'], bool))
+                    or ('label' in change and not isinstance(change['label'], (str, type(None))))
+                    or ('security' in change and not isinstance(change['security'], bool))):
+                return self.json_response(400, {'message': 'Expected a device and a label, kid, phone or security.'})
             try:
                 return self.json_response(200, api_request(f'/devices/{mac}', change, timeout=5, method='PUT'))
             except urllib.error.HTTPError as error:
