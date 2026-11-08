@@ -73,5 +73,38 @@ class MatcherThreshold(unittest.TestCase):
         self.assertIn('block the Fire Stick', local_intent.EXAMPLES[None])
 
 
+@unittest.skipUnless((local_intent.MODEL_DIR / 'model.onnx').exists(), 'needs scripts/provision_voice.py')
+class RealModel(unittest.TestCase):
+    """The pinned model on sentences that aren't in EXAMPLES (#192)."""
+    @classmethod
+    def setUpClass(cls):
+        cls.matcher = local_intent.Matcher()
+
+    def tearDown(self):
+        voice_agent.intent_model = None
+
+    def test_updates_and_house_check_ins_get_the_summary(self):
+        for text in ('Give me an update', "How's the house doing?", 'Summarize the last hour',
+                     'Anything interesting happening?'):
+            with self.subTest(text=text):
+                self.assertEqual('summary', self.matcher.match(text))
+
+    def test_other_rephrasings_route(self):
+        for text, intent in (('Is my iPhone chatting with anybody?', 'device_activity'),
+                             ('Did Eddie stop anything in the last hour?', 'recent_blocks'),
+                             ('Which domains got blocked?', 'recent_blocks')):
+            with self.subTest(text=text):
+                self.assertEqual(intent, self.matcher.match(text))
+
+    @patch('voice_agent.request', return_value={'text': 'x', 'devices': [
+        {'device': 'Fire Stick', 'requests': 31, 'blocked': 12, 'flagged': 0, 'blocked_companies': []}]})
+    def test_tv_control_and_listings_get_no_traffic_answer(self, request):
+        voice_agent.intent_model = lambda text, domain=None: local_intent.answer(self.matcher, text, domain)
+        for text in ('Turn the TV off', "What's on TV tonight?", 'Mute the TV', 'Lower the volume on the TV'):
+            with self.subTest(text=text):
+                self.assertIsNone(self.matcher.match(text))
+                self.assertNotIn('requests', voice_agent.route(text))
+
+
 if __name__ == '__main__':
     unittest.main()
