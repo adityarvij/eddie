@@ -50,7 +50,7 @@ import time
 
 from dnslib import AAAA, QTYPE, RCODE, RR, A, DNSRecord
 
-from . import away, decision, devices, geoip, home, lists, offline, quarantine, rules
+from . import away, decision, devices, geoip, home, lists, nft, offline, quarantine, rules
 from . import store
 from .feed import FeedPublisher, feed_from_env, query_event
 from .store import QueryLog, query_log_from_env
@@ -223,6 +223,8 @@ async def resolve(packet: bytes, client_ip: str, upstreams: list[tuple[str, int]
     if verdict.action == "spoof":
         return (spoof_reply(request, spoof["ip"]) if spoof["ip"] else block_reply(request)).pack()
     if verdict.action == "block":
+        if verdict.source == "home_mode" and client_ip and not client_ip.startswith("127."):
+            nft._run_nft(["add", "element", "inet", "eddie", "homeblock", f"{{ {client_ip} }}"])
         return block_reply(request).pack()
 
     if request.q.qtype == QTYPE.AAAA and decision.matches(domain, decision.CAMERA_DOMAINS):

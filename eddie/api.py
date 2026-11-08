@@ -55,7 +55,7 @@ from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocket
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, StrictBool, field_validator
 
-from . import acr, away, coach, baselines, beacons, bypass, decision, demo_week, devices, home, inferences, insights, labels, occupancy, offline, quarantine, questions, rollback, rules, store
+from . import acr, away, coach, baselines, beacons, bypass, decision, demo_week, devices, home, inferences, insights, labels, nft, occupancy, offline, quarantine, questions, rollback, rules, store
 from .events import Action, AIVerdictEvent, GeoAlertEvent, ModeUpdate, NewDeviceEvent, OfflineUpdate, QuarantineUpdate, QueryEvent
 
 # In memory for now; SQLite (store.py) replaces this once the DNS side lands.
@@ -93,6 +93,8 @@ async def lifespan(_app: FastAPI):
         yield
         return
     home_state()
+    if state["home_mode"]:
+        nft.apply_home_mode(True, rules_db())
     task = asyncio.create_task(watch_presence())
     try:
         yield
@@ -469,6 +471,7 @@ async def set_home(on: bool, manual: bool, reason: str) -> dict:
         conn = rules_db()
         rev = home.write(conn, on, manual)
         state["home_mode"] = on
+        nft.apply_home_mode(on, conn)
         result = {"home_mode": on, "home_manual": manual, "home_applied": await wait_applied(conn, rev, home.loaded)}
     await broadcast({"type": "mode", **result, "reason": reason})
     return result
