@@ -12,13 +12,16 @@ import sqlite3
 import time
 from typing import Literal
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 
 # A domain of two or more labels, optionally "*." for it and its subdomains.
 # A wildcard over a bare TLD ("*.com") is refused, and so is an IP address: no
 # top-level domain is all digits, so a numeric last label means it isn't a name.
 PATTERN = re.compile(r"(\*\.)?[a-z0-9_-]+(\.[a-z0-9_-]+)+")
 NUMERIC_TLD = re.compile(r".*\.[0-9]+")
+# Lockdown (#17): a device block rule on every domain. The device's own rules
+# and the essentials allowlist still beat it (decision.py), so it can't brick one.
+EVERYTHING = "*"
 # A device key from /devices: its MAC, or its client IP while the MAC is unknown.
 DEVICE = re.compile(r"[0-9a-z:._-]{1,64}")
 COLUMNS = ("id", "scope", "device_mac", "pattern", "action", "created_by", "ts")
@@ -26,7 +29,7 @@ COLUMNS = ("id", "scope", "device_mac", "pattern", "action", "created_by", "ts")
 
 class RuleIn(BaseModel):
     pattern: str
-    action: Literal["allow", "block"]
+    action: Literal["allow", "block", "spoof"]
     device_mac: str | None = None  # None for a rule that covers every device
     created_by: Literal["user", "voice", "agent"] = "user"
 
@@ -34,6 +37,8 @@ class RuleIn(BaseModel):
     @classmethod
     def check_pattern(cls, v: str) -> str:
         v = v.strip().lower().rstrip(".")
+        if v == EVERYTHING:
+            return v
         if len(v) > 253 or not PATTERN.fullmatch(v) or NUMERIC_TLD.fullmatch(v):
             raise ValueError("expected a domain like a.com, or *.a.com for it and its subdomains")
         return v
@@ -47,6 +52,12 @@ class RuleIn(BaseModel):
         if not DEVICE.fullmatch(v):
             raise ValueError("expected a MAC address or client IP")
         return v
+
+    @model_validator(mode="after")
+    def check_everything(self) -> "RuleIn":
+        if self.pattern == EVERYTHING and (self.action != "block" or self.device_mac is None):
+            raise ValueError("* (lockdown) is only a block rule for one device")
+        return self
 
 
 def _row(row) -> dict:

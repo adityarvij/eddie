@@ -27,6 +27,8 @@ class ConfirmationFlow(unittest.TestCase):
         patches = [
             patch.dict(voice_agent.RISKY_ACTIONS, {'lockdown': self.action}),
             patch.object(voice_agent, 'RISKY_COMMANDS', [lockdown_command]),
+            # The generic flow, not the real lockdown parser (tests/test_voice_lockdown.py).
+            patch.object(voice_agent, 'lockdown_target', lambda raw: None),
             patch.object(voice_agent, 'confirmation', voice_agent.Confirmation(clock=self.clock)),
             patch('voice_agent.request'),
         ]

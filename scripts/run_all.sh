@@ -11,6 +11,10 @@ command -v docker >/dev/null || PATH="/Applications/Docker.app/Contents/Resource
 profile=(--profile fake)
 [[ "${1:-}" == "--no-fake" ]] && profile=()
 
+# The containerised API sees host callers (classifier, voice, DNS) as remote, so they share a token (#96).
+# Set EDDIE_API_TOKEN yourself to give the same one to a DNS server started in another shell.
+export EDDIE_API_TOKEN="${EDDIE_API_TOKEN:-$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')}"
+
 docker compose ${profile[@]+"${profile[@]}"} up -d --build --wait
 
 echo "API: http://localhost:8000   Dashboard: http://localhost:5173"

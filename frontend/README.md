@@ -24,19 +24,19 @@ Then open `http://<Mac IP>:5173` on the iPad. Other devices can view the page, t
 
 The voice pipeline now uses openWakeWord and faster-whisper. Follow [offline model provisioning and voice setup](../voice/README.md) before enabling the microphone. Custom models are not bundled. Piper supplies portable speech; installed macOS speech remains a development fallback.
 
-Supported tools: factual backend summaries and explicit home-mode on/off. Domain rules, lockdown, email and general agent conversation remain pending.
+Supported voice tools: factual backend summaries, explicit home-mode on/off, block, allow, undo and “lock down <device>” (see [voice/README.md](../voice/README.md)). Email remains pending.
 
 ## Rules and confirmations (#19)
 
 Under the counts, **rules** lists up to five active rules, newest first (`block device-metrics-us.amazon.com · Fire Stick · by voice`), from `GET /api/rules`, which `serve.py` relays read-only from the traffic API (`EDDIE_API_URL`, default `http://127.0.0.1:8000`) so the iPad needs no CORS or direct API access. It refreshes on connect and on every `rule_change` event, and says `unavailable` if the API or `eddie.db` is not reachable. The device panel (#35, below) sits beside it.
 
-The page no longer has buttons for the report; `window.eddie.renderReport(report)` still shows a report panel above the feed with each fact, its evidence and confidence, from `GET /api/what-they-know` (live, last week, from `eddie.db` when the DNS server has logged lookups, else the in-memory feed; the title says “from eddie.db” in the first case) or `GET /api/what-they-know?demo=1`, both still relayed read-only by `serve.py` (voice uses the live report). The demo report always carries an inverted "DEMO DATA · …" banner and "DEMO WEEK" in its title; live reports never do.
+The page no longer has buttons for the report; `window.eddie.renderReport(report)` still shows a report panel above the feed with each fact, its evidence and confidence, from `GET /api/what-they-know` (live, all retained history, from `eddie.db` when the DNS server has logged lookups, else the in-memory feed; the title says “from eddie.db” in the first case) or `GET /api/what-they-know?demo=1`, both still relayed read-only by `serve.py` (voice uses the live report). The demo report always carries an inverted "DEMO DATA · …" banner and "DEMO WEEK" in its title; live reports never do.
 
 Each `rule_change` adds a `[rule]` feed row and a toast, e.g. “Rule added: block device-metrics-us.amazon.com · Fire Stick · by voice”. The event is sent before DNS acknowledges the rule, so the dashboard says “added”, never “blocked”.
 
 While voice is `confirming`, the overlay shows Eddie's read-back (“Lock down the TV?”) and “SAY YES TO CONFIRM OR NO TO CANCEL”. Both clear on the next reply, on dismissal (Escape, ✕, silence) and when `expires_in_ms` runs out. Nothing is hover-only and nothing is stored in the browser.
 
-Manual check (needs the API and DNS server sharing one `eddie.db`, plus this bridge):
+Manual check (needs the API and DNS server sharing one `eddie.db`, plus this bridge). Against the Docker API, add `-H "Authorization: Bearer $EDDIE_API_TOKEN"` to the `curl` writes below, since it sees the host as remote:
 
 1. Open the dashboard on the Mac and on the iPad (kiosk / Add to Home Screen).
 2. `curl -X POST localhost:8000/rules -H 'Content-Type: application/json' -d '{"pattern":"device-metrics-us.amazon.com","action":"block","created_by":"voice"}'`: both screens show the toast and `[rule]` row, and the list shows the rule.
@@ -44,7 +44,7 @@ Manual check (needs the API and DNS server sharing one `eddie.db`, plus this bri
 4. With a confirmation-gated command available, say it: the read-back and yes/no hint stay up through the follow-up listening; wait 15 s and they clear; repeat and press ✕, and they clear.
 5. Reload the iPad page: the list comes back from the API; no toast, feed row or prompt is restored.
 
-Not yet run on hardware: steps 1 to 5 on the iPad in kiosk mode. Step 4 can't be done by voice yet, because no spoken command reaches the confirmation slot until lockdown or email is wired; `node tests/test_frontend_events.cjs` covers expiry and dismissal.
+Not yet run on hardware: steps 1 to 5 on the iPad in kiosk mode. For step 4, “allow Netflix” or “lock down the TV” (with a device labelled TV) reach the confirmation slot; `node tests/test_frontend_events.cjs` covers expiry and dismissal.
 
 ## Devices and mode toggles (#35)
 
@@ -56,6 +56,7 @@ The toggles only ever show state the backend acknowledged:
 - If the API errors or doesn't answer within 10 seconds, a toast says "Home mode change not confirmed: …" and the toggle reloads its real state from the API.
 - Offline mode that the API stored but the DNS server hasn't loaded (`applied: false`) shows in red: "offline mode on not yet applied by DNS". It clears when the DNS server picks it up.
 - Home mode on always adds "home mode is a backend flag; DNS does not enforce it yet", because `decision.py` ignores it.
+- Away mode (#109, set by voice or `POST /mode`) has no toggle. Once DNS has loaded it, a note reads e.g. "away mode: on until Sun 11:59 PM · cutting telemetry from Fire Stick, Laptop · Ring device stays up"; before that, "away mode on not yet applied by DNS" in red. It follows the API's `away_mode` broadcast and the 30-second refresh, and disappears at its end time.
 
 From the iPad the toggles need the pairing link (`#pair=…`); without it they answer 401 and the toast says to pair. Tap targets are 44 px; nothing is hover-only.
 

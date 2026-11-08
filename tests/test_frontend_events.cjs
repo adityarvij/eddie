@@ -22,27 +22,46 @@ const source=fs.readFileSync('frontend/app.js','utf8');
 vm.runInNewContext(source,context);
 socket.onmessage({data:JSON.stringify({domain:'example.org',device:'TV',action:'allow',ts:Date.now()})});
 assert.equal(get('requests').textContent,'1');
-socket.onmessage({data:JSON.stringify({type:'ai_verdict',domain:'example.org',label:'needed',confidence:.9,reason:'App content',ts:Date.now()})});
+const tag=row=>row.children.at(-1).children[0];  // a row ends with the line: [tag, text]
+const verdictTs=new Date(2026,0,1,9,5,7).getTime();
+socket.onmessage({data:JSON.stringify({type:'ai_verdict',domain:'example.org',label:'needed',confidence:.9,reason:'App content',ts:verdictTs})});
 assert.equal(get('requests').textContent,'1','AI events must not be counted as DNS requests');
 assert.equal(get('allowed').textContent,'1');
-assert.match(get('feed').children.at(-1).textContent,/^\[ai\] example\.org → needed/);
-const tag=row=>row.children.at(-1).children[0];  // a row ends with the line: [tag, text]
-assert.equal(tag(get('feed').children.at(-1)).className,'tag tag-ai');
+assert.match(get('feed').children.at(-1).textContent,/\[approved \(ai\)\] example\.org — App content$/);
+assert.equal(tag(get('feed').children.at(-1)).className,'tag tag-allow','an AI line is coloured like its result');
+for (const [label, shown] of [['unsure','unsure (ai)'],['tracker','flagged (ai)']]) {
+  socket.onmessage({data:JSON.stringify({type:'ai_verdict',domain:'t.example',label,confidence:.6,reason:'Why',ts:verdictTs})});
+  assert.equal(tag(get('feed').children.at(-1)).textContent,`[${shown}]`,'the AI never blocks, so a tracker reads flagged');
+  assert.equal(tag(get('feed').children.at(-1)).className,'tag tag-flag');
+}
+assert.equal(get('feed').children.at(-1).children[0].textContent,new Date(verdictTs).toLocaleTimeString([],{hour12:false}),'an AI line starts with the verdict time');
 socket.onmessage({data:JSON.stringify({domain:'ads.example',device:'TV',action:'block',reason:'On a list',ts:Date.now()})});
 assert.match(get('feed').children.at(-1).textContent,/\[blocked\] TV → ads\.example — On a list$/);
 assert.equal(tag(get('feed').children.at(-1)).className,'tag tag-block');
+socket.onmessage({data:JSON.stringify({domain:'t.example',device:'TV',action:'spoof',reason:'global rule t.example',ts:Date.now()})});
+assert.match(get('feed').children.at(-1).textContent,/\[spoofed\] TV → t\.example — global rule t\.example$/);
+assert.equal(tag(get('feed').children.at(-1)).className,'tag tag-spoof');
 socket.onmessage({data:JSON.stringify({domain:'new.example',device:'TV',action:'flag',ts:Date.now()})});
 assert.match(get('feed').children.at(-1).textContent,/\[flagged\] TV → new\.example$/);
 assert.match(get('feed').children[0].textContent,/\[approved\] TV → example\.org$/);
 
 // Rule changes: a [rule] feed row and a toast that say stored, never enforced.
 socket.onmessage({data:JSON.stringify({type:'rule_change',change:'added',id:7,pattern:'device-metrics-us.amazon.com',action:'block',device_mac:'f0:4f:7c:11:22:33',device:'Fire Stick',created_by:'voice'})});
-assert.equal(get('feed').children.at(-1).textContent,'[rule] Rule added: block device-metrics-us.amazon.com · Fire Stick · by voice');
+assert.equal(tag(get('feed').children.at(-1)).parent.textContent,'[rule] Rule added: block device-metrics-us.amazon.com · Fire Stick · by voice');
+assert.match(get('feed').children.at(-1).children[0].textContent,/^\d{2}:\d{2}:\d{2}$/,'a rule line starts with its time');
 assert.equal(tag(get('feed').children.at(-1)).className,'tag tag-rule');
 assert.equal(get('notice').textContent,'Rule added: block device-metrics-us.amazon.com · Fire Stick · by voice');
 socket.onmessage({data:JSON.stringify({type:'rule_change',change:'removed',id:8,pattern:'a.example',action:'allow',device_mac:null,device:null,created_by:'api'})});
 assert.equal(get('notice').textContent,'Rule removed: allow a.example · all devices · by api');
-assert.equal(get('requests').textContent,'3','rule changes are not DNS requests');
+assert.equal(get('requests').textContent,'4','rule changes are not DNS requests');
+
+// Bypass suspicions: a [bypass?] row and a toast with the API's reason; not a DNS request.
+const bypassReason='TV looked up dns.google (Google Public DNS), an encrypted DNS resolver. It may be sending some lookups there.';
+socket.onmessage({data:JSON.stringify({type:'bypass_suspected',ts:Date.now(),device_mac:'f0:4f:7c:11:22:33',device:'TV',domain:'dns.google',resolver:'Google Public DNS',blocked:false,reason:bypassReason})});
+assert.equal(tag(get('feed').children.at(-1)).parent.textContent,`[bypass?] ${bypassReason}`);
+assert.equal(tag(get('feed').children.at(-1)).className,'tag tag-bypass');
+assert.equal(get('notice').textContent,bypassReason);
+assert.equal(get('requests').textContent,'4','bypass suspicions are not DNS requests');
 
 // Confirming shows the pending read-back, and clears on expiry and on dismissal.
 const confirm=()=>socket.onmessage({data:JSON.stringify({type:'voice_state',state:'confirming',kind:'lockdown',prompt:'Lock down the TV?',expires_in_ms:15000})});
@@ -59,6 +78,11 @@ assert.equal(get('assistant-pending').hidden,true,'dismissal clears the pending 
 assert.equal(get('assistant-pending').textContent,'');
 
 assert.doesNotMatch(source,/localStorage|sessionStorage|indexedDB|document\.cookie/,'nothing is persisted client-side');
+// A snapshot's verdicts sit among its DNS lines by time, not in a block at the end.
+socket.onmessage({data:JSON.stringify({type:'snapshot',events:[
+  {domain:'a.example',device:'TV',action:'flag',ts:1000},{domain:'c.example',device:'TV',action:'allow',ts:3000}],
+  ai_verdicts:[{type:'ai_verdict',domain:'b.example',label:'needed',reason:'Why',ts:2000}],totals:{seen:2,blocked:0}})});
+assert.deepEqual(get('feed').children.map(row=>row.textContent.match(/[abc]\.example/)[0]),['a.example','b.example','c.example']);
 console.log('Frontend query/verdict/rule/confirmation event checks passed');
 
 // "What they know": the demo week always shows its banner; live facts never do.
@@ -97,6 +121,15 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   await answer('/api/mode', 200, {home_mode:false, offline:false, offline_applied:true});
   assert.equal(get('home-mode').attrs['aria-label'], 'home mode: off');
   assert.equal(get('home-mode').disabled, false);
+  // A stored spoof rule (#99) turns the house into Pinocchio; the button still toggles home mode.
+  assert.equal(get('home-mode').attrs['data-spoofing'], 'false');
+  await answer('/api/rules', 200, [{id:1, pattern:'*.tracker.example', action:'spoof', device:null, created_by:'user'},
+                                   {id:2, pattern:'a.example', action:'block', device:null, created_by:'user'}]);
+  assert.equal(get('home-mode').attrs['data-spoofing'], 'true');
+  assert.equal(get('home-mode').attrs['aria-label'], 'home mode: off · spoofing 1 rule');
+  context.renderRules([]);
+  assert.equal(get('home-mode').attrs['data-spoofing'], 'false');
+  assert.equal(get('home-mode').attrs['aria-label'], 'home mode: off');
   assert.equal(get('offline-mode').textContent, 'offline mode: off');
   assert.equal(get('mic').textContent, 'start mic');
   socket.onmessage({data:JSON.stringify({type:'voice_status',status:'ready',engine:'vosk'})});
@@ -146,6 +179,21 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   assert.equal(get('home-mode').attrs['aria-label'], 'home mode: off');
   assert.equal(get('home-note').textContent, '');
   assert.equal(get('requests').textContent, '0', 'mode events are not DNS requests (the snapshot reset the count)');
+
+  // Away mode shows only once DNS has loaded it, with who it covers and who stays up.
+  const away = {type:'away_mode', away:true, away_until:null, away_applied:false,
+    away_devices:[{key:'a', name:'TV', score:3}, {key:'b', name:'Laptop', score:1}], away_exempt:[{key:'c', name:'Porch cam'}]};
+  socket.onmessage({data:JSON.stringify(away)});
+  assert.equal(get('away-note').textContent, 'away mode on not yet applied by DNS');
+  socket.onmessage({data:JSON.stringify({...away, away_applied:true})});
+  assert.equal(get('away-note').textContent, 'away mode: on · cutting telemetry from TV, Laptop · Porch cam stays up');
+  const until = Date.now() + 3600000;
+  socket.onmessage({data:JSON.stringify({...away, away_applied:true, away_until:until, away_exempt:[]})});
+  assert.equal(get('away-note').textContent, `away mode: on until ${new Date(until).toLocaleString([], {weekday:'short', hour:'numeric', minute:'2-digit'})} · cutting telemetry from TV, Laptop`);
+  socket.onmessage({data:JSON.stringify({...away, away_applied:true, away_until:Date.now() - 1})});
+  assert.equal(get('away-note').textContent, '', 'past its end time it is off');
+  socket.onmessage({data:JSON.stringify({type:'away_mode', away:false, away_until:null, away_applied:true, away_devices:[], away_exempt:[]})});
+  assert.equal(get('away-note').textContent, '');
 
   // No backend: the toggles say unavailable and can't be pressed.
   timers.filter(t => t.ms === 30000).at(-1).fn();

@@ -32,12 +32,13 @@ Configuration:
 | `EDDIE_INPUT_DEVICE` | Default microphone; device name or numeric index |
 | `EDDIE_PIPER_MODEL` | Absolute voice model path; companion JSON required |
 | `EDDIE_API_URL` | `http://127.0.0.1:8000`; use the Pi address for split deployment |
+| `EDDIE_API_TOKEN` | Bearer token for the traffic API's writes (rules, modes); needed when the API isn't on this machine's loopback, such as in Docker or on the Pi |
 
 Say “Hey Eddie,” then ask your question. The detector uses 16 kHz mono audio in 80 ms frames. Recording ends after 800 ms of silence following speech, or after 10 seconds of speech. After each reply Eddie listens again for a follow-up without the wake phrase; if no speech starts within 4 seconds, the conversation ends and Eddie is dismissed. Audio stays in memory. Speech output suspends recognition and queued audio is discarded before rearming. There is no always-on cloud transcription.
 
-Questions go to the local Ollama agent (`voice/ollama_agent.py`, #29) when it's reachable: “What's the TV doing?”, “What got blocked recently?”, “Why was device-metrics-us.amazon.com blocked?”. It only reads traffic through four tools, every number it says must come from those tools, and if Ollama is down the keyword router below answers instead. `EDDIE_AGENT=off` disables it; `EDDIE_OLLAMA_URL` and `EDDIE_AGENT_MODEL` (default `llama3.2:3b`, provisioned with `ollama pull`) configure it. Try it typed with `EDDIE_API_URL=http://127.0.0.1:8000 python voice/ollama_agent.py "What's the TV doing?"`. See [architecture](../docs/ARCHITECTURE.md#local-tool-calling-agent-29).
+Questions go to the local Ollama agent (`voice/ollama_agent.py`, #29) when it's reachable: “What's the TV doing?”, “What got blocked recently?”, “Why was device-metrics-us.amazon.com blocked?”. It reads traffic through four tools, every number it says must come from those tools, and if Ollama is down the keyword router below answers instead. It can also propose a change (see [plain-English rules](#plain-english-rules-108)); nothing runs without a spoken yes. `EDDIE_AGENT=off` disables it; `EDDIE_OLLAMA_URL` and `EDDIE_AGENT_MODEL` (default `llama3.2:3b`, provisioned with `ollama pull`) configure it. Try it typed with `EDDIE_API_URL=http://127.0.0.1:8000 python voice/ollama_agent.py "What's the TV doing?"`. See [architecture](../docs/ARCHITECTURE.md#local-tool-calling-agent-29).
 
-Keyword commands: “What's been going on?” (backend facts), “What do they know about me?” / “What do companies know about me?” (reads `GET /what-they-know?hours=168`, up to a week; the local model, when on, rewrites the backend's facts into at most five checked “Someone could guess …” lines, otherwise Eddie speaks the backend template), “turn on home mode”, “turn off home mode”, “block it” / “block device-metrics-us.amazon.com”, “allow Netflix” / “allow api.example.com” and “undo that” (below). Home mode updates backend state; actual network enforcement still depends on Will's decision engine. Lockdown and email are pending; the confirmation step lockdown and email will use is built and already guards service allows (see below). Typed questions use the same router. Do not claim these pending tools work.
+Keyword commands: “What's been going on?” (backend facts), “What do they know about me?” / “What do companies know about me?” (honors ranges such as “the last 3 days,” otherwise uses all retained history; longer requests are capped with disclosure, and Eddie says there is not enough data instead of guessing; the local model, when on, rewrites the backend's facts into at most five checked “Someone could guess …” lines, otherwise Eddie speaks the backend template), “turn on home mode”, “turn off home mode”, “I'm leaving for the weekend” / “I'm back” (away mode, below), “block it” / “block device-metrics-us.amazon.com”, “allow Netflix” / “allow api.example.com” and “undo that” (below). Home mode updates backend state; actual network enforcement still depends on Will's decision engine. Lockdown and email are pending; the confirmation step lockdown and email will use is built and already guards service allows (see below). Typed questions use the same router. Do not claim these pending tools work.
 
 ## Verification before demo
 
@@ -48,7 +49,7 @@ Keyword commands: “What's been going on?” (backend facts), “What do they k
 - Test self-trigger prevention with loud replies. No barge-in is supported yet.
 - Recheck latency, sound hardware, model licenses and memory on final ARM64 hardware.
 
-Automated command-routing, confirmation and provisioning tests: `python -m unittest discover -s tests -p 'test_voice*.py'`.
+Automated command-routing (including lockdown), confirmation and provisioning tests: `python -m unittest discover -s tests -p 'test_voice*.py'`.
 
 ## Development prototype launch (2026-11-07)
 
@@ -116,9 +117,79 @@ The list lives in the worker's memory: up to 20 commands, kept across conversati
 
 Undo has no read-back confirmation; it only puts back the previous decision. A failed block or allow leaves nothing to undo. A rule a timed-out add stored anyway isn't on the list; remove it from the dashboard.
 
+## Lock down a device (#17)
+
+“Lock down the TV”, “please lock down my Fire Stick” or “can you lockdown the kids' iPad?” blocks everything for one device except a keep list, after a spoken yes. The device name is matched against the labels set on the dashboard's device panel (`GET /devices`): an exact label wins, otherwise a label containing the words (“TV” finds “Living Room TV” if it's the only one). Vendor names like “Amazon device” don't count; label the device first. The keep list is every service in `voice/services.json` (Netflix, YouTube, Prime Video, Apple TV); there's no spoken way to change it yet, so “lock down the TV to Netflix” changes nothing. The allowlist's essentials (sign-in, updates, time, captive-portal checks) always survive a lockdown, so it can't brick the device.
+
+| Request | Eddie says |
+|---|---|
+| One labelled device | “Lock down the TV? It'll only reach Netflix, YouTube, Prime Video and Apple TV, plus Eddie's essentials like sign-in and updates. Say yes to confirm or no to cancel.” Nothing is written yet; the confirmation table below applies (no, timeout, dismissal: nothing changes). |
+| No label matches | “I don't know a device called fridge. The devices I know by name are Fire Stick and TV. Label it on the dashboard's device panel, then ask again. Nothing changed.” |
+| Several labels match | “Which one: Living Room TV or Bedroom TV? Nothing changed.” |
+| Already locked down | “The TV is already locked down. Nothing changed.” |
+| Backend down | “I can't reach Eddie's backend, so I can't look up that device. Nothing changed.” |
+
+On yes Eddie adds one device allow rule per keep pattern, then the device block rule `*` last (23 rules today; each waits for DNS, so expect a few seconds).
+
+| Backend answer | Eddie says |
+|---|---|
+| Every rule stored and DNS loaded the last one | “The TV is locked down. The rules are saved and Eddie's DNS has loaded them. I haven't seen its traffic blocked yet, and it only applies while it uses Eddie for DNS.” |
+| Stored, not loaded within 2 s | “I saved the lockdown rules for the TV, but Eddie's DNS hasn't loaded them yet, so nothing is blocked yet.” |
+| The first rule fails | “I couldn't lock down the TV; the backend didn't save any rules. Nothing changed.” |
+| A later rule fails, and the saved ones are deleted again | “I only saved 5 of 23 lockdown rules for the TV before the backend stopped answering, so I removed them again. Nothing is locked down.” |
+| A later rule fails, and some saved ones can't be deleted | “… and couldn't remove 3 of them. Nothing is locked down, but those allow rules are still saved; say undo to remove them.” |
+
+Because the block rule is always last, a failure never leaves the device blocked. “Undo” after a lockdown removes all of its rules at once. The dashboard's rule list shows the block as `block * · TV · by voice`.
+
+Not yet checked on hardware: a real Fire Stick or TV under lockdown, including whether the keep patterns cover each app's sign-in and playback.
+
+## Away mode (#109)
+
+“I'm leaving for the weekend”, “we're going away until Tuesday”, “I'm away for 3 days” or “turn on away mode” turns away mode on after a spoken yes; “I'm back”, “we're home” or “turn off away mode” turns it off after a yes. The whole-utterance rule applies, so “don't turn on away mode” and “turn on away mode and block it” change nothing. A day means the end of that day, “the weekend” the end of the coming Sunday, and “for N hours/days” that long from now (up to 30 days; longer is refused with nothing changed). Eddie uses the worker's local clock.
+
+| Request | Eddie says |
+|---|---|
+| On | “Turn on away mode until the end of Sunday? I'll cut telemetry from the devices whose traffic shows when someone's home. Cameras, doorbells and alarms stay up. Say yes to confirm or no to cancel.” |
+| Off | “Turn off away mode? Say yes to confirm or no to cancel.” |
+| More than 30 days | “I can only set away mode for up to 30 days. Nothing changed.” |
+
+On yes Eddie sends `POST /mode {"away": …, "away_until": …}` and speaks only what it acknowledged:
+
+| Backend answer | Eddie says |
+|---|---|
+| On and loaded by DNS | “Away mode is on until the end of Sunday. Eddie's DNS has loaded it and is cutting telemetry from Fire Stick and Laptop. Ring device stays up.” Up to three names, then “and N more”; unlabelled devices are counted, never read out as a MAC or IP. |
+| On, no device scored | “Away mode is on, but I haven't seen a device whose traffic shows someone's home this week, so it isn't blocking anything.” |
+| On, not loaded within 2 s | “I saved away mode, but Eddie's DNS hasn't loaded it yet, so nothing is blocked yet.” |
+| Off and loaded / not loaded | “Away mode is off, and Eddie's DNS has loaded the change.” / “I turned away mode off, but Eddie's DNS hasn't loaded the change yet, so it may still block for a moment.” |
+| Backend down or a wrong echo | “I couldn't confirm that went through. Check the local backend before trying again.” |
+
+Away mode isn't on the undo list; say “I'm back” to turn it off. Tested with a fake backend (`tests/test_voice_away.py`); not yet tried by voice on the microphone.
+
+## Plain-English rules (#108)
+
+When a request isn't one of the commands above, the local model can turn it into one of four write tools: `lockdown_device(device, keep)` (“the TV can only talk to Netflix” → device “TV”, keep `["netflix"]`), `block(domain)`, `allow(service or domain)` and `set_mode(home_mode)`. Requests with write words that the keyword router can't parse (“lock down the TV to Netflix”, “block everything on the TV but Netflix”) go to the model too instead of straight to “I haven't changed anything”.
+
+The model never runs a change. `ollama_agent.Agent.write` checks the call against the tool's schema (exact keys and types, known services only, no wildcard domains, one write per question), then builds the same read-back and confirmation action a spoken command would. The rules are `created_by: voice` and “undo” removes them.
+
+| Model call | Eddie says |
+|---|---|
+| `lockdown_device("the TV", ["netflix"])` | “Lock down the TV? It'll only reach Netflix, plus Eddie's essentials like sign-in and updates. Say yes to confirm or no to cancel.” Then the lockdown tables above apply. |
+| `block("ads.example.com")` | “Block ads.example.com on every device? That adds one block rule. …” |
+| `allow(service="youtube")` / `allow(domain="api.example.com")` | The service allow read-back, or “Allow api.example.com on every device? That adds one allow rule. …” |
+| `set_mode(true)` | “Turn home mode on? …” On yes: “Home mode is saved as on. Eddie's DNS doesn't report back on home mode, so I can't say it's being enforced.” |
+| Bad arguments, an unknown tool argument or a wildcard | “I couldn't turn that into a change I can check, so nothing changed.” The model doesn't get a retry. |
+| Two writes in one answer (“turn off home mode and lock down the TV” → mode and lockdown) | “I can only set up one change at a time. Ask for them one by one. Nothing changed.” |
+| `block` on an essential (`api.amazon.com`, anything under `googlevideo.com`, …) | “api.amazon.com is one of Eddie's essentials, like sign-in, updates and time, so I won't block it. Nothing changed.” Spoken “block api.amazon.com” gets the same answer. |
+| A final answer that claims a change (“Done, Netflix is now allowed.”) | “I haven't changed anything. Ask me again and I'll read the change back for a yes.” |
+| Ollama down or slow | The keyword router's reply; nothing is pending. |
+
+Essentials are read from `allowlist.txt`, the file the DNS engine's allowlist uses; a global block rule would beat it, so voice refuses one on an entry or any subdomain of one. If the file can't be read, every voice block is refused. Allow rules and lockdowns can't remove essentials: the allowlist beats a lockdown in the decision engine. After yes, results say whether the rule is only saved or also loaded by Eddie's DNS, exactly as for spoken commands.
+
+Not yet checked: how well `llama3.2:3b` picks these tools from real speech. Tests use a stubbed model (`tests/test_voice_agent_writes.py`).
+
 ## Confirmation for risky actions
 
-Risky actions (service and wildcard allows; lockdown and email, once built) never run from the command that asks for them. `voice_agent.Confirmation` holds at most **one** pending action, `{kind, args, prompt, expires_at}`, and speaks the read-back prompt followed by “Say yes to confirm or no to cancel.”
+Risky actions (service and wildcard allows, lockdown, and every write the local model proposes; email once built) never run from the command that asks for them. `voice_agent.Confirmation` holds at most **one** pending action, `{kind, args, prompt, expires_at}`, and speaks the read-back prompt followed by “Say yes to confirm or no to cancel.”
 
 | Next reply | Result |
 |---|---|
@@ -131,7 +202,7 @@ Risky actions (service and wildcard allows; lockdown and email, once built) neve
 
 Replies must match the whole utterance after lowercasing and removing punctuation, so “yes, but not the TV” is unclear, not a yes. Typed asks use the same router. While an action is pending the bridge emits `voice_state: confirming` with `kind`, `prompt` and `expires_in_ms` (never the action's arguments); the dashboard shows “say yes or no” until the next reply, dismissal or expiry. No pending action, reply or transcript is persisted or logged.
 
-The only registered risky action is `allow` (#13), parsed in `route` from the raw text because a typed wildcard needs its dots; `RISKY_COMMANDS` stays empty until lockdown (#31) and email (#37) land. Closing the dashboard overlay by hand does not notify the worker; the 15 second expiry still applies.
+The registered risky actions are `allow` (#13) and `lockdown` (#17), both parsed in `route`: a typed wildcard needs the raw text's dots, and lockdown looks the device up first. `block` and `home_mode` are registered for the model's write tools (#108) only; spoken “block x.com” and “turn on home mode” still run directly. `RISKY_COMMANDS` stays empty until email (#37) lands. Closing the dashboard overlay by hand does not notify the worker; the 15 second expiry still applies.
 
 
 ## Noisy-room voice and ready cue (#38)

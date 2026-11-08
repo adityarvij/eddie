@@ -147,6 +147,24 @@ class DNSServerTests(ServerCase):
             times.append((time.perf_counter() - start) * 1000)
         self.assertLess(statistics.median(times), 20)
 
+    async def test_spoofed_lookup_answers_eddies_ip_without_upstream(self):
+        spoofed = decision.Decision('spoof', 'rule', 'global rule t.example')
+        with patch('eddie.decision.evaluate', return_value=spoofed), patch.dict(dns_server.spoof, ip='192.168.4.1'):
+            conn = await self.start_server([self.upstream_addr])
+            a = await self.ask(conn, 't.example')
+            aaaa = await self.ask(conn, 't.example', 'AAAA')
+        self.assertEqual(('192.168.4.1', 60), (str(a.rr[0].rdata), a.rr[0].ttl))
+        self.assertEqual((RCODE.NOERROR, []), (aaaa.header.rcode, aaaa.rr))  # no IPv6 answer: clients use the A
+        self.assertEqual(0, self.upstream.seen)
+
+    async def test_spoof_without_eddies_ip_is_blocked(self):
+        spoofed = decision.Decision('spoof', 'rule', 'global rule t.example')
+        with patch('eddie.decision.evaluate', return_value=spoofed), patch.dict(dns_server.spoof, ip=None):
+            conn = await self.start_server([self.upstream_addr])
+            a = await self.ask(conn, 't.example')
+        self.assertEqual('0.0.0.0', str(a.rr[0].rdata))
+        self.assertEqual(0, self.upstream.seen)
+
     async def test_falls_back_to_second_upstream(self):
         _, silent = await self.start_upstream(silent=True)
         silent_addr = silent.transport.get_extra_info('sockname')
@@ -303,3 +321,11 @@ class UpstreamConfigTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+    def test_spoof_ip_is_an_ipv4_address_or_off(self):
+        for value, want in (('', None), (' 192.168.4.1 ', '192.168.4.1')):
+            with patch.dict('os.environ', {'EDDIE_SPOOF_IP': value}):
+                self.assertEqual(want, dns_server.spoof_ip_from_env())
+        for value in ('eddie.local', '::1', '300.1.1.1'):
+            with patch.dict('os.environ', {'EDDIE_SPOOF_IP': value}), self.assertRaises(ValueError):
+                dns_server.spoof_ip_from_env()
