@@ -49,7 +49,8 @@ latest_audio = {}
 token = os.environ.get('EDDIE_DASHBOARD_TOKEN') or secrets.token_urlsafe(24)
 # Controls a paired device may use. Starting or stopping the microphone, and feeding traffic
 # events, stay on the Eddie computer whatever token is sent.
-PAIRED_CONTROLS = {'/api/voice/ask', '/api/mode', '/api/offline-mode', '/api/quarantine', '/api/devices/decide',
+# /api/voice/dismiss only ends a conversation (closing Eddie on the iPad); it can't open or close the mic.
+PAIRED_CONTROLS = {'/api/voice/ask', '/api/voice/dismiss', '/api/mode', '/api/offline-mode', '/api/quarantine', '/api/devices/decide',
                    '/api/devices/update', '/api/kid-mode', '/api/questions/answer', '/api/questions/undo',
                    '/api/tracker-map/block'}
 # Read-only relays to the traffic API, so the page (and the iPad) need no CORS or direct API access.
@@ -245,6 +246,33 @@ def microphone():
             voice_state['status'] = 'off'
             emit({'type': 'voice_status', 'status': 'off'})
 
+def start_microphone():
+    """Start the voice thread; False if it's already running or stopping."""
+    global voice_thread
+    with start_lock:
+        if voice_thread and voice_thread.is_alive():
+            return False
+        stopped.clear()
+        dismissed.clear()
+        voice_state['status'] = 'starting'
+        voice_thread = threading.Thread(target=microphone, daemon=True)
+        voice_thread.start()
+    return True
+
+
+def autostart_microphone(tries=6, wait=10.0):
+    """EDDIE_MIC_AUTOSTART=1: open the mic when the dashboard starts, so a box with no screen listens after
+    a boot or an update. Retries while the speakerphone comes up; a spoken "stop recording" is respected."""
+    for _ in range(tries):
+        start_microphone()
+        voice_thread.join(wait)
+        if voice_thread.is_alive():
+            return True
+        if stopped.is_set():
+            return False
+    return False
+
+
 def update_guest(body):
     """(status, payload) for the owner's Guest Mode change (#163) from the Eddie computer.
 
@@ -370,7 +398,6 @@ class Handler(SimpleHTTPRequestHandler):
             super().do_GET()
 
     def do_POST(self):
-        global voice_thread
         # A rebound domain would pass the Origin check below, so the Host must name this machine.
         if not trusted_host(self.headers.get('Host')):
             return self.json_response(403, {'message': 'Local requests only.'})
@@ -393,14 +420,8 @@ class Handler(SimpleHTTPRequestHandler):
         except (ValueError, UnicodeDecodeError):
             return self.json_response(400, {'message': 'Expected JSON.'})
         if self.path == '/api/voice/start':
-            with start_lock:
-                if voice_thread and voice_thread.is_alive():
-                    return self.json_response(200, {'message': 'Microphone is running or stopping; wait for its status.'})
-                stopped.clear()
-                dismissed.clear()
-                voice_state['status'] = 'starting'
-                voice_thread = threading.Thread(target=microphone, daemon=True)
-                voice_thread.start()
+            if not start_microphone():
+                return self.json_response(200, {'message': 'Microphone is running or stopping; wait for its status.'})
             return self.json_response(200, {'message': 'Starting the local microphone…'})
         if self.path == '/api/voice/stop':
             stopped.set()
@@ -559,4 +580,7 @@ if __name__ == '__main__':
         print(f'Viewable from the network on port {args.port}. To ask Eddie from another device, open '
               f'http://{address}:{args.port}/#pair={shown} there. '
               'The microphone only works on this computer.', flush=True)
+    if os.environ.get('EDDIE_MIC_AUTOSTART') == '1':
+        print('Starting the microphone (EDDIE_MIC_AUTOSTART=1); say "stop recording" to turn it off.', flush=True)
+        threading.Thread(target=autostart_microphone, daemon=True).start()
     ThreadingHTTPServer((args.host, args.port), Handler).serve_forever()

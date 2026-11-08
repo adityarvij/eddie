@@ -10,6 +10,8 @@ User=@USER@
 SupplementaryGroups=audio
 WorkingDirectory=@REPO@
 Environment=EDDIE_DASHBOARD_HOST=0.0.0.0
+# The Pi has no screen to press start on: listen for the wake word from boot. EDDIE_MIC_AUTOSTART=0 in the env file turns it off.
+Environment=EDDIE_MIC_AUTOSTART=1
 EnvironmentFile=@ENV@
 # install_pi.sh picks scripts/run_voice.sh when the voice environment exists, else the dashboard alone.
 ExecStart=@DASHBOARD@

@@ -81,12 +81,22 @@ class LanAccess(unittest.TestCase):
 
     def test_lan_cannot_use_mic_or_feed_controls_even_paired(self):
         for headers in ({}, {'Authorization': 'Bearer ' + serve.token}):
-            for path in ('/api/voice/start', '/api/voice/stop', '/api/voice/dismiss', '/api/events'):
+            for path in ('/api/voice/start', '/api/voice/stop', '/api/events'):
                 status, body = self.call(lan_ip(), path, {'text': 'hi', 'domain': 'x.com'}, headers)
                 self.assertEqual(403, status, path)
                 self.assertIn('Eddie computer', json.loads(body)['message'])
         self.assertFalse(serve.stopped.is_set())
         self.assertFalse(serve.dismissed.is_set())
+
+    def test_paired_ipad_can_close_eddie_but_not_the_mic(self):
+        self.addCleanup(serve.dismissed.clear)
+        status, _ = self.call(lan_ip(), '/api/voice/dismiss', {}, {})
+        self.assertEqual(401, status, 'unpaired')
+        with patch.object(serve, 'voice_thread', Mock(is_alive=Mock(return_value=True))):
+            status, _ = self.call(lan_ip(), '/api/voice/dismiss', {}, {'Authorization': 'Bearer ' + serve.token})
+        self.assertEqual(200, status)
+        self.assertTrue(serve.dismissed.is_set())
+        self.assertFalse(serve.stopped.is_set(), 'the mic stays on')
 
     def test_lan_ask_needs_the_pairing_token(self):
         with patch.object(serve, 'answer') as answer:
