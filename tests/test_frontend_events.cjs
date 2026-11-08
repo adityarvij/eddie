@@ -23,6 +23,12 @@ const styles=fs.readFileSync('frontend/style.css','utf8');
 assert.match(styles, /prefers-reduced-motion:reduce[^}]*\.character\[data-motion\]/, 'reduced motion disables role animation');
 assert.match(styles, /data-state="speaking"[^}]*--edge:45,113,255/, 'speaking remains blue for every role');
 assert.match(styles, /--edge:255,210,55/, 'listening remains yellow for every role');
+// Concierge (#162): one gold accent with a forced-colours fallback, and a hat-tip that runs once, not on a loop.
+assert.match(styles, /\.bellhop-e\{stroke:#e8b931/, 'the E is gold');
+assert.match(styles, /forced-colors:active\)\{\.character \.bellhop-hat \.bellhop-e\{stroke:CanvasText/, 'the E has a monochrome fallback');
+assert.match(styles, /\[data-hat-tip\] \.bellhop-hat\{[^}]*animation:role-hat-tip [^};]* 1\}/, 'the hat-tip plays once');
+assert.doesNotMatch(styles, /role-hat-tip[^}]*infinite/, 'the hat-tip never loops');
+assert.match(fs.readFileSync('frontend/index.html','utf8'), /<\/g><g class="role-accessory bellhop-hat"/, 'the hat is drawn over the head, outside the eyes and mouth');
 // getElementById returns the first match, so a repeated id makes one element overwrite another.
 const pageIds=[...fs.readFileSync('frontend/index.html','utf8').matchAll(/\sid="([^"]+)"/g)].map(m=>m[1]);
 assert.deepEqual(pageIds.filter((id,i)=>pageIds.indexOf(id)!==i),[],'every id in index.html is unique');
@@ -247,7 +253,7 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   assert.equal(get('character').dataset.role, 'regular', 'regular Eddie has no roof');
   const visualContract = {
     regular: ['none', 'upright', 'attentive'], home: ['roof', 'settled', 'breathe'],
-    kid: ['propeller', 'playful', 'bounce'], concierge: ['top-hat', 'formal', 'hat-tip'],
+    kid: ['propeller', 'playful', 'bounce'], concierge: ['bellhop', 'formal', 'hat-tip'],
     away: ['suitcase', 'ready', 'travel']
   };
   for (const [role, expected] of Object.entries(visualContract)) {
@@ -445,8 +451,21 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   get('guest-mode').onclick();
   assert.match(guestAsk, /every voice as a guest/);
   assert.equal(get('guest-mode').textContent, 'guest mode: off', 'not shown as on before the bridge saves it');
+  assert.equal(get('character').dataset.role, 'regular', 'a guest switch press still waiting on the bridge adds no hat');
   await answer('/api/guest', 200, {active:true, allowed:[], approvable:['house_guide','timers'], owner_only:['traffic']});
   assert.equal(get('guest-mode').textContent, 'guest mode: on');
+  // Concierge Eddie (#162): the saved profile puts the hat on and tips it once.
+  assert.equal(get('character').dataset.role, 'concierge', 'an acknowledged guest session wears the bellhop hat');
+  assert.equal(get('character').dataset.accessory, 'bellhop');
+  assert.equal(get('character').dataset.hatTip, 'once', 'activation tips the hat');
+  delete get('character').dataset.hatTip;  // stands in for the animation having played
+  context.renderModes(); context.renderGuest();
+  assert.equal(get('character').dataset.hatTip, undefined, 're-renders do not tip again');
+  socket.onclose();
+  assert.equal(get('character').dataset.role, 'regular', 'a disconnected stream drops the hat');
+  socket.onopen();
+  assert.equal(get('character').dataset.role, 'concierge', 'reconnecting to the same guest session restores the hat');
+  assert.equal(get('character').dataset.hatTip, undefined, 'a reconnect is not a new activation');
   assert.equal(get('notice').textContent, 'Guest mode is on.');
   const timersBox = get('guest-allowed').children[1].children[0];
   timersBox.checked = true; timersBox.onchange();
@@ -454,6 +473,21 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   await answer('/api/guest', 403, {message:'This control only works on the Eddie computer.'});
   assert.equal(get('notice').textContent, 'Guest mode not saved: This control only works on the Eddie computer.');
   assert.equal(get('guest-allowed').children[1].children[0].checked, false, 'a refused change is not shown');
+  // Checkout returns Eddie to the owner's acknowledged role; the next guest session tips the hat again.
+  socket.onmessage({data:JSON.stringify({type:'mode', home_mode:true, home_manual:true, home_applied:true})});
+  assert.equal(get('character').dataset.role, 'concierge', 'Guest Mode wins over home mode');
+  context.loadGuest(); await answer('/api/guest', 502, {message:'unavailable'});
+  assert.equal(get('character').dataset.role, 'home', 'an unreadable guest profile drops the hat');
+  context.loadGuest(); await answer('/api/guest', 200, {active:true, allowed:[], approvable:['house_guide','timers'], owner_only:['traffic']});
+  assert.equal(get('character').dataset.hatTip, undefined, 'a poll blip is not a new activation');
+  context.confirm = () => true; get('guest-mode').onclick();
+  await answer('/api/guest', 200, {active:false, allowed:[], approvable:['house_guide','timers'], owner_only:['traffic']});
+  assert.equal(get('character').dataset.role, 'home', 'checkout restores owner Home Eddie');
+  assert.equal(get('character').dataset.accessory, 'roof');
+  get('guest-mode').onclick();
+  await answer('/api/guest', 200, {active:true, allowed:[], approvable:['house_guide','timers'], owner_only:['traffic']});
+  assert.equal(get('character').dataset.hatTip, 'once', 'the next guest session tips the hat again');
+  socket.onmessage({data:JSON.stringify({type:'mode', home_mode:false, home_manual:true, home_applied:true})});
   console.log('Frontend guest mode checks passed');
 })().catch(error => { console.error(error); process.exit(1); });
 
