@@ -334,7 +334,7 @@ Writes from anywhere but loopback need `Authorization: Bearer $EDDIE_API_TOKEN`,
 | `draft_email` | to, subject, body | Prepares email, asks for spoken yes |
 | `send_email` | draft_id | Sends via Gmail only after confirmation |
 
-**System prompt:** "You are Eddie, a local privacy guard. Answer in two short sentences, spoken style, a little dry. Use tools for facts; never invent numbers." Write tools never run inside the model turn: Eddie checks the call against the tool's schema, reads the change back and runs it only after a spoken yes.
+**System prompt:** "You are Eddie, a local privacy guard. Answer in one short sentence, spoken style, a little dry. If you do not understand the request, reply exactly: I didn't quite catch that. Use tools for facts; never invent numbers." Write tools never run inside the model turn: Eddie checks the call against the tool's schema, reads the change back and runs it only after a spoken yes.
 
 ### Voice loop
 

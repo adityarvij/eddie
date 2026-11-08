@@ -459,7 +459,7 @@ carries open ones in `questions`:
 
 The dashboard shows the open question as a card with Block / Allow / Ignore
 (through the bridge below). The voice worker reads it out once when Eddie is
-woken ("I've got one question for you. … Say yes to confirm or no to cancel");
+woken ("… Block them? Yes or no?");
 a yes answers `block` with `by: voice`, and voice "undo" removes those rules.
 No, silence or expiry leave it open on the dashboard. Eddie never asks
 unprompted; the opt-in for that isn't built.
@@ -739,7 +739,7 @@ Wake lifecycle: `wake`, `voice_state: listening`, `voice_state: thinking`, optio
 A timer or reminder coming due (#122) sends `voice_state: thinking`, `agent_reply`, `speaking` with `title: "Timer done"` or `"Reminder"`, then `speech_end`, with or without the microphone on. If the alarm sound can't play, a `voice_status` with `message: "Alarm sound unavailable: …"` comes first and Eddie still speaks.
 
 
-Voice recovery: after an initial wake with no command, or an empty/failed transcription, Eddie says “Didn’t catch that. Try again.” and listens again. Four seconds of silence during a follow-up dismisses Eddie back to the newest feed activity. Speech inference errors recover without disabling wake detection; microphone errors and bridge disconnects close the overlay. Listening/waiting uses a yellow ambient glow, speaking uses blue. Automated voice checks pass; live microphone/noisy-room accuracy still needs rehearsal.
+Voice recovery: after an initial wake with no command, or an empty/failed transcription, Eddie says “I didn’t quite catch that.” and listens again. Four seconds of silence during a follow-up dismisses Eddie back to the newest feed activity. Speech inference errors recover without disabling wake detection; microphone errors and bridge disconnects close the overlay. Listening/waiting uses a yellow ambient glow, speaking uses blue. Automated voice checks pass; live microphone/noisy-room accuracy still needs rehearsal.
 
 Active conversation lifecycle: listening state events include `is_eddie_active: true`; after four seconds with no user speech, `voice_state: dismissed` includes `is_eddie_active: false`. This applies immediately after the wake and after every reply. Two empty transcriptions in a row also end with `dismissed`. `POST /api/voice/dismiss` (the overlay's close button; localhost only, `{"ok": true}`) ends an active conversation: the worker emits `voice_state: dismissed` instead of `listening` and waits for the wake phrase again. It also cancels any pending confirmation.
 

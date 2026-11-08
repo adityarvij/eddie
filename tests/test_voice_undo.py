@@ -88,14 +88,14 @@ class Undo(UndoBase):
         voice_agent.respond(f'block {DOMAIN}')
         self.assertEqual(self.patterns(), [DOMAIN])
         reply = voice_agent.respond('Never mind, undo that')
-        self.assertEqual(reply, f"Undone. I removed the block on {DOMAIN}, and Eddie's DNS has loaded the change.")
+        self.assertEqual(reply, f"Undid the block on {DOMAIN}.")
         self.assertEqual(self.backend.rows, {})
         self.assertEqual(voice_agent.respond('undo'), "There's nothing for me to undo.")
 
     def test_undo_after_allow_domain(self):
         voice_agent.respond('allow api.example.com')
         reply = voice_agent.respond('undo')
-        self.assertIn('removed the allow rule for api.example.com', reply)
+        self.assertEqual('Undid the allow rule for api.example.com.', reply)
         self.assertEqual(self.backend.rows, {})
 
     def test_undo_after_service_allow_removes_the_whole_set(self):
@@ -103,7 +103,7 @@ class Undo(UndoBase):
         voice_agent.respond('yes')
         self.assertEqual(len(self.backend.rows), len(NETFLIX))
         reply = voice_agent.respond('undo that')
-        self.assertEqual(reply, "Undone. I removed the allow rules for Netflix, and Eddie's DNS has loaded the change.")
+        self.assertEqual(reply, "Undid the allow rules for Netflix.")
         self.assertEqual(self.backend.rows, {})
 
     def test_newest_first(self):
@@ -117,14 +117,14 @@ class Undo(UndoBase):
     def test_survives_the_conversation_ending(self):
         voice_agent.respond(f'block {DOMAIN}')
         voice_agent.forget_conversation()
-        self.assertIn('Undone', voice_agent.respond('undo'))
+        self.assertIn('Undid', voice_agent.respond('undo'))
 
     def test_not_loaded_does_not_claim_reverted(self):
         voice_agent.respond(f'block {DOMAIN}')
         self.backend.applied = False
         reply = voice_agent.respond('undo')
         self.assertIn("hasn't loaded the change", reply)
-        self.assertNotIn('Undone', reply)
+        self.assertNotIn('Undid', reply)
 
     def test_failed_block_leaves_nothing_to_undo(self):
         self.backend.down = True
@@ -143,14 +143,14 @@ class AlreadyRemoved(UndoBase):
         with patch.object(voice_agent, 'request', side_effect=lambda path, *a, **k: (
                 listed if path == '/rules' and k.get('method') is None and not a else self.backend(path, *a, **k))):
             reply = voice_agent.respond('undo')
-        self.assertEqual(reply, f'The block on {DOMAIN} had already been removed elsewhere, so there was nothing to undo.')
+        self.assertEqual(reply, 'That was already removed.')
         self.assertEqual(self.backend.deletes, [rule_id])
         self.assertIn('a.example.com', voice_agent.respond('undo'))  # the stale entry was dropped
 
     def test_missing_from_list_is_not_deleted(self):
         voice_agent.respond(f'block {DOMAIN}')
         self.backend.rows.clear()
-        self.assertIn('already been removed', voice_agent.respond('undo'))
+        self.assertEqual('That was already removed.', voice_agent.respond('undo'))
         self.assertEqual(self.backend.deletes, [])
         self.assertEqual(voice_agent.respond('undo'), "There's nothing for me to undo.")
 
@@ -170,7 +170,7 @@ class OtherRules(UndoBase):
         rule_id = max(self.backend.rows)
         del self.backend.rows[rule_id]  # deleted from the dashboard...
         self.assertEqual(self.backend.add('dashboard.example.com', 'block', 'dashboard')['id'], rule_id)  # ...id reused
-        self.assertIn('already been removed', voice_agent.respond('undo'))
+        self.assertEqual('That was already removed.', voice_agent.respond('undo'))
         self.assertEqual(self.patterns(), ['dashboard.example.com'])
         self.assertEqual(self.backend.deletes, [])
 
@@ -180,15 +180,15 @@ class BackendDown(UndoBase):
         voice_agent.respond(f'block {DOMAIN}')
         self.backend.down = True
         reply = voice_agent.respond('undo')
-        self.assertEqual(reply, f"I can't reach Eddie's backend, so I couldn't undo the block on {DOMAIN}. Nothing changed.")
+        self.assertEqual(reply, voice_agent.UNREACHABLE)
         self.backend.down = False
-        self.assertIn('Undone', voice_agent.respond('undo'))
+        self.assertIn('Undid', voice_agent.respond('undo'))
         self.assertEqual(self.backend.rows, {})
 
     def test_delete_fails(self):
         voice_agent.respond(f'block {DOMAIN}')
         self.backend.fail_after = 0
-        self.assertIn('Nothing changed', voice_agent.respond('undo'))
+        self.assertEqual("I couldn't undo that.", voice_agent.respond('undo'))
         self.assertEqual(self.patterns(), [DOMAIN])
 
     def test_service_partly_removed_says_so_and_finishes_later(self):
@@ -196,11 +196,10 @@ class BackendDown(UndoBase):
         voice_agent.respond('yes')
         self.backend.fail_after = 2
         reply = voice_agent.respond('undo')
-        self.assertEqual(reply, f'I only removed 2 of the {len(NETFLIX)} allow rules for Netflix before '
-                                'the backend stopped answering. Say undo again to remove the rest.')
+        self.assertEqual(reply, 'I only undid part of that; say undo again.')
         self.assertEqual(len(self.backend.rows), len(NETFLIX) - 2)
         self.backend.fail_after = None
-        self.assertIn('Undone', voice_agent.respond('undo'))
+        self.assertIn('Undid', voice_agent.respond('undo'))
         self.assertEqual(self.backend.rows, {})
 
     def test_unacknowledged_delete_is_not_reported_as_undone(self):
@@ -209,8 +208,8 @@ class BackendDown(UndoBase):
         with patch.object(voice_agent, 'request', side_effect=lambda path, *a, **k: (
                 {'id': 99} if k.get('method') == 'DELETE' else real(path, *a, **k))):
             reply = voice_agent.respond('undo')
-        self.assertNotIn('Undone', reply)
-        self.assertIn('Nothing changed', reply)
+        self.assertNotIn('Undid', reply)
+        self.assertEqual("I couldn't undo that.", reply)
 
 
 if __name__ == '__main__':

@@ -60,14 +60,13 @@ class BlockDomain(BlockBase):
     @patch('voice_agent.request', return_value=ack())
     def test_applied_reply(self, request):
         reply = voice_agent.respond(f'Block {DOMAIN}')
-        self.assertEqual(reply, f"Blocked {DOMAIN} on every device. The rule is saved and Eddie's DNS has loaded it.")
+        self.assertEqual(reply, f"Blocked {DOMAIN}.")
         self.assertEqual(request.call_args_list, [rule_call()])
 
     @patch('voice_agent.request', return_value=ack(applied=False))
     def test_saved_but_not_applied_does_not_claim_blocked(self, request):
         reply = voice_agent.respond(f'block {DOMAIN}')
-        self.assertIn('saved a rule', reply)
-        self.assertIn("hasn't loaded it", reply)
+        self.assertEqual(voice_agent.SAVED_NOT_LOADED, reply)
         self.assertNotIn('Blocked', reply)
 
     @patch('voice_agent.request')
@@ -113,7 +112,7 @@ class BlockIt(BlockBase):
     @patch('voice_agent.request', side_effect=OSError('offline'))
     def test_events_unreachable_changes_nothing(self, request):
         reply = voice_agent.respond('block it')
-        self.assertIn('Nothing changed', reply)
+        self.assertEqual(voice_agent.UNREACHABLE, reply)
         self.assertEqual(request.call_count, 1)
 
     @patch('voice_agent.request')

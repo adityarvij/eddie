@@ -71,7 +71,7 @@ class Guest(unittest.TestCase):
 class Empty(unittest.TestCase):
     @patch('voice_agent.request', return_value=[])
     def test_no_rules(self, request):
-        self.assertEqual("You don't have any rules yet. Say block, then a domain, to add one.", voice_agent.route('list my rules'))
+        self.assertEqual("You don't have any rules yet.", voice_agent.route('list my rules'))
 
     @patch('voice_agent.request', side_effect=OSError('down'))
     def test_backend_down_is_said(self, request):

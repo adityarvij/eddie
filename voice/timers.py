@@ -56,8 +56,7 @@ CANCEL = re.compile(LEAD + rf'(?:cancel|stop|delete|remove|clear|turn off) (?P<a
                     rf'(?:(?:the|my) )?(?:(?P<dur2>{DURATION}) timer|{KIND}(?: (?:for|of) (?P<dur>{DURATION})'
                     rf'| (?:to|about|that) (?P<task>.+))?)(?: please)?')
 
-NOT_WHEN = ("When should I remind you? Say remind me in 10 minutes, or remind me at 6 PM, then what to do. "
-            "Nothing was set.")
+NOT_WHEN = "When should I remind you?"
 
 
 def normalize(raw):
@@ -141,14 +140,14 @@ def when(match, now):
     if match['dur']:
         seconds = duration(match['dur'])
         if not 0 < seconds <= MAX_REMINDER_DAYS * 86400:
-            return None, f"I can set reminders up to {MAX_REMINDER_DAYS} days ahead. Nothing was set."
+            return None, f"Reminders can only be {MAX_REMINDER_DAYS} days ahead."
         return now + timedelta(seconds=seconds), None
     day = match['day1'] or match['day2'] or match['day3']
     if not match['clock']:
         return None, NOT_WHEN  # "remind me tomorrow": no time
     due = clock_time(match, now, day)
     if due is None:
-        return None, "That time has already passed today. Nothing was set."
+        return None, "That time already passed today."
     return due, None
 
 
@@ -270,9 +269,9 @@ def label(kind):
 
 def set_timer(store, seconds, now):
     if not 0 < seconds <= MAX_TIMER:
-        return "I can set timers up to 24 hours. Nothing was set."
+        return "Timers can only be 24 hours."
     if store.add('timer', now.timestamp() + seconds, seconds=seconds) is None:
-        return f"You already have {MAX_ITEMS} timers and reminders, so I didn't set another. Cancel one first."
+        return f"You already have {MAX_ITEMS}; cancel one first."
     return f"Timer set for {spoken_duration(seconds)}."
 
 
@@ -282,11 +281,11 @@ def set_reminder(store, match, now):
         return problem
     task = (match['task'] or '').strip() or None
     if store.add('reminder', due.timestamp(), task=task) is None:
-        return f"You already have {MAX_ITEMS} timers and reminders, so I didn't set another. Cancel one first."
+        return f"You already have {MAX_ITEMS}; cancel one first."
     what = f" to {yours(task)}" if task else ''
     if match['dur']:
-        return f"Okay, I'll remind you in {spoken_duration(duration(match['dur']))}{what}."
-    return f"Okay, I'll remind you at {spoken_clock(due, now)}{what}."
+        return f"I'll remind you in {spoken_duration(duration(match['dur']))}{what}."
+    return f"I'll remind you at {spoken_clock(due, now)}{what}."
 
 
 def list_items(store, now):
@@ -309,12 +308,11 @@ def cancel(store, match, now):
         items = [item for item in items if item['task'] and wanted <= set(item['task'].split())]
     if not items:
         if seconds is not None or match['task']:
-            return f"I couldn't find that {kind or 'timer'}. Nothing was cancelled."
+            return f"I couldn't find that {kind or 'timer'}."
         return f"You don't have any {label(kind)}."
     if len(items) > 1 and not match['all']:
         which = join([describe(item, now) for item in items])
-        return (f"You have {len(items)}: {which}. Say which one, like cancel the timer for 10 minutes, "
-                f"or cancel all {label(kind)}. Nothing was cancelled.")
+        return f"You have {len(items)}: {which}. Which one?"
     store.remove({item['id'] for item in items})
     if len(items) > 1:
         return f"Cancelled {len(items)} {label(kind) if kind else 'timers and reminders'}."
@@ -348,11 +346,11 @@ def announcement(item, now):
     if item['kind'] == 'timer':
         text = f"Your timer for {spoken_duration(item['seconds'])} is done."
         if late:
-            text = f"Sorry, I'm late. Your timer for {spoken_duration(item['seconds'])} finished at {spoken_clock(due, now)}."
+            text = f"Your timer for {spoken_duration(item['seconds'])} finished at {spoken_clock(due, now)}."
         return 'Timer done', text
     what = f" to {yours(item['task'])}" if item['task'] else ''
     if late:
-        return 'Reminder', f"Sorry, I'm late. This was your reminder for {spoken_clock(due, now)}{what}."
+        return 'Reminder', f"Your reminder for {spoken_clock(due, now)}{what}."
     return 'Reminder', f"Reminder{what}." if what else "This is your reminder."
 
 
