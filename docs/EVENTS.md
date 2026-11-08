@@ -142,6 +142,7 @@ off loopback), and the API pushes it unchanged:
 - Not a lookup: it doesn't change `totals`. The last 50 are kept in memory
   and sent as `geo` in the `snapshot`; an API restart clears them.
 - The dashboard shows it as a `[new country?]` feed row and a toast with `reason`.
+
 ## ACR blocker: `acr_detected` (#104)
 
 For each query event whose `domain` is, or is under, a name in `eddie/acr.py`
