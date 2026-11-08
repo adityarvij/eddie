@@ -38,3 +38,7 @@ Known gaps: exchanges run by companies that are not registered brokers (Google's
 # Country names
 
 `countries.json` maps ISO 3166 alpha-2 codes to English names for alerts and speech. Generated 2026-11-07 from tzdata's `iso3166.tab` (public domain), with "&" spelled "and", "St" spelled "Saint", and a few names changed to how they're said aloud ("the United States", "the United Kingdom", "South Korea").
+
+# Domain-name model
+
+`domain_model.json` holds the classifier's weights (#181): a bias, two thresholds, about 39,000 feature weights and the build report in `meta`. `scripts/build_domain_model.py` built it on 2026-11-08 from the shipped `blocklists/*.txt` and `allowlist.txt` and the [Cisco Umbrella top-1M list](http://s3-us-west-1.amazonaws.com/umbrella-static/top-1m.csv.zip) (`top-1m.csv.zip`, downloaded 2026-11-08, SHA-256 `e1e7ef04ff50830009003e4dd5bf074601e635485c67c95fd8e103ac79b929ac`). Only learned weights are stored: no hostname list is shipped. The blocklists' own licenses apply to what the weights learned from them. Rebuild explicitly during setup; Eddie never downloads or trains it at runtime. How well it does, and how the threshold was audited, is in docs/ARCHITECTURE.md.

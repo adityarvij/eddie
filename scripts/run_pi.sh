@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Start Eddie on the Raspberry Pi (#18), no Docker: DNS on port 53, the traffic API on :8000,
 # the classifier, and the dashboard on :5173 with the voice loop when .venv-frontend is set up.
-# Ollama runs on the Pi too (its own service); EDDIE_OLLAMA_URL=http://<Mac IP>:11434 uses the Mac's instead.
+# Nothing here needs Ollama: the classifier and voice use small local models.
 #   ./scripts/run_pi.sh
 # Ctrl-C stops everything. To start on boot instead, use scripts/install_pi.sh.
 set -euo pipefail

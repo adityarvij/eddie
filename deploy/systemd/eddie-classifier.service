@@ -1,8 +1,7 @@
 [Unit]
-Description=Eddie classifier (local Ollama, or EDDIE_OLLAMA_URL)
+Description=Eddie classifier (local domain-name model)
 PartOf=eddie.target
-After=network-online.target eddie-dns.service ollama.service
-Wants=ollama.service
+After=network-online.target eddie-dns.service
 
 [Service]
 User=@USER@

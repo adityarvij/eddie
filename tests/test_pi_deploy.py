@@ -67,6 +67,11 @@ class InstallPi(unittest.TestCase):
         self.assertIn('CapabilityBoundingSet=CAP_NET_BIND_SERVICE', text)
         self.assertNotIn('User=root', text)
 
+    def test_no_unit_waits_for_ollama(self):
+        install(self.dest)
+        for name in UNITS:
+            self.assertNotIn('ollama', (Path(self.dest) / name).read_text().lower(), name)
+
     def test_dashboard_runs_voice_only_with_the_voice_environment(self):
         install(self.dest)
         text = (Path(self.dest) / 'eddie-dashboard.service').read_text()
@@ -82,7 +87,7 @@ class InstallPi(unittest.TestCase):
         self.assertGreaterEqual(len(first['EDDIE_API_TOKEN']), 32)
         self.assertGreaterEqual(len(first['EDDIE_DASHBOARD_TOKEN']), 32)
         self.assertNotEqual(first['EDDIE_API_TOKEN'], first['EDDIE_DASHBOARD_TOKEN'])
-        self.assertNotIn('EDDIE_OLLAMA_URL', first)  # Ollama on the Pi is the default
+        self.assertNotIn('EDDIE_OLLAMA_URL', first)  # no Ollama by default
         install(self.dest, '--ollama', 'http://172.20.10.2:11434')
         install(self.dest, '--ollama', 'http://172.20.10.3:11434')
         second = env(self.dest)

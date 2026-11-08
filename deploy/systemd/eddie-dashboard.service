@@ -1,8 +1,7 @@
 [Unit]
 Description=Eddie dashboard and voice (port 5173)
 PartOf=eddie.target
-After=network-online.target sound.target eddie-api.service ollama.service
-Wants=ollama.service
+After=network-online.target sound.target eddie-api.service
 
 [Service]
 User=@USER@
