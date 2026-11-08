@@ -109,5 +109,31 @@ class WhatTheyKnowTool(unittest.TestCase):
                 voice_agent.what_they_know(hours)
         request.assert_not_called()
 
+class BurglarsEyeTool(unittest.TestCase):
+    @patch('voice_agent.request', return_value={'text': "From this week's data, someone could tell the house was empty."})
+    def test_empty_house_questions_read_backend_with_the_spoken_range(self, request):
+        for phrase, path in (('When could someone tell the house was empty?', '/burglars-eye'),
+                             ('When does my house look empty?', '/burglars-eye'),
+                             ("Give me the burglar's eye report", '/burglars-eye'),
+                             ('When was nobody home in the last 3 days?', '/burglars-eye?hours=72'),
+                             ('Could a burglar tell my place was empty today?', '/burglars-eye?hours=24'),
+                             ('when is the home empty over the past 2 weeks', '/burglars-eye?hours=336')):
+            with self.subTest(phrase=phrase):
+                request.reset_mock()
+                self.assertIn('someone could tell the house was empty', voice_agent.respond(phrase))
+                request.assert_called_once_with(path)
+
+    @patch('voice_agent.request', side_effect=OSError('offline'))
+    def test_backend_failure(self, request):
+        self.assertEqual("I can't reach Eddie’s traffic backend, so I can't say when the house looked empty right now.",
+                         voice_agent.respond('when could someone tell the house was empty'))
+
+    @patch('voice_agent.request')
+    def test_tool_rejects_bad_window(self, request):
+        for hours in (0, 9000, '24', True):
+            with self.assertRaises(ValueError):
+                voice_agent.burglars_eye(hours)
+        request.assert_not_called()
+
 if __name__ == '__main__':
     unittest.main()

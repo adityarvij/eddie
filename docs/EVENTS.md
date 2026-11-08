@@ -359,6 +359,43 @@ locally retained history. The response includes `requested_hours`, actual
 `enough_data`. Longer requests are capped to retention with a `notice`; fewer
 than two observations make Eddie say there is not enough data instead of infer.
 
+## Burglar's-eye report: `GET /burglars-eye?hours=168`
+
+`hours` is 1 to 8760; omitted, a week. Like `/what-they-know`, a request longer
+than `EDDIE_RETENTION_DAYS` is cut to it, with `requested_hours`,
+`limited_by_retention: true` and a `notice` that `text` starts with. Same
+event source and device naming as `/what-they-know`. Returns `{demo: false,
+source, hours, requested_hours, limited_by_retention, notice, covered_hours,
+full_range, enough, empty_times, devices, text}`, computed in
+`eddie/occupancy.py`:
+
+- `covered_hours`: hours from the window's first lookup to now, rounded up.
+  `full_range` is true when that is within a seventh of `hours` (a week with
+  6 days of data still counts as the week). `text` then starts "From this
+  week's data" or "From the last N days"; otherwise "From recent data (2 days,
+  not the full week)".
+- `enough`: false, with `empty_times` and `devices` empty and `text` saying
+  why, when there is no traffic, under 6 hours with any lookup, or no
+  streaming at all (home and away can't be told apart).
+- Each local hour with a lookup is busy (some device streamed) or quiet. Hours
+  with no lookups at all count as neither, since Eddie may have been off.
+- `empty_times`: `{when, pattern, fact, evidence, confidence}`. With at least
+  2 days on which Eddie saw half the waking hours (6 AM to midnight), a
+  pattern: waking hours quiet on at least 80% of the days seen, per weekdays
+  and weekends when each has 2 such days, else "most days", in stretches of 2
+  hours or more. With fewer, `pattern: false` and the quiet stretches of each
+  day, and `text` says it isn't a pattern yet.
+- `devices`, highest `leak_score` first: `{device, leak_score, lookups,
+  blocked, security, never_block, per_busy_hour, per_quiet_hour, said}`.
+  `leak_score` is `round(100 * |a - b| / (a + b))` of lookups per busy hour
+  (a) and per quiet hour (b); `null` (and no per-hour fields) under 10
+  lookups. `security` is true when the device looked up a camera, doorbell or
+  alarm domain (`labels.SECURITY`); `never_block` mirrors it as advice only,
+  nothing enforces it yet (#46).
+
+`?demo=true` ignores `hours` and runs the same code on the demo week, with
+`demo: true`, `label`, and `text` starting with `label`.
+
 ## Local voice bridge (port 5173)
 
 The dashboard bridge SSE endpoint `/events` emits `voice_status` with `status` (`off`, `starting`, `ready`, `error`), optional `engine` (`vosk` prototype or `openwakeword`) and `message`. `GET /api/voice/status` returns the latest status. Start/stop POST endpoints operate the local microphone. These are separate from the traffic API on port 8000.

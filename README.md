@@ -269,6 +269,7 @@ Writes from anywhere but loopback need `Authorization: Bearer $EDDIE_API_TOKEN`,
 | GET | `/events?since=&device=` | Recent query rows |
 | GET | `/summary?window=1h` | Totals: queries, blocked, top blocked domains, top companies, per device |
 | GET | `/what-they-know?hours=24` | "What they know about you" facts `{fact, evidence, confidence}` + spoken text, from `eddie.db` (else the in-memory feed); `?demo=true` returns the labelled seeded demo week instead (see docs/EVENTS.md) |
+| GET | `/burglars-eye?hours=168` | Burglar's-eye report: when the house looked empty, devices ranked by occupancy leak score, security devices flagged `never_block`, and whether the data covered the range asked for; `?demo=true` uses the demo week (see docs/EVENTS.md) |
 | GET | `/rules` | Every rule, newest first |
 | POST | `/rules` | `{pattern, action, device_mac?, created_by?}` add rule; answers with the stored id and `applied` once DNS has loaded it (see docs/EVENTS.md) |
 | DELETE | `/rules/{id}` | Remove rule; answers with the removed rule and `applied` |
@@ -287,6 +288,7 @@ Writes from anywhere but loopback need `Authorization: Bearer $EDDIE_API_TOKEN`,
 | `get_summary` | window, device? | Reads `/summary?window=` per-device counts (implemented in `voice/ollama_agent.py`) |
 | `get_recent_blocks` | device?, limit | Last blocked domains with reasons (implemented) |
 | `what_they_know` | hours? | Reads `/what-they-know`; explicit ranges such as "the last 3 days" are honored, otherwise it uses all retained history, and the local model phrases checked inferences |
+| `burglars_eye` | hours? | Reads `/burglars-eye` (implemented in `voice/voice_agent.py`); "when could someone tell the house was empty?" speaks its text, using the range the question names |
 | `block` | pattern, device? | Adds BLOCK rule |
 | `allow` | pattern, device? | Adds ALLOW rule |
 | `lockdown_device` | device, keep (list) | Blocks everything for that device except keep patterns |
@@ -402,8 +404,8 @@ The model reads a day of facts and writes what a company (or a burglar) could in
 
 The most dangerous thing smart devices leak isn't what you watch. It's when you're home. Traffic from TVs, thermostats, smart plugs and doorbells rises and falls with people in the house, so anyone who gets that data (a breach, a broker, a compromised app) can tell when the place is empty.
 
-- **Burglar's-eye report:** a version of "What they know about you" that answers one question: "From this week's data, when could someone tell the house was empty?" Ranked by which device leaks it most.
-- **Occupancy leak score per device:** how strongly each device's traffic tracks people being home. Highest scores get blocked or quieted first.
+- **Burglar's-eye report (built, #34):** a version of "What they know about you" that answers one question: "From recent data, when could someone tell the house was empty?" (`GET /burglars-eye`, voice: "when could someone tell the house was empty?"). It reads the range asked for (a week by default, or "the last 3 days", "today"; capped at retention with a notice); when Eddie hasn't been watching that long it says the answer is from recent data and how much, and when there's too little to conclude anything it says so. Empty times are waking hours with no streaming on most days Eddie saw, split into weekdays and weekends; DNS can't tell empty from asleep. Devices are ranked by leak score.
+- **Occupancy leak score per device (built, #34):** 0 to 100, how differently a device's traffic behaves in hours someone was streaming vs hours nobody was. Highest scores get blocked or quieted first (blocking from the report is not built).
 - **Away mode (#109, built):** "Hey Eddie, I'm leaving for the weekend." Eddie cuts non-essential telemetry from devices that reveal presence, so their traffic stops showing the house is empty. Built with an interim leak score (hours of streaming or traffic bursts this week) until #34; blocks labelled telemetry, AI-flagged trackers and beacons for those devices only, never security devices. See docs/EVENTS.md.
 - **Security devices stay up:** alarm systems, cameras and doorbells keep talking to their own service in every mode. Eddie never blocks the thing protecting the house; he only blocks third parties around it.
 - **Camera and doorbell watch:** alert if a camera starts uploading to a destination it has never used, or uploads spike at an odd hour.

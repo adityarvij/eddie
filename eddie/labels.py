@@ -49,12 +49,15 @@ DOMAINS = {
     "apple.com": ("Apple", "services"),
     # Ring (home mode pitch)
     "ring.com": ("Ring", "camera"),
+    "arlo.com": ("Arlo", "camera"),
+    "simplisafe.com": ("SimpliSafe", "alarm"),
     # Misc
     "pool.ntp.org": ("NTP", "time"),
 }
 
 TRACKING = {"telemetry", "ads", "analytics", "tracking"}
 HUMAN = {"streaming"}  # traffic that means a person is using the device
+SECURITY = {"camera", "doorbell", "alarm"}  # devices protecting the house; Eddie advises never blocking them
 
 
 def registrable_domain(domain: str) -> str:

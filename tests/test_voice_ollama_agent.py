@@ -104,7 +104,7 @@ class Routing(unittest.TestCase):
 
     def test_write_tools_are_offered_but_never_run(self, request):
         names = {tool['function']['name'] for tool in ollama_agent.TOOLS}
-        self.assertEqual(names, {'get_summary', 'get_recent_blocks', 'explain_domain', 'what_they_know',
+        self.assertEqual(names, {'get_summary', 'get_recent_blocks', 'explain_domain', 'what_they_know', 'burglars_eye',
                                  'block', 'allow', 'lockdown_device', 'set_mode'})
         bot, model = agent({'tool_calls': [call('block', pattern='amazon.com')]})
         self.assertEqual(ollama_agent.answer(bot, 'block amazon'), ollama_agent.INVALID_WRITE)
