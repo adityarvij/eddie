@@ -2,6 +2,9 @@
 from collections import deque
 import numpy as np
 
+import playback
+
+
 class SpeechGate:
     def __init__(self, aggressiveness=2, minimum_rms=0.003, margin=2.0, vad=None):
         if not 0 <= aggressiveness <= 3 or not 0 < minimum_rms < 1 or margin <= 1:
@@ -42,8 +45,7 @@ def ready_cue(sd, suppressed, drain, stopped):
     try:
         t = np.arange(1280, dtype=np.float32) / 16000
         tone = .12 * np.sin(2*np.pi*660*t) * np.sin(np.pi*np.arange(1280)/1279)**2
-        sd.play(tone.astype(np.float32),16000)
-        sd.wait()
+        playback.play(sd, tone.astype(np.float32), 16000)
         stopped.wait(.16)
     finally:
         drain()
