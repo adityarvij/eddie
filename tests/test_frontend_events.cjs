@@ -31,6 +31,8 @@ assert.match(styles, /forced-colors:active\)\{\.character \.bellhop-hat \.bellho
 assert.match(styles, /\[data-hat-tip\] \.bellhop-hat\{[^}]*animation:role-hat-tip [^};]* 1\}/, 'the hat-tip plays once');
 assert.doesNotMatch(styles, /role-hat-tip[^}]*infinite/, 'the hat-tip never loops');
 assert.match(fs.readFileSync('frontend/index.html','utf8'), /<\/g><g class="role-accessory bellhop-hat"/, 'the hat is drawn over the head, outside the eyes and mouth');
+assert.match(styles, /\[data-role="home"\] \.home-roof\{display:block\}/, 'home mode shows the roof');
+assert.match(fs.readFileSync('frontend/index.html','utf8'), /<g class="role-accessory home-roof"/, 'the roof the home-mode style shows is in the page');
 const page = fs.readFileSync('frontend/index.html','utf8');
 assert.match(page, /<footer>.*id="open-rules"[^>]*>rules \(<span id="rules-count">.*id="open-devices".*id="offline-mode".*id="suggestions-open"[^>]*>suggestions<.*id="capabilities-open"[^>]*>capabilities<\/button><\/div><\/footer>/, 'footer: rules, devices, online/offline, suggestions, capabilities last');
 assert.doesNotMatch(page, /learn more/, 'learn more is gone');
