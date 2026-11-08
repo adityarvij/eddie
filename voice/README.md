@@ -36,6 +36,7 @@ Configuration:
 | `EDDIE_API_URL` | `http://127.0.0.1:8000`; use the Pi address for split deployment |
 | `EDDIE_API_TOKEN` | Bearer token for the traffic API's writes (rules, modes); needed when the API isn't on this machine's loopback, such as in Docker or on the Pi |
 | `EDDIE_TIMERS_FILE` | `voice/timers.json`; pending timers and reminders. `off` keeps them in memory only, so a restart loses them |
+| `EDDIE_GUEST_FILE` | `voice/guest.json`; the Guest Mode profile (#163). `off` keeps it in memory only |
 | `EDDIE_HOUSE_GUIDE` | `voice/house_guide.json`; the concierge house guide, read on each question. Missing means an empty guide |
 | `EDDIE_ALARM_SOUND` | Unset plays the generated chime; or a local 16-bit PCM `.wav` (first 10 s played) |
 
@@ -196,6 +197,10 @@ The registered risky actions are `allow` (#13) and `lockdown` (#17), both parsed
 
 “Allow the new device” (also “approve” or “let in”) and “deny the new device” (also “block” or “reject”) act on the newest device `GET /devices` lists as `pending`. Eddie reads it back by name and first-seen time (“Allow the new device, kindle, first seen at 2:14 AM?”) and says how many others are waiting; only a yes posts `/devices/<mac>/approve` or `/deny`. The reply comes from the backend's stored status, and says Eddie's DNS has loaded it only when the API answered `applied: true`. With no pending device, or the backend down, nothing changes. Tested in `tests/test_voice_new_device.py`; not checked with a real device joining.
 
+## Guest Mode permissions (#163)
+
+The owner turns Guest Mode on from the dashboard's devices sheet on the Eddie computer and ticks what guests may use (house guide, timers, TV, lights, thermostat; TV, lights and thermostat have no voice tool yet). While it's on, everyone who talks to or types at Eddie is a guest. Traffic, reports, rules, modes, devices and contacts get “That's only for the household, so I can't help with it in guest mode.”; an unticked category gets “Your host hasn't turned that on for guests, so I can't help with it.”; “stop recording” and “hello” always work; anything else gets “I'm in guest mode, so I can only help with what your host has turned on.” The local model isn't called. A guest's timers are kept apart from the household's and forgotten when Guest Mode goes off. Tested in `tests/test_voice_guest.py`; not checked by microphone.
+
 ## Timers and reminders (#122)
 
 `voice/timers.py` parses these locally; they never reach the model or the traffic API, and need no confirmation.
@@ -238,7 +243,7 @@ Any other field, a missing topic or answer, or an unknown audience makes the fil
 
 **How it answers.** An utterance is a house question when it is phrased as a question (what, where, when, how, is, can I, tell me…) and names a guide keyword or a common house topic (Wi-Fi, checkout, towels, parking, laundry, thermostat, trash, hot tub…), or when it is just a topic's name (“the dishwasher”, the reply to “which one?”). The entry whose keywords cover the most words wins, so “washing machine” beats “dishwasher” in a question naming both. A tie asks “I have notes on dishwasher and washing machine. Which one?” No matching entry is “I don't know that one. Please ask the host.” It runs after timers and before home mode, block, allow and the model; “what does the TV know about me”, empty-house and privacy-tips questions skip it.
 
-**Owner-only entries.** Concierge roles (#163) aren't built yet, so Eddie can't tell a guest from the owner and always answers as a guest (`voice_agent.house_guide_role = 'guest'`): owner entries are never spoken. A guest asking about one hears the same don't-know as for a topic that isn't there, and “which one?” never names an owner topic. Owner entries are for the owner reading the file until #163 sets the role.
+**Owner-only entries.** Eddie can't tell voices apart, so the role comes from Guest Mode (#163): while it's off, anyone who asks hears owner entries too; while it's on, only guest entries, and only if the owner ticked house guide for guests (otherwise “Your host hasn't turned that on for guests”). A guest asking about an owner entry hears the same don't-know as for a topic that isn't there, and “which one?” never names an owner topic.
 
 Tested in `tests/test_voice_house_guide.py` (schema, lookup, ambiguity, missing answers, owner-only entries, the starter example, and that nothing is printed or logged). Not tried with real guests or on the Pi's microphone. **Gap:** a question the guide doesn't recognise as about the house (“where's the nearest coffee shop?”) still goes to the local model, which can answer from its own knowledge; guest routing is #166.
 

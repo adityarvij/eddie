@@ -106,6 +106,10 @@ def answer(matcher, text, domain_context=None):
         return None
     # Imported lazily so provisioning checks and the command router do not load ONNX.
     import ollama_agent
+    import voice_agent
+    denied = voice_agent.profile.check('traffic')  # every intent reads traffic (#163)
+    if denied:
+        return denied
     try:
         if intent == 'summary':
             return ollama_agent.get_summary('1h').get('spoken_summary_last_hour')
