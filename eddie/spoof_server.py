@@ -83,7 +83,10 @@ def main() -> None:
             raise SystemExit(f"Can't listen on {host}:{port} ({exc}).")
         log.info("answering HTTP on %s:%s with 200 OK, empty body; HTTPS is not faked", host, port)
         stop = asyncio.Event()
-        asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, stop.set)
+        try:
+            asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, stop.set)
+        except (NotImplementedError, AttributeError):
+            pass
         async with server:
             await stop.wait()
 
