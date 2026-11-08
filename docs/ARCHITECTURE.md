@@ -151,7 +151,7 @@ Everything runs on the Pi 5 as systemd units rendered from `deploy/systemd/` by 
 
 ## Explicit prototype engine
 
-`EDDIE_WAKE_ENGINE=vosk` selects local phrase recognition for immediate Mac testing; the normal default remains `openwakeword`. `wake_detector.py` isolates prototype phrase detection from bounded capture, Whisper, tools and Piper. The prototype uses an unrestricted decoder (no forced wake grammar), requires an anchored wake phrase, and advertises its engine through voice status. A generated training notebook is preparation only; no dedicated model is claimed.
+`EDDIE_WAKE_ENGINE=vosk` selects local phrase recognition for immediate Mac testing; the normal default remains `openwakeword`. `wake_detector.py` isolates prototype phrase detection from bounded capture, Whisper, tools and Piper. The prototype's recognizer is restricted to a grammar (`GRAMMAR`: "hey eddie", "hey eddy", `[unk]`); measured through the Pi's speakerphone it caught 9 of about 10 spoken "hey Eddie"s, where free transcription caught 6 (3 before a match was held across frames), with no wake in 30 s of other talk. Because Vosk can show the phrase on a single frame (only in its final result, or briefly before revising it), `VoskWake` holds a match for that frame and the next so the runtime's two-frame rule sees it. The matcher also accepts "hey andy" and "hey edits", the misses heard on the speakerphone. It advertises its engine through voice status. A generated training notebook is preparation only; no dedicated model is claimed.
 
 The development launcher uses provisioned Piper Lessac rather than macOS speech. Existing backend traffic is preserved across dashboard restarts. `/api/voice/status` supports readiness checks without storing audio or transcriptions.
 
