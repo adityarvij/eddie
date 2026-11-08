@@ -62,6 +62,8 @@ Home mode is a house icon right after the `eddie_` heading (outlined off, filled
 
 The toggles only ever show state the backend acknowledged:
 
+When the backend acknowledges that Home Mode is on, the voice-view Eddie wears a minimal white roof cap and uses a slow, relaxed bob. Pending changes retain the last acknowledged role; unknown and disconnected states use regular Eddie, and leaving Home Mode removes the cap. DNS application status remains a separate warning. Listening remains yellow and speaking remains blue. Reduced-motion preferences keep the roof static.
+
 - A tap shows the pending state (the house icon's outline turns dashed; the offline toggle reads `offline mode: turning on…` with a dashed border), disables the control, and sends `POST /api/mode` (`{home_mode}`) or `POST /api/offline-mode` (`{offline}`). The new state appears only when the API echoes it back. A second tap while pending sends nothing.
 - If the API errors or doesn't answer within 10 seconds, a toast says "Home mode change not confirmed: …" and the toggle reloads its real state from the API.
 - Offline mode that the API stored but the DNS server hasn't loaded (`applied: false`) shows in red: "offline mode on not yet applied by DNS". It clears when the DNS server picks it up.

@@ -9,6 +9,11 @@
 .character .body{transform-box:fill-box;transform-origin:50% 90%;animation:attentive-body 2.8s ease-in-out infinite alternate}
 .character[data-state="thinking"]{animation:ponder 1.2s ease-in-out infinite alternate}
 .character.talking .body{animation:sway .65s ease-in-out infinite alternate}
+.character .role-accessory{display:none;fill:none;stroke:#fff;stroke-width:7;stroke-linecap:square;stroke-linejoin:miter;transform-box:fill-box;transform-origin:50% 100%}
+.character[data-role="home"]{animation:home-bob 6s ease-in-out infinite}
+.character[data-role="home"] .role-accessory{display:block;animation:home-breathe 6s ease-in-out infinite}
+@keyframes home-bob{50%{transform:translateY(-6px)}}
+@keyframes home-breathe{50%{transform:translateY(2px) scale(1.015)}}
 .open-logs{position:fixed;right:42px;bottom:30px;border:0;border-bottom:1px solid #666;background:#000;color:#ddd;padding:10px 0;font:12px 'Courier New',monospace;z-index:2}
 .assistant-logs{position:fixed;right:28px;bottom:80px;width:min(620px,calc(100vw - 56px));max-height:45dvh;background:#080808;border:1px solid #333;padding:18px;z-index:3;box-shadow:0 16px 60px #000b}
 .assistant-logs[hidden]{display:none}.logs-heading{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;color:#aaa;font:12px 'Courier New',monospace}.logs-heading button{background:none;border:0;color:#ddd;font:inherit}
@@ -27,6 +32,7 @@
 #assistant:has(.character:is([data-state="listening"],[data-state="ready"],[data-state="thinking"],[data-state="confirming"]))::before{opacity:1}
 #assistant:has(.character[data-state="speaking"])::before{--edge:45,113,255;opacity:1}
 @media(prefers-reduced-motion:reduce){#assistant::before{transition:none}}
+@media(prefers-reduced-motion:reduce){.character[data-role="home"],.character[data-role="home"] .role-accessory{animation:none!important}}
 
 /* Keep the dialog mounted through its exit so dismissal never snaps shut. */
 #assistant[open].closing{animation:eddie-exit 320ms cubic-bezier(.4,0,.2,1) both;pointer-events:none}
