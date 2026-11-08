@@ -96,6 +96,7 @@ async def lifespan(_app: FastAPI):
     if os.environ.get("EDDIE_DB", "eddie.db") == "off":
         yield
         return
+    nft.ensure_table()  # a reboot wipes the kernel table that home mode and router mode need
     home_state()
     if state["home_mode"]:
         nft.apply_home_mode(True, rules_db())

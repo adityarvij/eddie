@@ -457,26 +457,24 @@ The most dangerous thing smart devices leak isn't what you watch. It's when you'
 - **New device alert (#98, implemented):** "A device I've never seen joined your network at 2:14 AM." With quarantine on (opt-in), a new device gets only Eddie's essentials until you approve it on the dashboard or say "allow the new device". DNS-only for now: a device with hard-coded IPs still gets out until router mode (#22/#23).
 - **Presence masking (stretch):** in away mode, keep presence-revealing devices at a steady, normal-looking traffic level so the pattern looks occupied.
 
-### Home mode demo with a real stream (Option A, planned)
+### Home mode demo with a real stream (Option A)
 
-Not built yet. Goal: show the audience what would happen to a Ring camera, using a real camera uploading to a real cloud, cut mid-stream by "Hey Eddie, turn on home mode". No fake script.
+Working on the Pi in the single-Wi-Fi form below (checked by hand on 2026-11-08: a phone streaming to YouTube Live was cut by home mode and reconnected after it); the separate "Eddie" access point is still planned. Goal: show the audience what would happen to a Ring camera, using a real camera uploading to a real cloud, cut mid-stream by "Hey Eddie, turn on home mode". No fake script.
 
 - **Why it matches Ring:** a Ring camera uploads straight to the cloud. Here a phone streams straight to YouTube Live, so Eddie cuts the camera itself, not a laptop in the house.
 - **Eddie must be the router.** A live stream is one long connection, so DNS blocking can't stop one that's already running. The Pi's built-in Wi-Fi broadcasts an "Eddie" network that every device joins; the USB Wi-Fi adapter (keep it) joins the iPhone hotspot as the upstream. Eddie hands out addresses, answers DNS and runs the firewall (nftables). Side benefits: no per-device DNS setup, and phone presence comes straight from devices joining and leaving.
 - **Camera:** a spare phone on Eddie's Wi-Fi running an RTMP app (e.g. Larix Broadcaster) with the YouTube stream key. Set the stream to "Ultra-low latency" so the cut shows in seconds, not 20–30.
-- **Enforcement:** home mode adds the camera's IP to a firewall set; every packet to or from it is dropped, so the upload dies on the next packet. Turning home mode off removes it and the app reconnects.
+- **Single-Wi-Fi form (what runs today):** the Pi, the camera phone and the upstream router share one Wi-Fi. The camera phone gets a manual IP with **Router** and **DNS** both set to the Pi; the Pi forwards its traffic back out `wlan0` to the real router. Without NAT the upstream router drops the replies (seen on a home router), so Eddie masquerades traffic that leaves on the interface it arrived on. Apple devices on an iPhone hotspot may get only IPv6; give them a manual IPv4 address.
+- **Enforcement:** home mode adds the camera's IP to a firewall set; every packet to or from it is dropped, so the upload dies on the next packet. Turning home mode off flushes the set; the streaming app reconnects on its next retry (restart the stream for a quick demo, since the phone keeps Eddie's 60-second blocked answer).
+- **Setup:** the nftables table lives only in the kernel, so a reboot wipes it. The API rebuilds it at start and again before home mode adds a camera (`eddie/nft.py`, `ensure_table`): table `inet eddie`, set `homeblock`, chain `forward_filter` dropping the set, and chain `postrouting` masquerading on `EDDIE_NAT_IFACE` (default `wlan0`; empty turns NAT off). Rebuilding keeps the set and never doubles a rule. The service user needs passwordless `nft`, and forwarding must be on and saved:
 
   ```bash
   # one-time setup on the Pi
-  sudo nft add table inet eddie
-  sudo nft add set inet eddie homeblock '{ type ipv4_addr; }'
-  sudo nft add chain inet eddie fwd '{ type filter hook forward priority 0; }'
-  sudo nft add rule inet eddie fwd ip saddr @homeblock drop
-  sudo nft add rule inet eddie fwd ip daddr @homeblock drop
-  # home mode on / off (backend runs these with the camera's IP from the device table)
-  sudo nft add element inet eddie homeblock '{ 10.42.0.23 }'
-  sudo nft delete element inet eddie homeblock '{ 10.42.0.23 }'
+  echo "$USER ALL=(ALL) NOPASSWD: /usr/sbin/nft" | sudo tee /etc/sudoers.d/eddie-nft && sudo chmod 440 /etc/sudoers.d/eddie-nft
+  printf "net.ipv4.ip_forward=1\nnet.ipv4.conf.all.send_redirects=0\nnet.ipv4.conf.wlan0.send_redirects=0\n" | sudo tee /etc/sysctl.d/99-eddie-router.conf && sudo sysctl --system
   ```
+
+  `send_redirects=0` stops the Pi telling the phone to bypass it and talk to the router directly.
 
 - **Demo:** YouTube stream live on screen → "Hey Eddie, turn on home mode" (or Will's phone joins Eddie's Wi-Fi) → dashboard shows "Home mode: blocking Living room cam" → the stream stalls → home mode off → the stream comes back. The Fire Stick keeps playing Netflix next to it, trackers blocked.
 - **Check early:** enable live streaming on the YouTube account now (first-time activation can take up to 24 hours); streaming through an app with a stream key avoids the YouTube mobile app's subscriber requirement. Test the Pi access point as soon as the kit arrives, since it's the riskiest step.
