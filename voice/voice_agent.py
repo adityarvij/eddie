@@ -1,4 +1,5 @@
 """Small deterministic tool router; never claims unavailable DNS actions succeeded."""
+import functools
 import json
 import os
 import re
@@ -6,14 +7,17 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime, timedelta
 from pathlib import Path
 
 
 def request(path, body=None, timeout=3, method=None):
     base = os.environ.get('EDDIE_API_URL', 'http://127.0.0.1:8000').rstrip('/')
     data = None if body is None else json.dumps(body).encode()
-    req = urllib.request.Request(base + path, data=data, headers={'Content-Type': 'application/json'},
-                                 method=method)
+    headers = {'Content-Type': 'application/json'}
+    if os.environ.get('EDDIE_API_TOKEN'):  # needed when the API isn't on this machine's loopback (#96)
+        headers['Authorization'] = 'Bearer ' + os.environ['EDDIE_API_TOKEN']
+    req = urllib.request.Request(base + path, data=data, headers=headers, method=method)
     with urllib.request.urlopen(req, timeout=timeout) as response:
         return json.load(response)
 
@@ -34,13 +38,24 @@ HOME_MODE_TOOL = {
 
 
 def set_home_mode(enabled):
-    """Shared action for the voice router and future local-model tool calling."""
+    """Shared action for the voice router and the local model's set_mode tool."""
     if type(enabled) is not bool:
         raise ValueError('enabled must be a boolean')
     result = request('/mode', {'home_mode': enabled})
     if result.get('home_mode') is not enabled:
         raise ValueError('Mode was not acknowledged')
     return {'home_mode': enabled}
+
+
+def home_mode_action(enabled):
+    """RISKY_ACTIONS['home_mode']: the model's set_mode after a yes. /mode only stores the
+    flag; the DNS server reports nothing back, so never claim it's enforced."""
+    try:
+        set_home_mode(enabled)
+    except Exception:
+        return "I couldn't update home mode. Check the local backend before trying again."
+    return (f"Home mode is saved as {'on' if enabled else 'off'}. Eddie's DNS doesn't report back on home mode, "
+            "so I can't say it's being enforced.")
 
 
 WHAT_THEY_KNOW_TOOL = {
@@ -50,17 +65,20 @@ WHAT_THEY_KNOW_TOOL = {
         'description': 'Read what companies could infer about the household from recent device traffic.',
         'parameters': {
             'type': 'object',
-            'properties': {'hours': {'type': 'integer', 'minimum': 1, 'maximum': 168}},
+            'properties': {'hours': {'type': 'integer', 'minimum': 1, 'maximum': 8760,
+                                     'description': 'Requested lookback in hours. Omit to use all retained data.'}},
             'additionalProperties': False,
         },
     },
 }
 
 
-def what_they_know(hours=24):
+def what_they_know(hours=None):
     """Backend-computed inferences only; the reply text comes from /what-they-know."""
-    if type(hours) is not int or not 1 <= hours <= 168:
-        raise ValueError('hours must be an integer from 1 to 168')
+    if hours is None:
+        return request('/what-they-know')
+    if type(hours) is not int or not 1 <= hours <= 8760:
+        raise ValueError('hours must be an integer from 1 to 8760')
     return request(f'/what-they-know?hours={hours}')
 
 
@@ -174,6 +192,32 @@ def remember_rules(what, saved):
         del undo_stack[:-UNDO_DEPTH]
 
 
+ALLOWLIST = Path(__file__).resolve().parent.parent / 'allowlist.txt'
+
+
+@functools.cache
+def essentials():
+    """The essentials allowlist (eddie/lists.py reads the same file), or None if unreadable."""
+    try:
+        lines = ALLOWLIST.read_text().splitlines()
+    except OSError:
+        return None
+    return {line.split('#', 1)[0].strip().lower() for line in lines} - {''}
+
+
+def essential(domain):
+    """True if domain is an allowlist essential or under one. A global block rule beats the
+    allowlist (decision.py), so voice never adds one there; an unreadable list counts as essential."""
+    entries = essentials()
+    labels = domain.split('.')
+    return entries is None or any('.'.join(labels[i:]) in entries for i in range(len(labels) - 1))
+
+
+def essential_reply(domain):
+    return (f"{domain} is one of Eddie's essentials, like sign-in, updates and time, so I won't block it. "
+            "Nothing changed.")
+
+
 def block_domain(domain):
     saved = []
     try:
@@ -190,6 +234,8 @@ def block_command(kind, domain):
             return "I can't reach Eddie’s traffic backend, so I don't know what it is. Nothing changed."
     if domain is None:
         return NOT_RESOLVED
+    if essential(domain):
+        return essential_reply(domain)
     try:
         applied = block_domain(domain)
     except Exception:
@@ -302,9 +348,10 @@ def find_devices(spoken, devices):
     return exact or [d for d in labelled if f' {spoken} ' in f" {words(d['label'])} "]
 
 
-def lockdown_request(article, spoken):
-    """Confirmation.request args to lock a device down, or the spoken reply when the
-    device is unknown, ambiguous or already locked down (nothing changes then)."""
+def lockdown_request(article, spoken, keep=LOCKDOWN_KEEP):
+    """Confirmation.request args to lock a device down to the keep services (SERVICES
+    keys), or the spoken reply when the device is unknown, ambiguous or already locked
+    down (nothing changes then)."""
     try:
         devices = request('/devices')['devices']
     except Exception:
@@ -325,10 +372,15 @@ def lockdown_request(article, spoken):
         return LOCKDOWN_UNREACHABLE
     if locked:
         return f'{name[0].upper()}{name[1:]} is already locked down. Nothing changed.'
-    keep = [SERVICES[key]['name'] for key in LOCKDOWN_KEEP]
-    prompt = (f"Lock down {name}? It'll only reach {join(keep)}, plus Eddie's essentials "
-              "like sign-in and updates.")
-    return 'lockdown', {'device': device['mac'], 'name': name, 'keep': LOCKDOWN_KEEP}, prompt
+    names = [SERVICES[key]['name'] for key in keep]
+    reach = f"{join(names)}, plus Eddie's essentials" if names else "Eddie's essentials"
+    prompt = f"Lock down {name}? It'll only reach {reach} like sign-in and updates."
+    return 'lockdown', {'device': device['mac'], 'name': name, 'keep': list(keep)}, prompt
+
+
+def block_action(domain):
+    """RISKY_ACTIONS['block']: the model's block tool after a yes."""
+    return block_command('domain', domain)
 
 
 def join(names, last='and'):
@@ -490,6 +542,102 @@ def answer_question(question_id):
     return f"I saved a block for {names}, but Eddie's DNS hasn't loaded it, so it isn't confirmed blocked yet."
 
 
+LEAD = r'(?:(?:ok|okay|eddie|hey eddie|please) )*(?:(?:can|could|would|will) you (?:please )?)?'
+DAYS = ('monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday')
+NUMBERS = {'a': 1, 'an': 1, 'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
+           'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10}
+AWAY_MAX_DAYS = 30  # POST /mode refuses an end time further ahead
+AWAY_ON = re.compile(
+    LEAD + r'(?:(?:turn|switch) on away mode|(?:turn|switch) away mode on|enable away mode|start away mode|'
+    r'(?:i am|im|we are|were) (?:leaving|going away|heading out|going out of town|out of town|away))'
+    r'(?: (?P<when>for the weekend|this weekend|for (?P<n>a|an|one|two|three|four|five|six|seven|eight|nine|ten|'
+    r'[1-9][0-9]{0,2}) (?P<unit>hours?|days?|nights?)|until (?P<day>tomorrow|' + '|'.join(DAYS) + r')))?(?: please)?')
+AWAY_OFF = re.compile(
+    LEAD + r'(?:(?:turn|switch) off away mode|(?:turn|switch) away mode off|disable away mode|stop away mode|'
+    r'end away mode|(?:i am|im|we are|were) (?:back|home|back home)(?: now)?)(?: please)?')
+AWAY_TOO_LONG = f"I can only set away mode for up to {AWAY_MAX_DAYS} days. Nothing changed."
+
+
+def away_end(match, now=None):
+    """(end time in ms or None, spoken " until ...") for AWAY_ON's optional time phrase.
+
+    A day means the end of that day; "the weekend" the end of the coming Sunday.
+    """
+    if not match['when']:
+        return None, ''
+    now = now or datetime.now()
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    if match['n']:
+        n = NUMBERS.get(match['n']) or int(match['n'])
+        end = now + (timedelta(hours=n) if match['unit'].startswith('hour') else timedelta(days=n))
+        return int(end.timestamp() * 1000), f" until {end:%A %-I:%M %p}"
+    if match['day'] == 'tomorrow':
+        days, name = 1, 'tomorrow'
+    elif match['day']:
+        days, name = (DAYS.index(match['day']) - now.weekday()) % 7 or 7, match['day'].capitalize()
+    else:
+        days, name = (6 - now.weekday()) % 7, 'Sunday'
+    return int((midnight + timedelta(days=days + 1)).timestamp() * 1000), f' until the end of {name}'
+
+
+def away_command(text, now=None):
+    """RISKY_COMMANDS parser: Confirmation.request args to turn away mode on or off,
+    a spoken refusal for an end time too far ahead, else None."""
+    if AWAY_OFF.fullmatch(text):
+        return 'away', {'on': False}, 'Turn off away mode?'
+    match = AWAY_ON.fullmatch(text)
+    if not match:
+        return None
+    now = now or datetime.now()
+    until, when = away_end(match, now)
+    if until is not None and until > (now + timedelta(days=AWAY_MAX_DAYS)).timestamp() * 1000:
+        return AWAY_TOO_LONG
+    prompt = (f"Turn on away mode{when}? I'll cut telemetry from the devices whose traffic shows when "
+              "someone's home. Cameras, doorbells and alarms stay up.")
+    return 'away', {'on': True, 'until': until, 'when': when}, prompt
+
+
+# A display name that's only a MAC, IPv4 or IPv6 address (devices.display_name's last resort).
+ADDRESS = re.compile(r'(?:ip:)?(?:[0-9a-f]{2}(?::[0-9a-f]{2}){5}|\d{1,3}(?:\.\d{1,3}){3}|[0-9a-f]*:[0-9a-f:]*)')
+
+
+def some(devices, most=3):
+    """Device names to speak: labels and vendor names, unlabelled addresses only counted."""
+    names = [d['name'] for d in devices if not ADDRESS.fullmatch(str(d['name']).lower())]
+    unnamed = len(devices) - len(names)
+    if unnamed:
+        names.append(f"{unnamed} unnamed device{'s' if unnamed > 1 else ''}" if names else
+                     f"{unnamed} device{'s' if unnamed > 1 else ''} without a name")
+    return join(names) if len(names) <= most else f"{', '.join(names[:most])} and {len(names) - most} more"
+
+
+def set_away_mode(on, until=None, when=''):
+    """RISKY_ACTIONS['away']: POST /mode and speak only what the backend acknowledged.
+
+    On means DNS loaded it; never that a device's traffic was seen blocked.
+    """
+    body = {'away': on}
+    if until is not None:
+        body['away_until'] = until
+    result = request('/mode', body, timeout=RULE_TIMEOUT)
+    if result.get('away') is not on or result.get('away_until') != until:
+        raise ValueError('Away mode was not acknowledged')
+    applied = result.get('away_applied') is True
+    if not on:
+        if not applied:
+            return "I turned away mode off, but Eddie's DNS hasn't loaded the change yet, so it may still block for a moment."
+        return "Away mode is off, and Eddie's DNS has loaded the change."
+    if not applied:
+        return f"I saved away mode{when}, but Eddie's DNS hasn't loaded it yet, so nothing is blocked yet."
+    covered = result.get('away_devices') or []
+    exempt = result.get('away_exempt') or []
+    if not covered:
+        return (f"Away mode is on{when}, but I haven't seen a device whose traffic shows someone's home this week, "
+                "so it isn't blocking anything.")
+    kept = f" {some(exempt)} {'stays' if len(exempt) == 1 else 'stay'} up." if exempt else ''
+    return f"Away mode is on{when}. Eddie's DNS has loaded it and is cutting telemetry from {some(covered)}.{kept}"
+
+
 def forget_conversation():
     """Drop the remembered domain when the conversation or microphone session ends."""
     context['domain'] = None
@@ -503,8 +651,12 @@ NO = {'no', 'nope', 'no thanks', 'cancel', 'cancel it', 'stop', 'dont', 'never m
 # acknowledgment. RISKY_COMMANDS parse normalized text -> (kind, args, prompt).
 # Broad allows (a service or a wildcard) and lockdown are parsed in route, not
 # RISKY_COMMANDS: allows need the raw text's dots, lockdown a /devices lookup.
-RISKY_ACTIONS = {'allow': allow_patterns, 'lockdown': lockdown_device, 'question': answer_question}
-RISKY_COMMANDS = []
+# block and home_mode are only requested by the local model's write tools
+# (ollama_agent.py); spoken "block x.com" and "turn on home mode" run directly.
+# question answers an API question read out on wake (#79).
+RISKY_ACTIONS = {'allow': allow_patterns, 'lockdown': lockdown_device, 'block': block_action,
+                 'home_mode': home_mode_action, 'away': set_away_mode, 'question': answer_question}
+RISKY_COMMANDS = [away_command]
 
 
 class Confirmation:
@@ -566,13 +718,36 @@ class Confirmation:
 
 
 confirmation = Confirmation()
-# Optional local model for read-only questions: callable(raw text) -> reply, or
-# None when the model is unavailable. Set by frontend/serve.py (ollama_agent).
+# Optional local model for questions and plain-English rules: callable(raw text) ->
+# reply, or None when the model is unavailable. Its changes only reach
+# confirmation.request, never the backend. Set by frontend/serve.py (ollama_agent).
 ask_model = None
 # Optional local model that writes "what they know" inferences from the backend's
 # facts: callable(facts) -> text, or None to keep the backend's template.
 phrase_inferences = None
-REPORT_HOURS = 168  # "what do they know about me" reads up to a week of traffic
+TIME_NUMBERS = {'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5, 'six': 6, 'seven': 7,
+                'eight': 8, 'nine': 9, 'ten': 10, 'eleven': 11, 'twelve': 12, 'fourteen': 14,
+                'thirty': 30}
+
+
+def report_hours(text):
+    """Requested lookback in whole hours, or None to ask the backend for all retained data."""
+    lower = text.lower()
+    match = re.search(r'\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fourteen|thirty)\s*'
+                      r'(minutes?|hours?|days?|weeks?|months?)\b', lower)
+    if match:
+        number = int(match[1]) if match[1].isdigit() else TIME_NUMBERS[match[1]]
+        unit = match[2]
+        if unit.startswith('minute'):
+            return max(1, (number + 59) // 60)
+        return number * {'hour': 1, 'day': 24, 'week': 168, 'month': 720}[unit.rstrip('s')]
+    if re.search(r'\b(?:today|yesterday|last day|past day)\b', lower):
+        return 24
+    if re.search(r'\b(?:this|last|past|previous) week\b', lower):
+        return 168
+    if re.search(r'\b(?:this|last|past|previous) month\b', lower):
+        return 720
+    return None
 
 
 def respond(text):
@@ -599,7 +774,7 @@ def route(text):
     for parse in RISKY_COMMANDS:
         command = parse(text)
         if command:
-            return confirmation.request(*command)
+            return command if isinstance(command, str) else confirmation.request(*command)
     pending_reply = confirmation.reply(text)
     if pending_reply is not None:
         return pending_reply
@@ -617,23 +792,34 @@ def route(text):
         except Exception:
             return "I couldn't update home mode. Check the local backend before trying again."
     block = block_target(raw)
-    if block:
+    if block and block != ('domain', None):
         return block_command(*block)
-    if allow:
+    if allow and allow[0] != 'unknown':
         return allow_command(*allow)
     if UNDO.fullmatch(text):
         return undo_command()
-    if re.search(r'\b(block|allow|lock|undo|email|send|mode)\b', text):
-        return "I haven't changed anything. I can block or allow a domain, allow a service like Netflix, lock down a device, undo my last rule, or turn home mode on or off; email isn't connected yet."
+    # A change the commands above can't parse ("lock down the TV to Netflix") goes to the
+    # local model, whose write tools only reach confirmation; without it, nothing changes.
+    if block or allow or re.search(r'\b(block|allow|lock|undo|email|send|mode)\b', text):
+        reply = ask_model(raw) if ask_model is not None else None
+        if reply is not None:
+            return reply
+        if block:
+            return NOT_RESOLVED
+        if allow:
+            return ALLOW_UNRESOLVED
+        return "I haven't changed anything. I can block or allow a domain, allow a service like Netflix, lock down a device, undo my last rule, or turn home or away mode on or off; email isn't connected yet."
     if re.search(r'\bwhat (?:do|does|can|could) (?:\w+|my \w+|the \w+) (?:know|tell|guess|figure out|learn) about (?:me|us|my house|my home|our house)\b', text):
         try:
-            report = what_they_know(REPORT_HOURS)
+            report = what_they_know(report_hours(raw))
         except Exception:
             return "I can't reach Eddie’s traffic backend, so I can't say what they know right now."
+        if report.get('enough_data') is False:
+            return str(report['text'])
         if phrase_inferences is not None and report.get('facts'):
             reply = phrase_inferences(report['facts'])
             if reply:
-                return reply
+                return " ".join(filter(None, (report.get('notice'), reply)))
         return str(report['text'])
     if text in ('hello', 'hi', 'hey', 'hey eddie'):
         return "Hey, I'm Eddie. Ask me what's been going on, tell me to block a domain, or to turn home mode on or off."

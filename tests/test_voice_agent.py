@@ -1,5 +1,6 @@
 import sys
 import unittest
+import unittest.mock
 from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'voice'))
@@ -30,6 +31,21 @@ class VoiceCommands(unittest.TestCase):
     @patch('voice_agent.request', return_value={'home_mode': False})
     def test_wrong_acknowledgement_is_failure(self, request):
         self.assertIn("couldn't update", voice_agent.respond('turn on home mode'))
+
+class ApiToken(unittest.TestCase):
+    """The traffic API takes writes from another host only with EDDIE_API_TOKEN (#96)."""
+    def sent_headers(self, env):
+        response = unittest.mock.MagicMock()
+        response.__enter__.return_value.read.return_value = b'{}'
+        with patch.dict('os.environ', env), patch('urllib.request.urlopen', return_value=response) as urlopen:
+            voice_agent.request('/mode', {'home_mode': True})
+        return dict(urlopen.call_args[0][0].header_items())
+
+    def test_sends_the_token_when_set(self):
+        self.assertEqual(self.sent_headers({'EDDIE_API_TOKEN': 'abc'})['Authorization'], 'Bearer abc')
+
+    def test_sends_none_without_it(self):
+        self.assertNotIn('Authorization', self.sent_headers({'EDDIE_API_TOKEN': ''}))
 
 class MissedSpeech(unittest.TestCase):
     @patch('voice_agent.request')
@@ -65,7 +81,22 @@ class WhatTheyKnowTool(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 request.reset_mock()
                 self.assertEqual('Amazon gets the most tracking data.', voice_agent.respond(phrase))
-                request.assert_called_once_with('/what-they-know?hours=168')
+                request.assert_called_once_with('/what-they-know')
+
+    @patch('voice_agent.request', return_value={'facts': [], 'enough_data': False, 'text': 'Not enough data.'})
+    def test_privacy_question_uses_requested_window_and_can_decline(self, request):
+        for phrase, hours in (('What do they know about me in the last 3 days?', 72),
+                              ('What could companies guess about us over two weeks?', 336),
+                              ('What does Amazon know about my house this month?', 720)):
+            with self.subTest(phrase=phrase):
+                request.reset_mock()
+                self.assertEqual('Not enough data.', voice_agent.respond(phrase))
+                request.assert_called_once_with(f'/what-they-know?hours={hours}')
+
+    def test_report_window_parser_defaults_to_all_retained_data(self):
+        self.assertIsNone(voice_agent.report_hours('what do they know about me'))
+        self.assertEqual(24, voice_agent.report_hours('what do they know about me today'))
+        self.assertEqual(1, voice_agent.report_hours('what do they know from the last 20 minutes'))
 
     @patch('voice_agent.request', side_effect=OSError('offline'))
     def test_backend_failure(self, request):
@@ -73,7 +104,7 @@ class WhatTheyKnowTool(unittest.TestCase):
 
     @patch('voice_agent.request')
     def test_tool_rejects_bad_window(self, request):
-        for hours in (0, 500, '24', True):
+        for hours in (0, 9000, '24', True):
             with self.assertRaises(ValueError):
                 voice_agent.what_they_know(hours)
         request.assert_not_called()

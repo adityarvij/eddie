@@ -1,5 +1,6 @@
 """Ask before blocking (#79): tracker verdicts become rate-limited, grouped questions; answers write rules."""
 import os
+import time
 import unittest
 from unittest.mock import patch
 
@@ -97,7 +98,7 @@ class QuestionAPITests(test_rules_api.RulesAPITests):
         return [m for m in self.ws.sent if m['type'] == kind]
 
     async def ask_one(self):
-        await self.http.post('/ingest', json={'ts': 1, 'device_mac': '172.20.10.5', 'device': 'Laptop',
+        await self.http.post('/ingest', json={'ts': int(time.time() * 1000), 'device_mac': '172.20.10.5', 'device': 'Laptop',
                                               'domain': TRACKER, 'action': 'flag', 'source': 'ai'})
         self.assertEqual(200, (await self.http.post('/ai/verdict', json=verdict())).status_code)
         listed = (await self.http.get('/questions')).json()
@@ -181,6 +182,8 @@ class QuestionAPITests(test_rules_api.RulesAPITests):
         question = await self.ask_one()
 
         class Browser(test_rules_api.FakeSocket):
+            headers = {}  # no Origin: not a browser page on another site
+
             async def accept(self):
                 pass
 

@@ -128,16 +128,21 @@ class OfflineAPITests(unittest.IsolatedAsyncioTestCase):
         client.sendto(DNSRecord.question(name).pack())
         return DNSRecord.parse(await asyncio.wait_for(proto.replies.get(), 2))
 
+    async def modes(self):
+        """GET /mode without away mode's fields (tests/test_away.py)."""
+        body = (await self.http.get('/mode')).json()
+        return {k: body[k] for k in ('home_mode', 'offline', 'offline_applied')}
+
     async def test_toggle_is_acknowledged_by_dns_and_shown_in_mode(self):
         await self.start_dns()
         self.assertEqual({'home_mode': False, 'offline': False, 'offline_applied': True},
-                         (await self.http.get('/mode')).json())
+                         await self.modes())
 
         r = await self.http.post('/offline-mode', json={'offline': True})
         self.assertEqual({'offline': True, 'applied': True}, r.json())
         self.assertTrue(self.mode.on)
         self.assertEqual({'home_mode': False, 'offline': True, 'offline_applied': True},
-                         (await self.http.get('/mode')).json())
+                         await self.modes())
         self.assertEqual(RCODE.SERVFAIL, (await self.ask('news.example')).header.rcode)
         self.assertEqual(0, self.upstream.seen)
 
@@ -160,7 +165,7 @@ class OfflineAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({'offline': True, 'applied': False}, r.json())
         self.assertEqual([{'type': 'offline_mode', 'offline': True, 'applied': False}], ws.sent)
         self.assertEqual({'home_mode': False, 'offline': True, 'offline_applied': False},
-                         (await self.http.get('/mode')).json())
+                         await self.modes())
 
     async def test_dns_restart_loads_the_stored_state(self):
         with patch.object(api, 'APPLY_TIMEOUT', 0):
@@ -175,7 +180,7 @@ class OfflineAPITests(unittest.IsolatedAsyncioTestCase):
         with patch.dict(os.environ, {'EDDIE_DB': 'off'}):
             self.assertEqual(503, (await self.http.post('/offline-mode', json={'offline': True})).status_code)
             self.assertEqual({'home_mode': False, 'offline': False, 'offline_applied': False},
-                             (await self.http.get('/mode')).json())
+                             await self.modes())
         self.assertEqual(422, (await self.http.post('/offline-mode', json={'offline': 'maybe'})).status_code)
 
 
