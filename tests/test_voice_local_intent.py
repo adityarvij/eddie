@@ -85,7 +85,7 @@ class RealModel(unittest.TestCase):
 
     def test_updates_and_house_check_ins_get_the_summary(self):
         for text in ('Give me an update', "How's the house doing?", 'Summarize the last hour',
-                     'Anything interesting happening?'):
+                     'Anything interesting happening?', "What's up?", "What's up, Eddie?", "Hey Eddie, what's up?"):
             with self.subTest(text=text):
                 self.assertEqual('summary', self.matcher.match(text))
 
