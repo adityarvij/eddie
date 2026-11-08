@@ -14,28 +14,27 @@ class VoiceCommands(unittest.TestCase):
 
     @patch('voice_agent.request', return_value={'home_mode': False, 'home_applied': True})
     def test_turn_off(self, request):
-        self.assertEqual("Home mode is off and Eddie's DNS has loaded it. It stays off until you change it, "
-                         "whoever's phone is home.", voice_agent.respond('Turn off home mode.'))
+        self.assertEqual("Home mode turned off.", voice_agent.respond('Turn off home mode.'))
         request.assert_called_once_with('/mode', {'home_mode': False})
 
     @patch('voice_agent.request', side_effect=OSError('offline'))
     def test_backend_failure(self, request):
-        self.assertIn("couldn't update", voice_agent.respond('turn on home mode'))
-        self.assertIn("don't have", voice_agent.respond('give me a summary'))
+        self.assertEqual("I couldn't change home mode.", voice_agent.respond('turn on home mode'))
+        self.assertEqual(voice_agent.UNREACHABLE, voice_agent.respond('give me a summary'))
 
     @patch('voice_agent.request')
     def test_unsupported_action_does_not_write(self, request):
-        self.assertIn("haven't changed", voice_agent.respond('lock everything down'))
-        self.assertIn("haven't changed", voice_agent.respond('turn on home mode and send email'))
+        self.assertEqual(voice_agent.NOT_CAUGHT, voice_agent.respond('lock everything down'))
+        self.assertEqual(voice_agent.NOT_CAUGHT, voice_agent.respond('turn on home mode and send email'))
         request.assert_not_called()
 
     @patch('voice_agent.request', return_value={'home_mode': False})
     def test_wrong_acknowledgement_is_failure(self, request):
-        self.assertIn("couldn't update", voice_agent.respond('turn on home mode'))
+        self.assertEqual("I couldn't change home mode.", voice_agent.respond('turn on home mode'))
 
     @patch('voice_agent.request', return_value={'home_mode': True, 'home_applied': False})
     def test_no_dns_acknowledgement_is_not_claimed(self, request):
-        self.assertEqual("Home mode is saved as on, but Eddie's DNS hasn't confirmed it, so I can't say it's being enforced.", voice_agent.respond('turn on home mode'))
+        self.assertEqual("Home mode saved as on, but Eddie's DNS hasn't loaded it yet.", voice_agent.respond('turn on home mode'))
 
 class ApiToken(unittest.TestCase):
     """The traffic API takes writes from another host only with EDDIE_API_TOKEN (#96)."""
@@ -55,7 +54,7 @@ class ApiToken(unittest.TestCase):
 class MissedSpeech(unittest.TestCase):
     @patch('voice_agent.request')
     def test_retry_does_not_call_backend(self, request):
-        self.assertEqual(voice_agent.respond(''), "Didn't catch that. Try again.")
+        self.assertEqual(voice_agent.respond(''), "I didn't quite catch that.")
         request.assert_not_called()
 
 
@@ -68,14 +67,13 @@ class NoModelFallback(unittest.TestCase):
     @patch('voice_agent.request')
     def test_unmatched_question_lists_supported_capabilities_without_a_write(self, request):
         reply = voice_agent.respond('Can you recommend a movie for tonight?')
-        self.assertIn("don't know how to answer that yet", reply)
-        self.assertIn('summarize activity', reply)
+        self.assertEqual(voice_agent.NOT_CAUGHT, reply)
         request.assert_not_called()
 
     @patch('voice_agent.request')
     def test_unparseable_command_changes_nothing(self, request):
         reply = voice_agent.respond('Block some bad stuff and send an email')
-        self.assertIn("haven't changed anything", reply)
+        self.assertEqual(voice_agent.NOT_CAUGHT, reply)
         request.assert_not_called()
 
 class HomeModeTool(unittest.TestCase):
@@ -84,7 +82,7 @@ class HomeModeTool(unittest.TestCase):
         for phrase in ('I want home mode on', 'enable home mode', 'turn home mode on', 'Can you turn on home mode?', 'Please turn on home mode'):
             with self.subTest(phrase=phrase):
                 request.reset_mock()
-                self.assertTrue(voice_agent.respond(phrase).startswith('Home mode is saved as on'))
+                self.assertTrue(voice_agent.respond(phrase).startswith('Home mode saved as on'))
                 request.assert_called_once_with('/mode', {'home_mode': True})
 
     @patch('voice_agent.request')
@@ -125,7 +123,7 @@ class WhatTheyKnowTool(unittest.TestCase):
 
     @patch('voice_agent.request', side_effect=OSError('offline'))
     def test_backend_failure(self, request):
-        self.assertIn("can't say", voice_agent.respond('what do they know about me'))
+        self.assertEqual(voice_agent.UNREACHABLE, voice_agent.respond('what do they know about me'))
 
     @patch('voice_agent.request')
     def test_tool_rejects_bad_window(self, request):
@@ -150,7 +148,7 @@ class BurglarsEyeTool(unittest.TestCase):
 
     @patch('voice_agent.request', side_effect=OSError('offline'))
     def test_backend_failure(self, request):
-        self.assertEqual("I can't reach Eddie’s traffic backend, so I can't say when the house looked empty right now.",
+        self.assertEqual(voice_agent.UNREACHABLE,
                          voice_agent.respond('when could someone tell the house was empty'))
 
     @patch('voice_agent.request')

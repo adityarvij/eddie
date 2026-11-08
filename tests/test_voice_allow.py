@@ -95,36 +95,34 @@ class KnownService(AllowBase):
     @patch('voice_agent.request', side_effect=acknowledge())
     def test_confirm_then_allow_every_pattern(self, request):
         reply = voice_agent.respond('Allow Netflix')
-        self.assertEqual(reply, f'Allow Netflix on every device? That adds {len(NETFLIX)} allow rules '
-                                'for its domains. Say yes to confirm or no to cancel.')
+        self.assertEqual(reply, 'Allow Netflix? Yes or no?')
         request.assert_not_called()
         reply = voice_agent.respond('yes')
-        self.assertEqual(reply, "Allowed Netflix on every device. The rules are saved and Eddie's DNS has loaded them.")
+        self.assertEqual(reply, "Allowed Netflix.")
         self.assertEqual(request.call_args_list, [rule_call(p) for p in NETFLIX])
 
     @patch('voice_agent.request')
     def test_no_or_unclear_writes_nothing(self, request):
         voice_agent.respond('allow youtube')
-        self.assertEqual(voice_agent.respond('no'), 'Cancelled. Nothing changed.')
+        self.assertEqual(voice_agent.respond('no'), 'Cancelled.')
         voice_agent.respond('allow youtube')
         voice_agent.respond('maybe')
-        self.assertEqual(voice_agent.respond('hmm'), "I didn't get a clear yes, so I didn't do it.")
+        self.assertEqual(voice_agent.respond('hmm'), "No clear yes, so I didn't.")
         request.assert_not_called()
 
     @patch('voice_agent.request', side_effect=acknowledge(applied=False))
     def test_saved_but_not_loaded_does_not_claim_allowed(self, request):
         voice_agent.respond('allow prime video')
         reply = voice_agent.respond('yes')
-        self.assertIn("hasn't loaded them yet", reply)
+        self.assertEqual(voice_agent.SAVED_NOT_LOADED, reply)
         self.assertNotIn('Allowed', reply)
 
     @patch('voice_agent.request', side_effect=acknowledge())
     def test_typed_wildcard_needs_confirmation(self, request):
         self.assertEqual(voice_agent.respond('allow *.example.com'),
-                         'Allow example.com and every subdomain on every device? Say yes to confirm or no to cancel.')
+                         'Allow example.com and every subdomain? Yes or no?')
         request.assert_not_called()
-        self.assertEqual(voice_agent.respond('yes'), 'Allowed example.com and every subdomain on every device. '
-                                                     "The rule is saved and Eddie's DNS has loaded it.")
+        self.assertEqual(voice_agent.respond('yes'), 'Allowed example.com and every subdomain.')
         self.assertEqual(request.call_args_list, [rule_call('*.example.com')])
 
     def test_screen_status_has_no_patterns(self):
@@ -138,14 +136,14 @@ class RawDomain(AllowBase):
     @patch('voice_agent.request', side_effect=acknowledge())
     def test_allowed_without_confirmation(self, request):
         reply = voice_agent.respond(f'allow {DOMAIN}')
-        self.assertEqual(reply, f"Allowed {DOMAIN} on every device. The rule is saved and Eddie's DNS has loaded it.")
+        self.assertEqual(reply, f"Allowed {DOMAIN}.")
         self.assertEqual(request.call_args_list, [rule_call(DOMAIN)])
         self.assertIsNone(voice_agent.confirmation.status())
 
     @patch('voice_agent.request', side_effect=acknowledge(applied=False))
     def test_saved_but_not_loaded(self, request):
         reply = voice_agent.respond(f'allow {DOMAIN}')
-        self.assertIn(f'saved a rule to allow {DOMAIN}', reply)
+        self.assertEqual(voice_agent.SAVED_NOT_LOADED, reply)
         self.assertNotIn('Allowed', reply)
 
 
@@ -178,7 +176,7 @@ class BackendFailure(AllowBase):
                                ack({'pattern': NETFLIX[1], 'action': 'allow'}), TimeoutError()]
         voice_agent.respond('allow netflix')
         reply = voice_agent.respond('yes')
-        self.assertIn(f'only saved 2 of {len(NETFLIX)} allow rules for Netflix', reply)
+        self.assertEqual('I only allowed part of Netflix; it may still be blocked.', reply)
         self.assertNotIn('Allowed', reply)
         self.assertEqual(request.call_count, 3)
 

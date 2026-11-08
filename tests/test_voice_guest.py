@@ -148,7 +148,7 @@ class GuestRouting(unittest.TestCase):
 
     def test_greeting_and_stop_recording_are_always_allowed(self):
         self.assertEqual(f"Hey, I'm Eddie. {guest.HELP}", voice_agent.respond('hello'))
-        self.assertTrue(voice_agent.respond('stop recording').startswith("Okay, I'm turning the microphone off"))
+        self.assertTrue(voice_agent.respond('stop recording') == 'Microphone turned off.')
         voice_agent.microphone_off.assert_called_once_with()
 
     def test_timers_need_the_owners_approval(self):
@@ -231,7 +231,7 @@ class GuestModelTools(unittest.TestCase):
 
     def test_stop_microphone_still_works(self):
         model = Mock(return_value={'content': '', 'tool_calls': [{'function': {'name': 'stop_microphone', 'arguments': {}}}]})
-        self.assertTrue(ollama_agent.Agent(chat=model).ask('quit listening').startswith("Okay, I'm turning"))
+        self.assertTrue(ollama_agent.Agent(chat=model).ask('quit listening') == 'Microphone turned off.')
 
 
 class Bridge(unittest.TestCase):

@@ -56,9 +56,7 @@ class KidBase(LockdownBase):
 class LockDownByName(KidBase):
     def test_a_childs_device_keeps_the_kid_safe_list(self):
         reply = voice_agent.respond("lock down the kids' tablet")
-        self.assertEqual(reply, "Lock down the Kids' Tablet? It's marked as a child's, so it'll only reach YouTube Kids "
-                                "and PBS Kids, plus Eddie's essentials like sign-in and updates. "
-                                "Say yes to confirm or no to cancel.")
+        self.assertEqual(reply, "Lock down the Kids' Tablet to YouTube Kids and PBS Kids? Yes or no?")
         voice_agent.respond('yes')
         self.assertEqual(sorted([(p, 'allow', 'voice') for p in KID] + [('*', 'block', 'voice')]),
                          self.device_rules(TABLET))
@@ -71,64 +69,54 @@ class LockDownByName(KidBase):
                 self.assertIsNone(voice_agent.confirmation.status())
         self.assertEqual([], self.backend.posts)
 
-    def test_unknown_device_counts_the_unnamed_as_shown(self):
-        reply = voice_agent.respond('lock down the fridge')
-        self.assertIn("The devices I know by name are Fire Stick, Kids' Tablet and TV; 2 more have no name yet "
-                      "and show as ---.", reply)
-        self.backend.devices = [d for d in self.backend.devices if not d['label']]
-        self.assertIn("None of your devices has a name yet; they show as ---.", voice_agent.respond('lock down the fridge'))
+    def test_unknown_device_is_said_plainly(self):
+        self.assertEqual("I don't know a device called fridge.", voice_agent.respond('lock down the fridge'))
 
 
 class TurnOn(KidBase):
     def test_read_back_names_every_childs_device_and_changes_nothing(self):
         reply = voice_agent.respond('turn on kid mode')
-        self.assertEqual(reply, "Turn on kid mode? Kids' Tablet and an unnamed Amazon device will only reach YouTube Kids "
-                                "and PBS Kids, plus Eddie's essentials like sign-in and updates. "
-                                "Say yes to confirm or no to cancel.")
+        self.assertEqual(reply, "Turn on kid mode? Yes or no?")
         self.assertEqual('kid_mode', voice_agent.confirmation.status()['kind'])
         self.assertEqual([], self.backend.posts)
-        self.assertEqual('Cancelled. Nothing changed.', voice_agent.respond('no'))
+        self.assertEqual('Cancelled.', voice_agent.respond('no'))
         self.assertEqual([], self.backend.posts)
 
     def test_yes_locks_down_only_the_childrens_devices(self):
         voice_agent.respond('turn on kid mode')
         reply = voice_agent.respond('yes')
-        self.assertEqual(reply, "Kid mode is on. Kids' Tablet and an unnamed Amazon device are locked down to YouTube "
-                                "Kids and PBS Kids, plus Eddie's essentials; Eddie's DNS has loaded the rules. "
-                                "I haven't seen their traffic blocked yet, and it only applies while they use Eddie for DNS.")
+        self.assertEqual(reply, "Kid mode turned on.")
         expected = sorted([(p, 'allow', 'voice') for p in KID] + [('*', 'block', 'voice')])
         self.assertEqual(expected, self.device_rules(TABLET))
         self.assertEqual(expected, self.device_rules(UNNAMED))
         self.assertEqual([], self.device_rules(TV) + self.device_rules(STICK))
-        self.assertEqual("Kid mode is already on for Kids' Tablet and an unnamed Amazon device. Nothing changed.",
-                         voice_agent.respond('turn on kid mode'))
+        self.assertEqual("Kid mode is already on.", voice_agent.respond('turn on kid mode'))
 
     def test_only_the_devices_not_yet_locked_are_asked_about(self):
         voice_agent.respond("lock down the kids' tablet")
         voice_agent.respond('yes')
-        self.assertTrue(voice_agent.respond('kid mode on').startswith('Turn on kid mode? An unnamed Amazon device will'))
+        voice_agent.respond('kid mode on')
+        self.assertEqual([UNNAMED], [d['device'] for d in voice_agent.confirmation.pending['args']['devices']])
 
     def test_no_childs_device_yet(self):
         for device in self.backend.devices:
             device['kid'] = False
         self.assertEqual(voice_agent.respond('turn on kid mode'),
-                         "No device is marked as a child's yet. Open devices on the dashboard and set one to child, "
-                         "then ask again. Nothing changed.")
+                         "No device is marked as a child's yet; set one on the dashboard.")
         self.assertIsNone(voice_agent.confirmation.status())
 
     def test_not_loaded_is_not_reported_as_on(self):
         self.backend.applied = False
         voice_agent.respond('turn on kid mode')
         reply = voice_agent.respond('yes')
-        self.assertNotIn('Kid mode is on', reply)
-        self.assertIn("I saved the lockdown rules for Kids' Tablet, but Eddie's DNS hasn't loaded them yet", reply)
+        self.assertNotIn('turned on', reply)
+        self.assertEqual("Kid mode saved as on, but Eddie's DNS hasn't loaded it yet.", reply)
 
     def test_a_failure_part_way_says_what_happened(self):
         voice_agent.respond('turn on kid mode')
         self.backend.fail_add_at = len(KID) + 1  # the tablet's rules all land, then the backend stops answering
         reply = voice_agent.respond('yes')
-        self.assertTrue(reply.startswith("Kids' Tablet is locked down to YouTube Kids and PBS Kids"), reply)
-        self.assertIn("I couldn't lock down an unnamed Amazon device; the backend didn't save any rules.", reply)
+        self.assertEqual("Kid mode only partly turned on. I couldn't lock down an unnamed Amazon device.", reply)
         self.assertEqual([], self.device_rules(UNNAMED))
 
     def test_undo_removes_what_voice_added(self):
@@ -152,40 +140,36 @@ class TurnOff(KidBase):
 
     def test_off_removes_the_block_first_and_keeps_other_rules(self):
         reply = voice_agent.respond('turn off kid mode')
-        self.assertEqual(reply, "Turn off kid mode? Kids' Tablet and an unnamed Amazon device will get full internet "
-                                "through Eddie again. Say yes to confirm or no to cancel.")
+        self.assertEqual(reply, "Turn off kid mode? Yes or no?")
         self.assertEqual([], self.deleted)
         reply = voice_agent.respond('yes')
-        self.assertEqual(reply, "Kid mode is off. Kids' Tablet and an unnamed Amazon device have full internet through "
-                                "Eddie again; Eddie's DNS has loaded the change.")
+        self.assertEqual(reply, "Kid mode turned off.")
         self.assertEqual('*', self.deleted[0])
         self.assertEqual([('ads.example', 'block', 'voice')], self.device_rules(TABLET))
         self.assertEqual([], self.device_rules(UNNAMED))
-        self.assertEqual("Kid mode is already off for Kids' Tablet and an unnamed Amazon device. Nothing changed.",
-                         voice_agent.respond('turn off kid mode'))
+        self.assertEqual("Kid mode is already off.", voice_agent.respond('turn off kid mode'))
 
     def test_a_failed_delete_says_it_is_still_locked(self):
         voice_agent.respond('turn off kid mode')
         self.backend.fail_deletes = True
         reply = voice_agent.respond('yes')
-        self.assertIn("I couldn't unlock Kids' Tablet; the backend didn't confirm it. It's still locked down.", reply)
-        self.assertNotIn('Kid mode is off', reply)
+        self.assertIn("I couldn't unlock Kids' Tablet.", reply)
+        self.assertNotIn('turned off', reply)
 
 
 class Dashboard(KidBase):
     def test_the_dashboard_switch_writes_dashboard_rules_voice_cant_undo(self):
         reply = voice_agent.kid_mode_change(True)
-        self.assertTrue(reply.startswith('Kid mode is on.'), reply)
+        self.assertEqual('Kid mode turned on.', reply)
         self.assertEqual(sorted([(p, 'allow', 'dashboard') for p in KID] + [('*', 'block', 'dashboard')]),
                          self.device_rules(TABLET))
         self.assertEqual([], voice_agent.undo_stack)
         self.assertIsNone(voice_agent.confirmation.status(), 'the page asked already; nothing waits for a spoken yes')
-        self.assertTrue(voice_agent.kid_mode_change(False).startswith('Kid mode is off.'))
+        self.assertEqual('Kid mode turned off.', voice_agent.kid_mode_change(False))
         self.assertEqual([], self.device_rules(TABLET))
 
     def test_nothing_to_change_is_said_plainly(self):
-        self.assertEqual("Kid mode is already off for Kids' Tablet and an unnamed Amazon device. Nothing changed.",
-                         voice_agent.kid_mode_change(False))
+        self.assertEqual("Kid mode is already off.", voice_agent.kid_mode_change(False))
 
 
 if __name__ == '__main__':

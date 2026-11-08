@@ -135,7 +135,7 @@ class Voice(unittest.TestCase):
 
     @patch('voice_agent.request', side_effect=OSError('offline'))
     def test_backend_failure_changes_nothing(self, request):
-        self.assertEqual("I can't read Eddie's device list right now, so I can't suggest privacy settings.",
+        self.assertEqual(voice_agent.UNREACHABLE,
                          voice_agent.respond('how can I improve my privacy'))
         request.assert_called_once_with('/suggestions')
 

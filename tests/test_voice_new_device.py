@@ -41,47 +41,45 @@ class NewDeviceVoiceTests(unittest.TestCase):
 
     def test_read_back_names_the_device_and_time_and_changes_nothing(self):
         reply = voice_agent.route('Allow the new device')
-        self.assertEqual("Allow the new device, Amazon device, first seen at 2:14 AM? It'll get full internet "
-                         "through Eddie. Say yes to confirm or no to cancel.", reply)
+        self.assertEqual("Allow the new device, Amazon device? Yes or no?", reply)
         self.assertEqual([], self.backend.posts)
 
     def test_yes_approves_and_reports_the_dns_ack(self):
         voice_agent.route('approve the new device')
-        self.assertEqual("Amazon device is approved, and Eddie's DNS has loaded the change.", voice_agent.route('yes'))
+        self.assertEqual("Amazon device approved.", voice_agent.route('yes'))
         self.assertEqual([f'/devices/{NEW}/approve'], self.backend.posts)
 
     def test_not_loaded_is_not_reported_as_done(self):
         self.backend.applied = False
         voice_agent.route('allow the new device')
-        self.assertEqual("I saved that Amazon device is approved, but Eddie's DNS hasn't loaded it yet.",
+        self.assertEqual(voice_agent.SAVED_NOT_LOADED,
                          voice_agent.route('yes'))
 
     def test_deny_says_it_outlasts_quarantine(self):
         reply = voice_agent.route('block the new device')
-        self.assertIn('even with quarantine off', reply)
-        self.assertIn('is denied', voice_agent.route('yes'))
+        self.assertEqual('Deny the new device, Amazon device? Yes or no?', reply)
+        self.assertEqual('Amazon device denied.', voice_agent.route('yes'))
         self.assertEqual([f'/devices/{NEW}/deny'], self.backend.posts)
 
     def test_no_changes_nothing(self):
         voice_agent.route('allow the new device')
-        self.assertEqual('Cancelled. Nothing changed.', voice_agent.route('no'))
+        self.assertEqual('Cancelled.', voice_agent.route('no'))
         self.assertEqual([], self.backend.posts)
 
     def test_newest_pending_device_first_and_others_mentioned(self):
         self.backend.devices.append({'mac': NEWEST, 'name': 'kindle', 'status': 'pending',
                                      'first_seen': TWO_FOURTEEN + 60_000})
         reply = voice_agent.route('allow the new device')
-        self.assertIn('Allow the new device, kindle, first seen at 2:15 AM?', reply)
-        self.assertIn('1 other new device is still waiting.', reply)
+        self.assertIn('Allow the new device, kindle?', reply)
 
     def test_nothing_pending(self):
         self.backend.devices = self.backend.devices[:1]
-        self.assertEqual("There's no new device waiting for a decision. Nothing changed.",
+        self.assertEqual("There's no new device waiting.",
                          voice_agent.route('allow the new device'))
 
     def test_backend_down(self):
         self.backend.down = True
-        self.assertIn('Nothing changed', voice_agent.route('allow the new device'))
+        self.assertEqual(voice_agent.UNREACHABLE, voice_agent.route('allow the new device'))
 
     def test_other_allows_still_route(self):
         self.assertEqual(('domain', 'news.example'), voice_agent.allow_target('allow news.example'))

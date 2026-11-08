@@ -9,7 +9,7 @@ import serve
 import ollama_agent
 import voice_agent
 
-ON = "Okay, I'm turning the microphone off. Start it again from the dashboard."
+ON = 'Microphone turned off.'
 
 
 class StopRecording(unittest.TestCase):

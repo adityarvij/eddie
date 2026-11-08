@@ -53,30 +53,26 @@ class ReplyTests(unittest.TestCase):
     def test_on_reads_back_what_dns_loaded(self):
         reply = voice_agent.route('Hey Eddie, protect anything health related')
         self.assertEqual([{'mode': 'health', 'on': True}], self.backend.posts)
-        self.assertIn("Health protection is on, and Eddie's DNS has loaded it", reply)
-        self.assertIn('like BetterHelp, CVS or GoodRx', reply)
-        self.assertIn('74 trackers', reply)
-        self.assertIn('keep working', reply)
+        self.assertEqual('Health protection turned on.', reply)
 
     def test_site_names_fit_the_mode(self):
-        self.assertIn("a kids' site", voice_agent.route('protect the kids'))
-        self.assertIn('a banking or shopping site', voice_agent.route('protect money'))
+        self.assertEqual('Kids protection turned on.', voice_agent.route('protect the kids'))
+        self.assertEqual('Money protection turned on.', voice_agent.route('protect money'))
 
     def test_off_reads_back_the_change(self):
-        self.assertEqual("Health protection is off, and Eddie's DNS has loaded the change.",
+        self.assertEqual('Health protection turned off.',
                          voice_agent.route('stop protecting health'))
         self.assertEqual({'mode': 'health', 'on': False}, self.backend.posts[-1])
 
     def test_not_loaded_never_claims_blocking(self):
         self.backend.applied = False
         reply = voice_agent.route('protect health')
-        self.assertIn("hasn't loaded it yet, so nothing is blocked yet", reply)
-        self.assertNotIn('I block', reply)
-        self.assertIn('may still block', voice_agent.route('stop protecting health'))
+        self.assertEqual("Health protection saved as on, but Eddie's DNS hasn't loaded it yet.", reply)
+        self.assertNotIn('turned', voice_agent.route('stop protecting health'))
 
     def test_backend_down_or_unacknowledged_changes_nothing_said(self):
         self.backend.down = True
-        self.assertEqual("I couldn't change health protection. Check the local backend before trying again.",
+        self.assertEqual("I couldn't change health protection.",
                          voice_agent.route('protect health'))
         self.backend.down, self.backend.wrong = False, True
         self.assertIn("couldn't change kids protection", voice_agent.route('protect the kids'))

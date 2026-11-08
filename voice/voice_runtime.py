@@ -35,7 +35,7 @@ class Capture:
 def transcribe_command(samples, transcriber, emit, answer, retry=True):
     """Recover from a missed utterance without terminating wake detection.
 
-    Returns the text. An empty result is answered ("Didn't catch that") only
+    Returns the text. An empty result is answered ("I didn't quite catch that") only
     when retry is True, so background noise can't keep Eddie talking.
     """
     emit({'type': 'voice_state', 'state': 'thinking'})

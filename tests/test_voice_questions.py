@@ -49,7 +49,7 @@ class VoiceQuestions(unittest.TestCase):
         return voice_agent.question_announcement()
 
     def test_wake_reads_the_question_once(self):
-        self.assertEqual(f"I've got one question for you. {QUESTION['prompt']} Say yes to confirm or no to cancel.",
+        self.assertEqual(f"{QUESTION['prompt']} Yes or no?",
                          self.wake())
         self.assertEqual('question', voice_agent.confirmation.status()['kind'])
         voice_agent.confirmation.cancel()
@@ -59,7 +59,7 @@ class VoiceQuestions(unittest.TestCase):
     def test_yes_blocks_and_confirms_only_when_applied(self):
         self.wake()
         reply = voice_agent.respond('Yes.')
-        self.assertEqual(f"Blocked {TRACKER} on every device. Eddie's DNS has loaded the change.", reply)
+        self.assertEqual(f"Blocked {TRACKER}.", reply)
         self.assertEqual([{'answer': 'block', 'by': 'voice'}], self.api.answers)
         self.assertEqual([(TRACKER, 'block', 'voice')],
                          [(r['pattern'], r['action'], r['created_by']) for r in self.api.rows.values()])
@@ -69,25 +69,25 @@ class VoiceQuestions(unittest.TestCase):
         self.wake()
         reply = voice_agent.respond('yes')
         self.assertNotIn('Blocked', reply)
-        self.assertIn("isn't confirmed blocked", reply)
+        self.assertEqual(voice_agent.SAVED_NOT_LOADED, reply)
 
     def test_no_writes_nothing_and_leaves_the_question_open(self):
         self.wake()
-        self.assertEqual('Cancelled. Nothing changed.', voice_agent.respond('no'))
+        self.assertEqual('Cancelled.', voice_agent.respond('no'))
         self.assertEqual([], self.api.answers)
         self.assertIn(QUESTION['id'], self.api.open)
 
     def test_undo_removes_the_block(self):
         self.wake()
         voice_agent.respond('yes')
-        self.assertEqual(f"Undone. I removed the block on {TRACKER}, and Eddie's DNS has loaded the change.",
+        self.assertEqual(f"Undid the block on {TRACKER}.",
                          voice_agent.respond('undo that'))
         self.assertEqual({}, self.api.rows)
 
     def test_answered_elsewhere_changes_nothing(self):
         self.wake()
         self.api.open.clear()  # Ignore on the dashboard first
-        self.assertEqual('That question was already answered. Nothing changed.', voice_agent.respond('yes'))
+        self.assertEqual('That was already answered.', voice_agent.respond('yes'))
         self.assertEqual([], voice_agent.undo_stack)
 
     def test_backend_down_means_no_question(self):
