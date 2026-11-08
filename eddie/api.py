@@ -669,6 +669,7 @@ class DeviceIn(BaseModel):
     label: str | None = None  # None or "" clears it
     kid: StrictBool | None = None  # a child's device, for kid mode (#119)
     phone: StrictBool | None = None  # a household phone, for home mode's presence check (#20)
+    security: StrictBool | None = None  # a security/outdoor device, exempt from home mode (#46)
 
     @field_validator("label")
     @classmethod
@@ -755,11 +756,11 @@ async def update_device(key: str, body: DeviceIn):
     if not rules.DEVICE.fullmatch(key):
         raise HTTPException(422, "Expected a MAC address or client IP.")
     changes = body.model_dump(include=body.model_fields_set)
-    for flag in ("kid", "phone"):
+    for flag in ("kid", "phone", "security"):
         if changes.get(flag) is None:
             changes.pop(flag, None)
     if not changes:
-        raise HTTPException(422, "Expected a label, kid or phone.")
+        raise HTTPException(422, "Expected a label, kid, phone, or security.")
     row = devices.update(rules_db(), key, changes)
     if row is None:
         raise HTTPException(404, f"Eddie hasn't seen a device {key}.")

@@ -1269,4 +1269,5 @@ def route(text):
             return str(request('/summary')['text'])
         except Exception:
             return "I can't reach Eddie’s traffic backend, so I don't have a current summary."
-    return "Try asking what's been going on, or say turn on home mode."
+    return ("I don't know how to answer that yet. I can summarize activity, explain recent blocks, "
+            "report what a device is doing, or help with privacy controls.")

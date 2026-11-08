@@ -4,6 +4,7 @@
 #   sudo ./scripts/install_pi.sh         # Ollama on the Pi; --ollama http://<Mac IP>:11434 uses the Mac's
 #   sudo systemctl start eddie.target    # or reboot
 # Rerun after moving the repo, setting up voice or changing the Ollama address; the tokens in the env file are kept.
+# It also enables eddie-update.timer, which keeps the Pi on origin/main (scripts/update_pi.sh).
 # --dest DIR writes the units and env file into DIR and leaves systemd alone (used by the tests).
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -70,10 +71,13 @@ done
 
 systemctl daemon-reload
 systemctl enable eddie.target eddie-api.service eddie-dns.service eddie-classifier.service eddie-dashboard.service
+# Follows origin/main every 5 minutes; sudo touch /etc/eddie/hold pauses it.
+systemctl enable --now eddie-update.timer
 ip="$(hostname -I | awk '{print $1}')"
 token="$(sed -n 's/^EDDIE_DASHBOARD_TOKEN=//p' "$env_file")"
 echo "Installed; Eddie starts on boot. Start it now: sudo systemctl start eddie.target"
 echo "Logs: journalctl -u 'eddie-*' -f"
+echo "Updates from main every 5 minutes. Before a demo: sudo touch /etc/eddie/hold"
 systemctl is-enabled --quiet ollama.service 2>/dev/null || grep -q '^EDDIE_OLLAMA_URL=' "$env_file" ||
   echo "No ollama service on this Pi: install Ollama and pull the model, or the classifier and typed asks wait for it."
 [[ "$dashboard" == */run_voice.sh ]] || echo "No .venv-frontend: dashboard only, no microphone (see voice/README.md, then rerun this)."

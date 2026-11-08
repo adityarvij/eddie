@@ -80,6 +80,14 @@ DENIED = "device denied"
 _WORD_SPLIT = re.compile(r"[^a-z]+")
 # Labelled tracking domains (labels.py) away mode blocks for the devices it covers.
 TELEMETRY = frozenset(d for d, (_, category) in DOMAINS.items() if category in TRACKING)
+# Device names/hostnames auto-classified as security devices (exempt from home mode #46).
+SECURITY_DEVICE_WORDS = re.compile(r"\b(?:doorbell|alarm|outdoor|floodlight|chime|front door|back door|driveway|backyard)\b", re.IGNORECASE)
+
+
+def is_security_device(label: str | None = None, hostname: str | None = None) -> bool:
+    """Returns True if the label or hostname matches outdoor/security hardware (#46)."""
+    words = f"{label or ''} {hostname or ''}"
+    return bool(SECURITY_DEVICE_WORDS.search(words))
 # Camera upload domains blocked when home mode is active (#43).
 CAMERA_DOMAINS = frozenset({
     "ring.com",
@@ -210,6 +218,7 @@ class Engine:
         self.acr_caught: OrderedDict[tuple[str, str], int] = OrderedDict()  # (device, domain) -> interval ms
         self.block_doh = False  # block the resolver names in bypass.RESOLVERS
         self.home_mode = False
+        self.security_devices: frozenset[str] = frozenset()
         self.protected: dict[str, str] = {}  # first-party domain -> sensitivity mode protecting it
         self.sensitive_trackers: frozenset[str] = frozenset()
         self.windows: OrderedDict[str, tuple[int, str]] = OrderedDict()  # device -> (until ms, mode)
@@ -227,6 +236,9 @@ class Engine:
     def set_quarantined(self, held: dict[str, str]) -> None:
         self.quarantined = dict(held)
 
+
+    def set_security_devices(self, devices) -> None:
+        self.security_devices = frozenset(devices)
 
     def set_home_mode(self, on: bool) -> None:
         self.home_mode = bool(on)
@@ -266,6 +278,13 @@ class Engine:
                            in conn.execute("SELECT domain, label, confidence, reason FROM ai_verdicts")})
         home_on = conn.execute("SELECT value FROM engine_state WHERE key = 'home_mode'").fetchone()
         self.set_home_mode(bool(home_on and home_on[0]))
+        sec_devs = set()
+        for mac, label, hostname, sec in conn.execute(
+            "SELECT mac, label, hostname, coalesce(security, 0) FROM devices"
+        ):
+            if sec or (label and SECURITY_DEVICE_WORDS.search(label)) or (hostname and SECURITY_DEVICE_WORDS.search(hostname)):
+                sec_devs.add(mac)
+        self.set_security_devices(sec_devs)
         on = conn.execute("SELECT value FROM engine_state WHERE key = 'away'").fetchone()
         end = conn.execute("SELECT value FROM engine_state WHERE key = 'away_until'").fetchone()
         devices = [r[0] for r in conn.execute("SELECT mac FROM away_devices WHERE security = 0")]
@@ -308,7 +327,10 @@ class Engine:
         if entry := matches(domain, self.allowlist):
             return Decision("allow", "allowlist", entry)
         if self.home_mode and (entry := matches(domain, CAMERA_DOMAINS)):
-            return Decision("block", "home_mode", f"home mode: {entry} camera upload blocked")
+            if device in self.security_devices or (ip and ip in self.security_devices):
+                pass  # Security devices (doorbells, outdoor cams, alarms) are exempt from Home Mode (#46)
+            else:
+                return Decision("block", "home_mode", f"home mode: {entry} camera upload blocked")
         if entry := matches(domain, self.blocklist):
             return Decision("block", "blocklist", entry)
         if self.block_doh and (entry := matches(domain, RESOLVERS)):
