@@ -273,6 +273,11 @@ def autostart_microphone(tries=6, wait=10.0):
     return False
 
 
+def guest_view(view=None):
+    """The guest profile plus the house guide's guest topic names (never answers) for the guest-mode pane."""
+    return {**(view or voice_agent.profile.view()), 'topics': voice_agent.house_guide.topics('guest')}
+
+
 def update_guest(body):
     """(status, payload) for the owner's Guest Mode change (#163) from the Eddie computer.
 
@@ -283,7 +288,7 @@ def update_guest(body):
         return 400, {'message': 'Expected active and/or allowed.'}
     was = voice_agent.profile.role()
     try:
-        view = voice_agent.profile.update(body.get('active'), body.get('allowed'))
+        view = guest_view(voice_agent.profile.update(body.get('active'), body.get('allowed')))
     except ValueError as error:
         return 400, {'message': str(error)}
     except OSError:
@@ -348,7 +353,7 @@ class Handler(SimpleHTTPRequestHandler):
         if self.path == '/api/voice/status':
             return self.json_response(200, {'type': 'voice_status', **voice_state})
         if self.path == '/api/guest':
-            return self.json_response(200, voice_agent.profile.view())
+            return self.json_response(200, guest_view())
         if self.path.startswith('/api/voice/audio/'):
             audio = dict(latest_audio)
             if not audio or self.path != '/api/voice/audio/' + audio['id']:

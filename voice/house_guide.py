@@ -23,6 +23,11 @@ HOUSE_TOPICS = re.compile(
 QUESTION = re.compile(
     r'(?:(?:ok|okay|eddie|hey eddie|please) )*(?:what|whats|where|wheres|when|whens|which|who|how|hows|is|are|do|does'
     r'|can (?:i|we|guests)|could (?:i|we)|may (?:i|we)|should (?:i|we)|tell me|any) .*')
+# "What can I ask?", "what do you know about the house?": answered with topic names, never answers.
+ASKS_TOPICS = re.compile(
+    r'(?:(?:ok|okay|eddie|hey eddie|please) )*(?:help|help me|what can (?:i|we) ask(?: you)?(?: about)?'
+    r'|what can you (?:do|help (?:me |us )?with)|what do you know(?: about (?:the|this) (?:house|place|home))?'
+    r'|whats in the (?:house )?guide|tell me about (?:the|this) (?:house|place))(?: please)?')
 
 
 class GuideError(ValueError):
@@ -78,6 +83,15 @@ def score(entry, text):
 def visible(entries, role):
     """What this role may hear: guests only guest entries, the owner all of them. Unknown roles get guest."""
     return entries if role == 'owner' else [e for e in entries if e['audience'] == 'guest']
+
+
+def topics(role='guest', entries=None, path=None):
+    """Topic names this role may hear, in the guide's order. An unreadable guide has none."""
+    try:
+        entries = load(path) if entries is None else entries
+    except GuideError:
+        return []
+    return [e['topic'] for e in visible(entries, role)]
 
 
 def answer(text, role='guest', entries=None, path=None):

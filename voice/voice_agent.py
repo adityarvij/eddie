@@ -533,6 +533,22 @@ def join(names, last='and'):
     return names[0] if len(names) == 1 else f"{', '.join(names[:-1])} {last} {names[-1]}"
 
 
+GUEST_TOPICS_SPOKEN = 6
+
+
+def guest_help(every=False):
+    """What a guest may ask, from the owner's approvals and the guide's guest topics. Names topics, never answers."""
+    names = house_guide.topics('guest') if profile.allows('house_guide') else []
+    shown = names[:GUEST_TOPICS_SPOKEN if every else 3]
+    asks = [f"ask me about {join(shown)}"] if shown else []
+    if profile.allows('timers'):
+        asks.append('set a timer')
+    if not asks:
+        return "Your host hasn't turned anything on for guests yet."
+    reply = f"You can {', or '.join(asks)}." if len(asks) > 1 else f"You can {asks[0]}."
+    return f"{reply} Tap capabilities for the rest." if len(names) > len(shown) else reply
+
+
 def delete_rules(rules):
     """Delete acknowledged rules newest first, popping each one the backend removed
     (or no longer has). Stops at the first failure; what's left is still stored.
@@ -1254,10 +1270,12 @@ def route(text):
     if profile.role() == 'guest':
         # The local model's tools are all household data; guest concierge routing is #166.
         if text in ('hello', 'hi', 'hey', 'hey eddie'):
-            return f"Hey, I'm Eddie. {guest.HELP}"
+            return f"Welcome, I'm Eddie, your concierge. {guest_help()}"
+        if house_guide.ASKS_TOPICS.fullmatch(house_guide.normal(raw)):
+            return guest_help(every=True)
         if re.search(r'\b(summary|update|happening|going|requests|blocked|doing|activity)\b', text):
             return profile.check('traffic')
-        return guest.HELP
+        return f"{guest.HELP} {guest_help()}"
     if text in ('hello', 'hi', 'hey', 'hey eddie'):
         return f"Hey, I'm Eddie. {CAPABILITIES_HINT}"
     if intent_model is not None:
