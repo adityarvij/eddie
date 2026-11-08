@@ -143,6 +143,9 @@ function renderKidMode() {
     : `kid mode: ${!kids.length ? 'off' : on ? 'on' : locked.length ? `on for ${locked.length} of ${kids.length}` : 'off'}`;
   button.disabled = kidPending !== null || !kids.length; button.setAttribute('aria-pressed', String(on)); button.setAttribute('aria-busy', String(kidPending !== null));
   $('kid-note').textContent = !kids.length ? "set a device to child to use kid mode" : `children's devices: ${listNames(kids)}`;
+  // The heading's kid flag, like the house for home mode: shown while any child's device is locked down.
+  const flag = $('kid-flag'), label = on ? 'kid mode on' : `kid mode on for ${locked.length} of ${kids.length}`;
+  flag.hidden = !locked.length; flag.setAttribute('aria-label', label); flag.setAttribute('title', label);
 }
 async function toggleKidMode() {
   const kids = deviceList.filter(d => d.kid), locked = kids.filter(d => lockedMacs.has(d.mac)), on = locked.length < kids.length;
