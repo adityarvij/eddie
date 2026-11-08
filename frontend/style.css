@@ -115,12 +115,12 @@ footer #open-devices{color:#fff}footer #open-devices span{margin:0}
 .terminal-heading{display:flex;align-items:center}
 .home-toggle{width:44px;height:44px;margin:-12px 0 -12px -4px;padding:12px;border:0;background:none;color:#fff;touch-action:manipulation}
 .home-toggle svg{width:20px;height:20px;display:block;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linejoin:miter}
-.home-toggle[aria-pressed="true"] svg{fill:currentColor}
+.home-toggle[aria-pressed="true"] svg,.home-toggle[data-spoofing="true"] svg{fill:currentColor}
 .home-toggle[aria-busy="true"] svg{stroke-dasharray:2 2;opacity:.6}
 .home-toggle:disabled{cursor:default;opacity:.4}.home-toggle[aria-busy="true"]:disabled{opacity:1}
 /* While a spoof rule is active (#99) the house turns into Pinocchio: Eddie is telling trackers a fib. */
 .home-toggle .pinocchio,.home-toggle[data-spoofing="true"] .house{display:none}.home-toggle[data-spoofing="true"] .pinocchio{display:block}
-.home-toggle .eye{fill:currentColor;stroke:none}.home-toggle[aria-pressed="true"] .eye{fill:#000}
+.home-toggle .eye{fill:currentColor;stroke:none}.home-toggle[aria-pressed="true"] .eye,.home-toggle[data-spoofing="true"] .eye{fill:#000}
 /* Data broker watch: lookups of known brokers and ad exchanges get their own counter and highlight. */
 .broker-counter{color:#facc15}.event.broker{background:rgba(250,204,21,.08)}.tag-broker{color:#facc15}
 /* Privacy settings coach (#112): one block per recognised device, inside the report panel style. */
@@ -155,5 +155,7 @@ footer .modes-note:empty{display:none}
 /* Kid mode flag after the house: a baby's face with a curl and a pacifier, shown only while kid mode is on (even partly). */
 .kid-flag{width:44px;height:44px;margin:-12px 0 -12px -4px;padding:12px;color:#fff}
 .kid-flag[hidden]{display:none}
-.kid-flag svg{width:20px;height:20px;display:block;fill:none;stroke:currentColor;stroke-width:1.5}
-.kid-flag .dot{fill:currentColor;stroke:none}
+/* Solid like the house and person flags while on: a white face with black eyes and dummy, and its curl as a line. */
+.kid-flag svg{width:20px;height:20px;display:block;fill:currentColor;stroke:currentColor;stroke-width:1.5}
+.kid-flag path{fill:none}
+.kid-flag .dot{fill:#000;stroke:none}

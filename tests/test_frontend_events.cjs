@@ -527,7 +527,7 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   assert.equal(get('character').dataset.hatTip, 'once', 'the next guest session tips the hat again');
   socket.onmessage({data:JSON.stringify({type:'mode', home_mode:false, home_manual:true, home_applied:true})});
   // Guest mode's pane: a badge, and capabilities become the guest topics (names only), opened once per session.
-  assert.deepEqual([get('guest-flag').attrs['aria-pressed'], get('guest-flag').title], ['true', 'guest mode: on'], 'the person flag is filled');
+  assert.deepEqual([get('guest-flag').hidden, get('guest-flag').attrs['aria-pressed'], get('guest-flag').title], [false, 'true', 'guest mode on · tap to turn it off'], 'the person flag shows, solid, only while on');
   assert.equal(get('capabilities').hidden, false, 'a new guest session opens what guests can ask');
   assert.equal(get('capabilities-title').textContent, 'guest mode · ask eddie');
   assert.deepEqual([get('capabilities-owner').hidden, get('guest-capabilities').hidden], [true, false]);
@@ -548,7 +548,7 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   assert.deepEqual(get('guest-topics').children.map(li => li.textContent), ['“Set a timer for 10 minutes.”','“Stop recording.”'], 'topics only when the house guide is approved');
   get('guest-flag').onclick();  // the header flag is the same switch
   await answer('/api/guest', 200, {active:false, allowed:['timers'], approvable:['house_guide','timers'], owner_only:['traffic'], topics:['Wi-Fi']});
-  assert.deepEqual([get('guest-flag').attrs['aria-pressed'], get('capabilities-owner').hidden, get('guest-capabilities').hidden], ['false', false, true]);
+  assert.deepEqual([get('guest-flag').hidden, get('capabilities-owner').hidden, get('guest-capabilities').hidden], [true, false, true], 'off: no outlined flag, just gone');
   assert.equal(get('capabilities-title').textContent, 'what to ask eddie');
   context.wake(true);
   assert.equal(get('assistant-title').textContent, "Hey, what's up?");
