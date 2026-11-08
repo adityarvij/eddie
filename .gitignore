@@ -8,3 +8,4 @@ eddie/data/geoip/
 voice/timers.json
 voice/timers.json.tmp
 voice/contacts.json
+voice/house_guide.json

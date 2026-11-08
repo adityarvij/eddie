@@ -10,6 +10,7 @@ import urllib.request
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import house_guide
 import texting
 import timers
 
@@ -116,6 +117,8 @@ def burglars_eye(hours=None):
     return request(f'/burglars-eye?hours={hours}')
 
 
+WHAT_THEY_KNOW = re.compile(
+    r'\bwhat (?:do|does|can|could) (?:\w+|my \w+|the \w+) (?:know|tell|guess|figure out|learn) about (?:me|us|my house|my home|our house)\b')
 EMPTY_HOUSE = re.compile(
     r'\b(?:burglars?|(?:house|home|place)(?: (?:was|is|looks?|looked|looking|seems?|seemed|been|be|sits?|sat))* empty'
     r'|(?:nobody|no one|noone)(?:s| is| was)? (?:home|in|around))\b')
@@ -1033,6 +1036,9 @@ ask_model = None
 phrase_inferences = None
 # Timers and reminders (#122). In memory here; frontend/serve.py swaps in the file-backed store and rings them.
 timer_store = timers.Timers()
+# Whose house-guide entries Eddie may speak (#165). Guest until concierge roles (#163) say who is
+# talking, so owner-only entries never reach a voice answer yet.
+house_guide_role = 'guest'
 # Turns the microphone off (#128): callable() -> True if it was on. Set by frontend/serve.py;
 # None when there's no microphone to stop (tests, typed-only use).
 microphone_off = None
@@ -1127,6 +1133,10 @@ def route(text):
     reply = timers.handle(timer_store, raw)
     if reply is not None:
         return reply
+    if not (WHAT_THEY_KNOW.search(text) or EMPTY_HOUSE.search(text) or PRIVACY_TIPS.search(text)):
+        reply = house_guide.answer(raw, house_guide_role)
+        if reply is not None:
+            return reply
     # Match the entire request so negations, questions and additional actions
     # cannot accidentally activate a privacy setting.
     on = re.fullmatch(r'(?:please )?(?:(?:turn|switch) on home mode|(?:turn|switch) home mode on|enable home mode|(?:i want|id like) home mode (?:on|enabled)|(?:can|could|would) you (?:turn on|enable) home mode)(?: please)?', text)
@@ -1151,7 +1161,7 @@ def route(text):
         if allow:
             return ALLOW_UNRESOLVED
         return "I haven't changed anything. I can block or allow a domain, allow a service like Netflix, lock down a device, allow or deny a new device, undo my last rule, or turn home, away or kid mode on or off; email isn't connected yet."
-    if re.search(r'\bwhat (?:do|does|can|could) (?:\w+|my \w+|the \w+) (?:know|tell|guess|figure out|learn) about (?:me|us|my house|my home|our house)\b', text):
+    if WHAT_THEY_KNOW.search(text):
         try:
             report = what_they_know(report_hours(raw))
         except Exception:
