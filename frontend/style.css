@@ -11,23 +11,25 @@
 .character.talking .body{animation:sway .65s ease-in-out infinite alternate}
 .character .role-accessory{display:none;fill:none;stroke:#fff;stroke-width:7;stroke-linecap:square;stroke-linejoin:miter;transform-box:fill-box;transform-origin:50% 100%}
 .character::before,.character::after{content:"";display:none;position:absolute;z-index:2;box-sizing:border-box;color:#fff;pointer-events:none}
-.character[data-role="home"] .role-accessory{display:block}
+.character[data-role="home"] .home-roof{display:block}
 .character[data-role="kid"]::before{display:block;left:50%;top:2%;width:34%;height:7%;transform:translateX(-50%);border:6px solid currentColor;border-bottom:0;border-radius:70px 70px 0 0}
 .character[data-role="kid"]::after{display:block;left:50%;top:-2%;width:30%;height:4px;transform:translateX(-50%);background:currentColor;box-shadow:0 0 0 0 currentColor}
-.character[data-role="concierge"]::before{display:block;left:50%;top:-1%;width:30%;height:10%;transform:translateX(-50%);border:6px solid currentColor;border-bottom-width:8px}
-.character[data-role="concierge"]::after{display:block;left:50%;top:8%;width:44%;height:6px;transform:translateX(-50%);background:currentColor}
+/* Concierge (#162): a bellhop pillbox with a gold E, the only accent; forced colours draw the E in the text colour. */
+.character .bellhop-hat .pillbox{fill:#000}.character .bellhop-hat .bellhop-e{stroke:#e8b931;stroke-width:5}
+.character[data-role="concierge"] .bellhop-hat{display:block}
+@media(forced-colors:active){.character .bellhop-hat .bellhop-e{stroke:CanvasText}}
 .character[data-role="away"]::before{display:block;right:-2%;bottom:9%;width:25%;height:24%;border:6px solid currentColor}
 .character[data-role="away"]::after{display:block;right:5%;bottom:31%;width:12%;height:7%;border:5px solid currentColor;border-bottom:0;border-radius:8px 8px 0 0}
 .character[data-motion="breathe"]{animation:role-breathe 6s ease-in-out infinite}
 .character[data-motion="bounce"]{animation:role-bounce 1.8s ease-in-out infinite}
-.character[data-motion="hat-tip"]::before,.character[data-motion="hat-tip"]::after{transform-origin:80% 100%;animation:role-hat-tip 5s ease-in-out infinite}
+.character[data-role="concierge"][data-hat-tip] .bellhop-hat{transform-origin:100% 100%;animation:role-hat-tip 1.4s ease-in-out 1}
 .character[data-motion="travel"]{animation:role-travel 3.5s ease-in-out infinite}
 .character[data-stance="playful"] .body{transform:rotate(-2deg)}
 .character[data-stance="formal"] .body{transform:scaleY(1.015)}
 .character[data-stance="ready"] .body{transform:rotate(1.5deg)}
 @keyframes role-breathe{50%{transform:translateY(2px) scale(1.015)}}
 @keyframes role-bounce{45%{transform:translateY(-12px)}60%{transform:translateY(-4px)}}
-@keyframes role-hat-tip{8%,16%{transform:translateX(-50%) rotate(8deg)}0%,24%,100%{transform:translateX(-50%) rotate(0)}}
+@keyframes role-hat-tip{30%,55%{transform:translateY(-8px) rotate(12deg)}}
 @keyframes role-travel{50%{transform:translateX(7px) rotate(1deg)}}
 .open-logs{position:fixed;right:42px;bottom:30px;border:0;border-bottom:1px solid #666;background:#000;color:#ddd;padding:10px 0;font:12px 'Courier New',monospace;z-index:2}
 .assistant-logs{position:fixed;right:28px;bottom:80px;width:min(620px,calc(100vw - 56px));max-height:45dvh;background:#080808;border:1px solid #333;padding:18px;z-index:3;box-shadow:0 16px 60px #000b}

@@ -118,12 +118,14 @@ The voice view contains one Eddie SVG and one voice-state overlay. `EDDIE_VISUAL
 | regular | none | upright | attentive |
 | home | roof cap above the head | settled | slow breathing |
 | kid | propeller cap above the head | playful | bounce |
-| concierge | top hat above the head | formal | hat tip |
+| concierge | bellhop pillbox with a gold E | formal | one hat tip per guest session |
 | away | suitcase beside the body | ready | travel sway |
 
-Explicit acknowledged session state takes precedence, followed by acknowledged away, kid and home mode state. Pending changes are deliberately excluded from the map, so the current accessory stays in place until the backend acknowledges a change. Unknown, loading and disconnected state render regular Eddie. Accessories stay outside the eye and mouth region, and CSS scales the same character at laptop and iPad kiosk sizes. `prefers-reduced-motion: reduce` removes breathing, bounce, hat-tip and travel motion while leaving the accessory and stance visible.
+Explicit acknowledged session state takes precedence, followed by Guest Mode as `GET /api/guest` last answered (concierge), then acknowledged away, kid and home mode state. Pending changes are deliberately excluded from the map, so the current accessory stays in place until the backend acknowledges a change. Unknown, loading and disconnected state render regular Eddie. Accessories stay outside the eye and mouth region, and CSS scales the same character at laptop and iPad kiosk sizes. `prefers-reduced-motion: reduce` removes breathing, bounce, hat-tip and travel motion while leaving the accessory and stance visible.
 
 Role styling never sets voice colors: listening, ready, thinking and confirming retain the yellow edge light, and speaking retains blue for all five roles. `role_state` and `session_state` events are accepted only with `acknowledged: true`; `{pending: true}` is ignored. Mode snapshots continue to derive home, kid and away roles only from backend values.
+
+Concierge Eddie (#162) wears a bellhop pillbox hat with a small gold E whenever `GET /api/guest` reports `active: true`, either from the 30-second poll or from the saved profile the owner's switch gets back. A switch press that is still waiting or was refused changes nothing. If the guest profile can't be read, Eddie falls back to regular. The gold E is the only accent colour; its contrast against black is high, and in forced-colours mode it is drawn in the text colour. When the guest session starts, Eddie tips the hat once. Re-renders and a dropped-and-restored event stream don't replay the tip; only a confirmed checkout (`active: false`) re-arms it. Reloading the page shows the tip again, because the dashboard keeps no state. At checkout the hat comes off and Eddie returns to whatever owner role is acknowledged, such as Home. Reduced motion shows the hat with no tip.
 
 **Open logs** just below Eddie opens a live drawer of the same recent network activity shown by the main feed. Closing the drawer leaves Eddie open. Escape or the top close control dismisses Eddie. This drawer does not persist microphone audio or speech transcripts.
 

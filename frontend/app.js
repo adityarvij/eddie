@@ -181,14 +181,17 @@ const EDDIE_VISUALS = Object.freeze({
   regular: Object.freeze({accessory: 'none', stance: 'upright', motion: 'attentive'}),
   home: Object.freeze({accessory: 'roof', stance: 'settled', motion: 'breathe'}),
   kid: Object.freeze({accessory: 'propeller', stance: 'playful', motion: 'bounce'}),
-  concierge: Object.freeze({accessory: 'top-hat', stance: 'formal', motion: 'hat-tip'}),
+  concierge: Object.freeze({accessory: 'bellhop', stance: 'formal', motion: 'hat-tip'}),
   away: Object.freeze({accessory: 'suitcase', stance: 'ready', motion: 'travel'})
 });
-let visualConnected = true;
+// guest is Guest Mode as GET /api/guest last answered (#163), null while unknown. hatTipped: this guest session's
+// one hat-tip (#162) has played; re-renders and reconnects keep it, and only a confirmed checkout re-arms it.
+let visualConnected = true, guest = null, hatTipped = false;
 function acknowledgedRole(state = modes) {
   if (!visualConnected) return 'regular';
   const explicit = state.session_role || state.role;
   if (['regular', 'home', 'kid', 'concierge', 'away'].includes(explicit)) return explicit;
+  if (guest?.active === true) return 'concierge';
   if (state.away?.on === true || state.away === true) return 'away';
   if (state.kid_mode === true) return 'kid';
   if (state.home_mode === true) return 'home';
@@ -198,6 +201,8 @@ function renderEddieVisual(state = modes) {
   const role = acknowledgedRole(state), visual = EDDIE_VISUALS[role], character = $('character');
   character.dataset.role = role; character.dataset.accessory = visual.accessory;
   character.dataset.stance = visual.stance; character.dataset.motion = visual.motion;
+  if (role === 'concierge' && !hatTipped) { hatTipped = true; character.dataset.hatTip = 'once'; }
+  else if (role !== 'concierge') { delete character.dataset.hatTip; if (visualConnected && guest?.active === false) hatTipped = false; }
 }
 renderEddieVisual();
 function applyModes(state) {
@@ -321,8 +326,8 @@ $('question-undo').onclick = undoAnswer;
 // Guest Mode (#163): the owner's switch and what guests may use, shown only as the bridge saved it.
 // Only the Eddie computer may change it; a paired iPad gets the bridge's 403 as a notice.
 const GUEST_LABELS = {house_guide: 'house guide', timers: 'timers', tv: 'tv', lights: 'lights', thermostat: 'thermostat'};
-let guest = null;
 function renderGuest() {
+  renderEddieVisual();
   const button = $('guest-mode');
   button.disabled = !guest; button.setAttribute('aria-pressed', String(!!guest?.active));
   button.textContent = `guest mode: ${!guest ? '…' : guest.active ? 'on' : 'off'}`;
