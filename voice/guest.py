@@ -23,9 +23,9 @@ APPROVABLE = ('house_guide', 'timers', 'tv', 'lights', 'thermostat')
 # Always allowed: they share nothing. Turning the mic off only shares less.
 ALWAYS = ('greeting', 'microphone_off')
 
-OWNER_ONLY_REPLY = "That's only for the household, so I can't help with it in guest mode."
-NOT_APPROVED_REPLY = "Your host hasn't turned that on for guests, so I can't help with it."
-HELP = "I'm in guest mode, so I can only help with what your host has turned on."
+OWNER_ONLY_REPLY = "That's only for the household."
+NOT_APPROVED_REPLY = "Your host hasn't turned that on for guests."
+HELP = "I'm in guest mode."
 
 
 class Profile:

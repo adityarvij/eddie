@@ -91,58 +91,34 @@ class FlowTests(unittest.TestCase):
     def test_on_waits_for_yes_then_names_covered_and_exempt_devices(self):
         reply = voice_agent.respond("I'm leaving for the weekend.")
         self.assertIn('Turn on away mode until the end of Sunday?', reply)
-        self.assertIn('Cameras, doorbells and alarms stay up.', reply)
         self.assertEqual([], self.backend.posts)
         reply = voice_agent.respond('yes')
         self.assertEqual(1, len(self.backend.posts))
         self.assertTrue(self.backend.posts[0]['away'])
         self.assertIsInstance(self.backend.posts[0]['away_until'], int)
-        self.assertEqual("Away mode is on until the end of Sunday. Eddie's DNS has loaded it and is cutting "
-                         "telemetry from TV and Laptop. Porch cam stays up.", reply)
+        self.assertEqual("Away mode turned on.", reply)
 
     def test_no_sends_nothing(self):
         voice_agent.respond('turn on away mode')
-        self.assertEqual('Cancelled. Nothing changed.', voice_agent.respond('no'))
+        self.assertEqual('Cancelled.', voice_agent.respond('no'))
         self.assertEqual([], self.backend.posts)
 
     def test_off_waits_for_yes(self):
-        self.assertEqual('Turn off away mode? Say yes to confirm or no to cancel.', voice_agent.respond("I'm back"))
-        self.assertEqual("Away mode is off, and Eddie's DNS has loaded the change.", voice_agent.respond('yes'))
+        self.assertEqual('Turn off away mode? Yes or no?', voice_agent.respond("I'm back"))
+        self.assertEqual("Away mode turned off.", voice_agent.respond('yes'))
         self.assertEqual([{'away': False}], self.backend.posts)
 
     def test_not_loaded_by_dns_is_said_plainly(self):
         self.backend.applied = False
         voice_agent.respond('turn on away mode')
-        self.assertEqual("I saved away mode, but Eddie's DNS hasn't loaded it yet, so nothing is blocked yet.",
-                         voice_agent.respond('yes'))
+        self.assertEqual("Away mode saved as on, but Eddie's DNS hasn't loaded it yet.", voice_agent.respond('yes'))
         voice_agent.respond('turn off away mode')
-        self.assertIn("hasn't loaded the change yet", voice_agent.respond('yes'))
-
-    def test_no_presence_devices_means_nothing_blocked(self):
-        self.backend.devices = []
-        voice_agent.respond('turn on away mode')
-        self.assertIn("so it isn't blocking anything", voice_agent.respond('yes'))
-
-    def test_many_devices_are_summarised(self):
-        self.backend.devices = [{'key': str(i), 'name': f'D{i}', 'score': 1} for i in range(5)]
-        self.backend.exempt = []
-        voice_agent.respond('turn on away mode')
-        self.assertTrue(voice_agent.respond('yes').endswith('cutting telemetry from D0, D1, D2 and 2 more.'))
-
-    def test_unlabelled_addresses_are_counted_not_read_out(self):
-        self.backend.devices = [{'key': 'aa:01', 'name': 'TV', 'score': 2},
-                                {'key': 'aa:bb:cc:dd:ee:ff', 'name': 'aa:bb:cc:dd:ee:ff', 'score': 1},
-                                {'key': '192.168.1.9', 'name': '192.168.1.9', 'score': 1}]
-        self.backend.exempt = [{'key': '10.0.0.4', 'name': '10.0.0.4'}]
-        self.assertIsNone(voice_agent.ADDRESS.fullmatch('dad'), 'a name made of hex letters is still a name')
-        voice_agent.respond('turn on away mode')
-        self.assertTrue(voice_agent.respond('yes').endswith(
-            'cutting telemetry from TV and 2 unnamed devices. 1 device without a name stays up.'))
+        self.assertEqual("Away mode saved as off, but Eddie's DNS hasn't loaded it yet.", voice_agent.respond('yes'))
 
     def test_backend_down_or_wrong_echo_is_not_claimed(self):
         self.backend.down = True
         voice_agent.respond('turn on away mode')
-        self.assertEqual("I couldn't confirm that went through. Check the local backend before trying again.",
+        self.assertEqual("I couldn't confirm that went through.",
                          voice_agent.respond('yes'))
         self.backend.down = False
         with patch.object(voice_agent, 'request', lambda *a, **k: {'away': False}):

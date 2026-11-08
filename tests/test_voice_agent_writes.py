@@ -57,55 +57,47 @@ class Writes(unittest.TestCase):
     def test_tv_only_netflix_is_read_back_then_locked_down_on_yes(self):
         self.model({'tool_calls': [call('lockdown_device', device='the TV', keep=['netflix'])]})
         reply = voice_agent.respond('The TV can only talk to Netflix.')
-        self.assertEqual(reply, "Lock down the TV? It'll only reach Netflix, plus Eddie's essentials like sign-in "
-                                "and updates. Say yes to confirm or no to cancel.")
+        self.assertEqual(reply, "Lock down the TV to Netflix? Yes or no?")
         self.assertFalse(self.wrote())
         self.assertEqual(voice_agent.respond('yes'),
-                         "The TV is locked down. The rules are saved and Eddie's DNS has loaded them. "
-                         "I haven't seen its traffic blocked yet, and it only applies while it uses Eddie for DNS.")
+                         "Locked down the TV.")
         self.assertEqual(self.rules(), sorted([(TV, p, 'allow', 'voice') for p in NETFLIX]
                                               + [(TV, '*', 'block', 'voice')]))
 
     def test_lockdown_with_nothing_kept_reads_back_essentials_only(self):
         self.model({'tool_calls': [call('lockdown_device', device='Fire Stick', keep=[])]})
         self.assertEqual(voice_agent.respond('cut the fire stick off completely'),
-                         "Lock down Fire Stick? It'll only reach Eddie's essentials like sign-in and updates. "
-                         "Say yes to confirm or no to cancel.")
+                         "Lock down Fire Stick to the essentials? Yes or no?")
 
     def test_block_says_saved_but_not_loaded(self):
         self.backend.applied = False
         self.model({'tool_calls': [{'function': {'name': 'block',  # Ollama may send a JSON string
                                                  'arguments': json.dumps({'domain': 'Ads.Example.com.'})}}]})
         self.assertEqual(voice_agent.respond('stop that ad server on everything'),
-                         'Block ads.example.com on every device? That adds one block rule. '
-                         'Say yes to confirm or no to cancel.')
-        self.assertEqual(voice_agent.respond('yes'), "I saved a rule to block ads.example.com, but Eddie's DNS "
-                                                     "hasn't loaded it yet, so it may still get through.")
+                         'Block ads.example.com? Yes or no?')
+        self.assertEqual(voice_agent.respond('yes'), voice_agent.SAVED_NOT_LOADED)
         self.assertEqual(self.rules(), [(None, 'ads.example.com', 'block', 'voice')])
         self.assertEqual(voice_agent.respond('undo that'),
-                         "I removed the block on ads.example.com, but Eddie's DNS hasn't loaded the change yet, "
-                         "so it may still apply for a moment.")
+                         "Removed the block on ads.example.com, but Eddie's DNS hasn't loaded the change yet.")
 
     def test_allow_service_and_domain(self):
         self.model({'tool_calls': [call('allow', service='youtube')]})
         reply = voice_agent.respond('let youtube through for everyone')
-        self.assertTrue(reply.startswith('Allow YouTube on every device? That adds 7 allow rules'), reply)
+        self.assertEqual('Allow YouTube? Yes or no?', reply)
         self.assertEqual(voice_agent.respond('yes'),
-                         "Allowed YouTube on every device. The rules are saved and Eddie's DNS has loaded them.")
+                         "Allowed YouTube.")
         self.model({'tool_calls': [call('allow', domain='api.example.com')]})
         self.assertEqual(voice_agent.respond('let the example api through'),
-                         'Allow api.example.com on every device? That adds one allow rule. '
-                         'Say yes to confirm or no to cancel.')
+                         'Allow api.example.com? Yes or no?')
         self.assertEqual(voice_agent.respond('yes'),
-                         "Allowed api.example.com on every device. The rule is saved and Eddie's DNS has loaded it.")
+                         "Allowed api.example.com.")
 
     def test_home_mode_never_claims_enforcement(self):
         self.model({'tool_calls': [call('set_mode', home_mode=True)]})
         self.assertEqual(voice_agent.respond("I'm home for the weekend"),
-                         'Turn home mode on? Say yes to confirm or no to cancel.')
+                         'Turn home mode on? Yes or no?')
         self.assertEqual(self.backend.modes, [])
-        self.assertEqual(voice_agent.respond('yes'), "Home mode is saved as on, but Eddie's DNS hasn't confirmed it, "
-                                                     "so I can't say it's being enforced.")
+        self.assertEqual(voice_agent.respond('yes'), "Home mode saved as on, but Eddie's DNS hasn't loaded it yet.")
         self.assertEqual(self.backend.modes, [{'home_mode': True}])
 
     # Invalid
@@ -169,18 +161,18 @@ class Writes(unittest.TestCase):
     def test_no_and_expiry_change_nothing(self):
         self.model({'tool_calls': [call('block', domain='ads.example.com')]})
         voice_agent.respond('kill that ad server')
-        self.assertEqual(voice_agent.respond('no'), 'Cancelled. Nothing changed.')
+        self.assertEqual(voice_agent.respond('no'), 'Cancelled.')
         self.model({'tool_calls': [call('set_mode', home_mode=True)]})
         voice_agent.respond("I'm home")
         self.clock.now += voice_agent.CONFIRM_SECONDS
         self.assertEqual(voice_agent.respond('yes'),
-                         "That request expired, so I didn't do it. Ask again if you still want it.")
+                         "That expired; ask again.")
         self.assertFalse(self.wrote())
 
     def test_model_timeout_falls_back_and_changes_nothing(self):
         self.model(TimeoutError('timed out'))
         self.assertEqual(voice_agent.respond('lock down the tv to netflix'),
-                         "I haven't changed anything. Tap capabilities, bottom right, to see what I can do.")
+                         voice_agent.NOT_CAUGHT)
         self.model(TimeoutError('timed out'))
         self.assertEqual(voice_agent.respond('block everything on the tv'), voice_agent.NOT_RESOLVED)
         self.assertIsNone(voice_agent.confirmation.status())

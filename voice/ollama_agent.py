@@ -45,7 +45,8 @@ ALL_DEVICES = {'', 'all', 'any', 'every', 'everything', 'all devices', 'every de
 WINDOW_WORDS = {'15m': '15 minutes', '1h': 'hour', '24h': '24 hours'}
 
 SYSTEM_PROMPT = (
-    'You are Eddie, a local privacy guard. Answer in two short sentences, spoken style, a little dry. '
+    'You are Eddie, a local privacy guard. Answer in one short sentence, spoken style, a little dry. '
+    'If you do not understand the request, reply exactly: I didn\'t quite catch that. '
     'Use tools for facts; never invent numbers. '
     'To block or allow a domain or service, lock a device down to some services, or turn home mode on or off, '
     'call that one tool once; Eddie reads it back and waits for a yes, so never say a change is done. '
@@ -54,11 +55,11 @@ SYSTEM_PROMPT = (
     'Only state facts that appear in tool results; when a result has a "said" sentence, base your answer on it. '
     'If a tool says enough_data is false, say there is not enough data instead of guessing.'
 )
-BACKEND_FAILURE = "I can't reach Eddie's traffic backend, so I can't answer that right now."
-UNVERIFIED = "I couldn't check that answer against Eddie's records, so I won't guess."
-INVALID_WRITE = "I couldn't turn that into a change I can check, so nothing changed."
-ONE_WRITE = "I can only set up one change at a time. Ask for them one by one. Nothing changed."
-NOT_DONE = "I haven't changed anything. Ask me again and I'll read the change back for a yes."
+BACKEND_FAILURE = voice_agent.UNREACHABLE
+UNVERIFIED = "I couldn't check that, so I won't guess."
+INVALID_WRITE = voice_agent.NOT_CAUGHT
+ONE_WRITE = "One change at a time, please."
+NOT_DONE = "I haven't changed anything yet; ask again."
 # A final reply that claims a change; changes only happen after a yes, never inside ask.
 CLAIMED = re.compile(r"\b(?:done|i(?:'ve| have) (?:just )?(?:blocked|allowed|locked|turned|set|added|changed)"
                      r"|(?:is|are) now (?:blocked|allowed|locked|on|off))\b")
@@ -199,10 +200,10 @@ def propose(name, args):
         return INVALID_WRITE
     if name == 'allow':
         return ('allow', {'name': domain, 'patterns': [domain]},
-                f'Allow {domain} on every device? That adds one allow rule.')
+                f'Allow {domain}?')
     if voice_agent.essential(domain):
         return voice_agent.essential_reply(domain)
-    return 'block', {'domain': domain}, f'Block {domain} on every device? That adds one block rule.'
+    return 'block', {'domain': domain}, f'Block {domain}?'
 
 
 

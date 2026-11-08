@@ -39,7 +39,7 @@ class ConfirmationFlow(unittest.TestCase):
 
     def ask(self):
         reply = voice_agent.respond('Lock down the TV.')
-        self.assertEqual(reply, 'Lock down the tv? Say yes to confirm or no to cancel.')
+        self.assertEqual(reply, 'Lock down the tv? Yes or no?')
         self.action.assert_not_called()
 
     def test_yes_executes_once(self):
@@ -55,7 +55,7 @@ class ConfirmationFlow(unittest.TestCase):
         for phrase in ('No.', 'cancel', "Don't", 'never mind'):
             with self.subTest(phrase=phrase):
                 self.ask()
-                self.assertEqual(voice_agent.respond(phrase), 'Cancelled. Nothing changed.')
+                self.assertEqual(voice_agent.respond(phrase), 'Cancelled.')
                 self.assertIsNone(voice_agent.confirmation.status())
         self.action.assert_not_called()
 
@@ -77,33 +77,33 @@ class ConfirmationFlow(unittest.TestCase):
     def test_dismissal_discards(self):
         self.ask()
         voice_agent.confirmation.cancel()
-        self.assertIn("don't know how to answer that yet", voice_agent.respond('yes'))
+        self.assertEqual(voice_agent.NOT_CAUGHT, voice_agent.respond('yes'))
         self.action.assert_not_called()
 
     def test_new_command_replaces_pending_and_says_so(self):
         self.ask()
         reply = voice_agent.respond('lock down the fridge')
-        self.assertTrue(reply.startswith('Okay, I dropped the earlier request. Lock down the fridge?'))
+        self.assertTrue(reply.startswith('Lock down the fridge?'))
         self.assertEqual(voice_agent.respond('yes'), 'fridge locked down.')
         self.action.assert_called_once_with(device='fridge')
 
     def test_ambiguous_reprompts_once_then_discards(self):
         self.ask()
-        self.assertEqual(voice_agent.respond('yes but not the tv'), 'I need a yes or no. Lock down the tv?')
-        self.assertEqual(voice_agent.respond('maybe'), "I didn't get a clear yes, so I didn't do it.")
-        self.assertIn("don't know how to answer that yet", voice_agent.respond('yes'))
+        self.assertEqual(voice_agent.respond('yes but not the tv'), 'Yes or no? Lock down the tv?')
+        self.assertEqual(voice_agent.respond('maybe'), "No clear yes, so I didn't.")
+        self.assertEqual(voice_agent.NOT_CAUGHT, voice_agent.respond('yes'))
         self.action.assert_not_called()
         self.request.assert_not_called()
 
     def test_missed_speech_counts_as_ambiguous(self):
         self.ask()
-        self.assertIn('I need a yes or no', voice_agent.respond(''))
-        self.assertIn("didn't do it", voice_agent.respond(''))
+        self.assertIn('Yes or no?', voice_agent.respond(''))
+        self.assertEqual("No clear yes, so I didn't.", voice_agent.respond(''))
         self.action.assert_not_called()
 
     def test_other_questions_while_pending_do_not_reach_backend(self):
         self.ask()
-        self.assertIn('I need a yes or no', voice_agent.respond('turn on home mode'))
+        self.assertIn('Yes or no?', voice_agent.respond('turn on home mode'))
         self.request.assert_not_called()
 
     def test_failed_action_is_not_reported_as_success(self):

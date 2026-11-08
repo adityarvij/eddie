@@ -57,7 +57,7 @@ The Ollama agent (`voice/ollama_agent.py`, #29) is off by default, so voice and 
 
 The rest of a spoken answer, measured on the same Pi with synthetic speech and no services running: Whisper base.en (int8, beam 1) takes about 2.4 s to transcribe a 3 s question, the same with or without its VAD filter, and Piper (Lessac medium) starts speaking a one-sentence answer after 0.75 s. With the 800 ms end-of-speech wait, that's about 4 s from the end of a question to Eddie's first word, almost all of it Whisper. Not yet measured through the speakerphone end to end.
 
-Home mode by voice accepts up to two words before the command (Whisper on the Pi heard "Eddie, turn on home mode please" as "Itty, turn on home mode please") and verb-less forms ("home mode on" / "home mode off"); a lead-in that negates or asks ("don't", "is", "should", …) never switches it. When nothing matches, Eddie says "Tap capabilities, bottom right, to see what I can do." instead of reading a list.
+Home mode by voice accepts up to two words before the command (Whisper on the Pi heard "Eddie, turn on home mode please" as "Itty, turn on home mode please") and verb-less forms ("home mode on" / "home mode off"); a lead-in that negates or asks ("don't", "is", "should", …) never switches it. When nothing matches, Eddie says "I didn't quite catch that. Tap capabilities to see what I can do." instead of reading a list.
 
 Keyword commands: “List my rules” / “What rules do I have?” (reads up to five, newest first, then how many more are on the dashboard) and “List my devices” / “What devices are on the network?” (busiest first: name, or the maker, never the MAC; lookups and blocked), both refused to a guest like other traffic reads; “What's been going on?” (backend facts), “What do they know about me?” / “What do companies know about me?” (honors ranges such as “the last 3 days,” otherwise uses all retained history; longer requests are capped with disclosure, and Eddie says there is not enough data instead of guessing; the local model, when on, rewrites the backend's facts into at most five checked “Someone could guess …” lines, otherwise Eddie speaks the backend template), “When could someone tell the house was empty?” / “When was nobody home in the last 3 days?” (reads `GET /burglars-eye`, a week unless the question names a range; Eddie speaks the backend's text, which says when the answer is from less data than asked for or there's too little to tell), “turn on home mode”, “turn off home mode”, “I'm leaving for the weekend” / “I'm back” (away mode, below), “block it” / “block device-metrics-us.amazon.com”, “allow Netflix” / “allow api.example.com” and “undo that” (below). Home mode updates backend state; actual network enforcement still depends on Will's decision engine. Lockdown and email are pending; the confirmation step lockdown and email will use is built and already guards service allows (see below). Typed questions use the same router. Do not claim these pending tools work.
 
@@ -83,9 +83,13 @@ The official Linux training notebook is prepared at `voice/training/hey_eddie.ip
 Checks performed: ten unit tests; synthetic Piper “Hey Eddie” recognized twice by the local Vosk prototype; synthetic “turn off home mode” did not wake it. These are software smoke tests, not microphone accuracy measurements. No synthetic audio files were persisted.
 
 
-Voice recovery: after an empty/failed transcription, Eddie says “Didn’t catch that. Try again.” and listens again, once; a second empty transcription in a row (usually background noise) ends the conversation silently. Four seconds of silence after the initial wake or during a follow-up dismisses Eddie back to the newest feed activity. Closing the overlay (×, Escape or a click outside) also ends the conversation in the voice worker (`POST /api/voice/dismiss`, localhost only), so the next request needs the wake phrase; a reply already being spoken finishes, but the overlay stays closed. Speech inference errors recover without disabling wake detection; microphone errors and bridge disconnects close the overlay. Listening/waiting uses a yellow ambient glow, speaking uses blue. Automated voice checks pass; live microphone/noisy-room accuracy still needs rehearsal.
+Voice recovery: after an empty/failed transcription, Eddie says “I didn’t quite catch that.” and listens again, once; a second empty transcription in a row (usually background noise) ends the conversation silently. Four seconds of silence after the initial wake or during a follow-up dismisses Eddie back to the newest feed activity. Closing the overlay (×, Escape or a click outside) also ends the conversation in the voice worker (`POST /api/voice/dismiss`, localhost only), so the next request needs the wake phrase; a reply already being spoken finishes, but the overlay stays closed. Speech inference errors recover without disabling wake detection; microphone errors and bridge disconnects close the overlay. Listening/waiting uses a yellow ambient glow, speaking uses blue. Automated voice checks pass; live microphone/noisy-room accuracy still needs rehearsal.
 
 Conversation activity is explicit (`is_eddie_active`): wake activates it, each spoken reply starts a fresh four-second wait, and silence dismisses it. The initial wait has no retry prompt or extra four-second grace period. Speaking and transcription do not count toward the user response window.
+
+## Spoken replies
+
+Eddie keeps replies to one short sentence. Every mode answers the same way: “Home mode turned off.”, “Away mode turned on.”, “Kid mode turned on.”, “Health protection turned off.” That's said only once the backend reports Eddie's DNS loaded it; until then it's “Home mode saved as on, but Eddie's DNS hasn't loaded it yet.” Read-backs end with “Yes or no?”. Anything Eddie can't parse or answer, and an empty transcription, gets “I didn't quite catch that.” (`voice_agent.NOT_CAUGHT`); the local model is told to say exactly that too, but its wording isn't enforced. Reports read from the backend (`/summary`, “what they know”, the burglar's-eye view, privacy tips) are the backend's own text and aren't shortened here.
 
 ## Block it / block a domain (#11)
 
@@ -93,10 +97,10 @@ Conversation activity is explicit (`is_eddie_active`): wake activates it, each s
 
 | Situation | Eddie says |
 |---|---|
-| Backend stored the rule and DNS loaded it (`applied: true`) | “Blocked <domain> on every device. The rule is saved and Eddie's DNS has loaded it.” |
-| Stored, DNS didn't load it within 2 s (`applied: false`) | “I saved a rule to block <domain>, but Eddie's DNS hasn't loaded it yet, so it may still get through.” |
-| “It” can't be resolved, or the target isn't a domain (“block Netflix”) | “Which domain should I block? Say block, then the full domain name. Nothing changed.” |
-| Backend error, timeout or a reply that doesn't echo the rule | “I couldn't add that rule. Nothing changed.” |
+| Backend stored the rule and DNS loaded it (`applied: true`) | “Blocked <domain>.” |
+| Stored, DNS didn't load it within 2 s (`applied: false`) | “Saved, but Eddie's DNS hasn't loaded it yet.” |
+| “It” can't be resolved, or the target isn't a domain (“block Netflix”) | “Which domain? Say block, then the full name.” |
+| Backend error, timeout or a reply that doesn't echo the rule | “I couldn't add that rule.” |
 
 Devices may keep using a cached answer for its TTL after a block loads. A timeout after the API already stored the rule is still reported as nothing changed; check `GET /rules`. Per-device blocks are not built; “undo” removes the rule (below).
 
@@ -108,16 +112,16 @@ Service names map to patterns in one file, `voice/services.json`: Netflix, YouTu
 
 | Request | What happens |
 |---|---|
-| A known service, or a typed wildcard (`allow *.example.com`) | Read-back first: “Allow Netflix on every device? That adds 9 allow rules for its domains. Say yes to confirm or no to cancel.” Only a yes adds the rules, one at a time. |
+| A known service, or a typed wildcard (`allow *.example.com`) | Read-back first: “Allow Netflix? Yes or no?” Only a yes adds the rules, one at a time. |
 | One domain, spoken or typed | Added straight away, like block. |
-| Anything else (“allow Hulu”, “allow it”, `*.com`) | “Which service or domain should I allow? I know Netflix, YouTube, Prime Video and Apple TV, or say allow, then the full domain name. Nothing changed.” No pattern is guessed. |
+| Anything else (“allow Hulu”, “allow it”, `*.com`) | “Which service or domain should I allow?” No pattern is guessed. |
 
 | Backend answer | Eddie says |
 |---|---|
-| Every rule stored and DNS loaded the last one (`applied: true`) | “Allowed <service or domain> on every device. The rules are saved and Eddie's DNS has loaded them.” |
-| Stored, not loaded within 2 s | “I saved … but Eddie's DNS hasn't loaded … yet, so it may still be blocked.” |
-| The first rule fails (error, timeout, or a reply that doesn't echo it) | “I couldn't add that rule. Nothing changed.” |
-| A later rule of a service fails | “I only saved 2 of 9 allow rules for Netflix before the backend stopped answering, so Netflix may still be blocked. The saved rules stay.” Adding stops there; nothing is rolled back. |
+| Every rule stored and DNS loaded the last one (`applied: true`) | “Allowed <service or domain>.” |
+| Stored, not loaded within 2 s | “Saved, but Eddie's DNS hasn't loaded it yet.” |
+| The first rule fails (error, timeout, or a reply that doesn't echo it) | “I couldn't add that rule.” |
+| A later rule of a service fails | “I only allowed part of Netflix; it may still be blocked.” Adding stops there; nothing is rolled back. |
 
 Each rule waits up to 2 s for DNS, so a service with DNS down can take about 2 s per rule before Eddie answers.
 
@@ -130,23 +134,23 @@ The list lives in the worker's memory: up to 20 commands, kept across conversati
 | Situation | Eddie says |
 |---|---|
 | Nothing on the list | “There's nothing for me to undo.” |
-| Removed and DNS loaded the change (`applied: true`) | “Undone. I removed the block on <domain>, and Eddie's DNS has loaded the change.” |
-| Removed, not loaded within 2 s | “I removed the …, but Eddie's DNS hasn't loaded the change yet, so it may still apply for a moment.” |
-| The rule was already deleted elsewhere (404, or missing from the list) | “The block on <domain> had already been removed elsewhere, so there was nothing to undo.” It is dropped from the list; the next undo goes to the command before it. |
-| Backend down or the delete isn't acknowledged | “I can't reach Eddie's backend, so I couldn't undo the …. Nothing changed.” The entry stays, so undo can be tried again. |
-| A service's rules stop partway | “I only removed 2 of the 9 allow rules for Netflix before the backend stopped answering. Say undo again to remove the rest.” |
+| Removed and DNS loaded the change (`applied: true`) | “Undid the block on <domain>.” |
+| Removed, not loaded within 2 s | “Removed the …, but Eddie's DNS hasn't loaded the change yet.” |
+| The rule was already deleted elsewhere (404, or missing from the list) | “That was already removed.” It is dropped from the list; the next undo goes to the command before it. |
+| Backend down or the delete isn't acknowledged | “I can't reach Eddie's backend.” The entry stays, so undo can be tried again. |
+| A service's rules stop partway | “I only undid part of that; say undo again.” |
 
 Undo has no read-back confirmation; it only puts back the previous decision. A failed block or allow leaves nothing to undo. A rule a timed-out add stored anyway isn't on the list; remove it from the dashboard.
 
 ## Ask before blocking (#79)
 
-The AI only flags likely trackers; Eddie asks before anything is blocked. When you wake Eddie and the dashboard has an open question he hasn't read yet, he reads it first: “I've got one question for you. 3 new likely trackers on the TV: a.example, b.example and c.example. Block them? Say yes to confirm or no to cancel.” Each question is read once.
+The AI only flags likely trackers; Eddie asks before anything is blocked. When you wake Eddie and the dashboard has an open question he hasn't read yet, he reads it first: “3 new likely trackers on the TV: a.example, b.example and c.example. Block them? Yes or no?” Each question is read once.
 
 | Reply | Eddie says |
 |---|---|
-| Yes, DNS loaded the rules | “Blocked a.example, b.example and c.example on every device. Eddie's DNS has loaded the change.” |
-| Yes, DNS didn't confirm (stopped or slow) | “I saved a block for …, but Eddie's DNS hasn't loaded it, so it isn't confirmed blocked yet.” |
-| Yes, but it was answered on the dashboard first | “That question was already answered. Nothing changed.” |
+| Yes, DNS loaded the rules | “Blocked a.example, b.example and c.example.” |
+| Yes, DNS didn't confirm (stopped or slow) | “Saved, but Eddie's DNS hasn't loaded it yet.” |
+| Yes, but it was answered on the dashboard first | “That was already answered.” |
 | No, silence, or 15 s pass | Nothing is written; the question stays on the dashboard. |
 
 “Undo” removes the rules a yes created, like any voice block. The question lookup waits at most 1 s; if the backend is down Eddie skips it and listens as usual. A spoken yes on the real microphone still needs a hardware check.
@@ -157,7 +161,7 @@ The AI only flags likely trackers; Eddie asks before anything is blocked. When y
 
 ## Sensitivity modes (#110)
 
-“Protect anything health related”, “protect the kids”, “protect anything to do with money”, “turn on news protection” turn a sensitivity mode on; “stop protecting health” or “turn off kids protection” turn it off. Category words: health (medical, pharmacy), kids (children), money (finance, banking, shopping) and beliefs (news, religion, politics). The whole utterance must be the command, so “don't protect health” or “protect the kids' tablet” change nothing. Like home mode it runs without a yes, since it only blocks trackers. Eddie posts `POST /sensitivity` and reads back only the answer: with `applied: true`, that the mode is on and DNS loaded it, which sites open the 5-minute window (“like BetterHelp, CVS or GoodRx”), how many trackers and brokers it blocks there, and that the sites keep working; with `applied: false`, that it's saved but nothing is blocked yet; on a backend error or a mismatched echo, that nothing changed. Tested with a stubbed backend (`tests/test_voice_sensitivity.py`); not yet spoken on hardware.
+“Protect anything health related”, “protect the kids”, “protect anything to do with money”, “turn on news protection” turn a sensitivity mode on; “stop protecting health” or “turn off kids protection” turn it off. Category words: health (medical, pharmacy), kids (children), money (finance, banking, shopping) and beliefs (news, religion, politics). The whole utterance must be the command, so “don't protect health” or “protect the kids' tablet” change nothing. Like home mode it runs without a yes, since it only blocks trackers. Eddie posts `POST /sensitivity` and reads back only the answer, worded like every mode: “Health protection turned on.” with `applied: true`, “Health protection saved as on, but Eddie's DNS hasn't loaded it yet.” with `applied: false`, and “I couldn't change health protection.” on a backend error or a mismatched echo. Tested with a stubbed backend (`tests/test_voice_sensitivity.py`); not yet spoken on hardware.
 
 ## Lock down a device (#17)
 
@@ -165,22 +169,22 @@ The AI only flags likely trackers; Eddie asks before anything is blocked. When y
 
 | Request | Eddie says |
 |---|---|
-| One labelled device | “Lock down the TV? It'll only reach Netflix, YouTube, Prime Video and Apple TV, plus Eddie's essentials like sign-in and updates. Say yes to confirm or no to cancel.” Nothing is written yet; the confirmation table below applies (no, timeout, dismissal: nothing changes). |
-| No label matches | “I don't know a device called fridge. The devices I know by name are Fire Stick and TV; 1 more has no name yet and shows as ---. Name it in the dashboard's device list, then ask again. Nothing changed.” |
-| A device marked as a child's | “Lock down the kids' tablet? It's marked as a child's, so it'll only reach YouTube Kids and PBS Kids, plus Eddie's essentials like sign-in and updates. Say yes to confirm or no to cancel.” |
-| Several labels match | “Which one: Living Room TV or Bedroom TV? Nothing changed.” |
-| Already locked down | “The TV is already locked down. Nothing changed.” |
-| Backend down | “I can't reach Eddie's backend, so I can't look up that device. Nothing changed.” |
+| One labelled device | “Lock down the TV to Netflix, YouTube, Prime Video and Apple TV? Yes or no?” Nothing is written yet; the confirmation table below applies (no, timeout, dismissal: nothing changes). |
+| No label matches | “I don't know a device called fridge.” |
+| A device marked as a child's | “Lock down the kids' tablet to YouTube Kids and PBS Kids? Yes or no?” |
+| Several labels match | “Which one: Living Room TV or Bedroom TV?” |
+| Already locked down | “The TV is already locked down.” |
+| Backend down | “I can't reach Eddie's backend.” |
 
 On yes Eddie adds one device allow rule per keep pattern, then the device block rule `*` last (23 rules today; each waits for DNS, so expect a few seconds).
 
 | Backend answer | Eddie says |
 |---|---|
-| Every rule stored and DNS loaded the last one | “The TV is locked down. The rules are saved and Eddie's DNS has loaded them. I haven't seen its traffic blocked yet, and it only applies while it uses Eddie for DNS.” |
-| Stored, not loaded within 2 s | “I saved the lockdown rules for the TV, but Eddie's DNS hasn't loaded them yet, so nothing is blocked yet.” |
-| The first rule fails | “I couldn't lock down the TV; the backend didn't save any rules. Nothing changed.” |
-| A later rule fails, and the saved ones are deleted again | “I only saved 5 of 23 lockdown rules for the TV before the backend stopped answering, so I removed them again. Nothing is locked down.” |
-| A later rule fails, and some saved ones can't be deleted | “… and couldn't remove 3 of them. Nothing is locked down, but those allow rules are still saved; say undo to remove them.” |
+| Every rule stored and DNS loaded the last one | “Locked down the TV.” It only applies while the TV uses Eddie for DNS; Eddie hasn't seen its traffic blocked. |
+| Stored, not loaded within 2 s | “Saved, but Eddie's DNS hasn't loaded it yet.” |
+| The first rule fails | “I couldn't lock down the TV.” |
+| A later rule fails, and the saved ones are deleted again | “I couldn't lock down the TV.” |
+| A later rule fails, and some saved ones can't be deleted | “I couldn't lock down the TV, and some of its rules are left; say undo to remove them.” |
 
 Because the block rule is always last, a failure never leaves the device blocked. “Undo” after a lockdown removes all of its rules at once. The dashboard's rule list shows the block as `block * · TV · by voice`.
 
@@ -188,25 +192,26 @@ Not yet checked on hardware: a real Fire Stick or TV under lockdown, including w
 
 ## Kid mode (#119)
 
-Mark a device as a child's in the dashboard's device list (the `devices` link, bottom right: each row's `adult` / `child` button). Then “turn on kid mode”, “kid mode on” or “lock down the kids' devices” locks down every child's device not already locked down, and “turn off kid mode” or “unlock the kids' devices” unlocks them. Both read back the devices first and wait for a spoken yes. The dashboard's `kid mode` switch does the same after its own confirm dialog.
+Mark a device as a child's in the dashboard's device list (the `devices` link, bottom right: each row's `adult` / `child` button). Then “turn on kid mode”, “kid mode on” or “lock down the kids' devices” locks down every child's device not already locked down, and “turn off kid mode” or “unlock the kids' devices” unlocks them. Both ask “Turn on kid mode? Yes or no?” (or off) and wait for a spoken yes. The dashboard's `kid mode` switch does the same after its own confirm dialog.
 
 The kid-safe keep list is `voice/kid_safe.json` (seeded with YouTube Kids and PBS Kids, both defined in `voice/services.json` with `"kids": true`); edit it to change what kid mode allows, then restart the worker. DNS can't tell the YouTube Kids app from YouTube: YouTube Kids keeps `youtubei.googleapis.com` and the video CDNs, which the YouTube app also uses, but not `youtube.com`.
 
 | Request | Eddie says |
 |---|---|
-| On | “Turn on kid mode? Kids' Tablet and an unnamed Amazon device will only reach YouTube Kids and PBS Kids, plus Eddie's essentials like sign-in and updates. Say yes to confirm or no to cancel.” |
-| Yes, every rule stored and loaded | “Kid mode is on. Kids' Tablet and an unnamed Amazon device are locked down to YouTube Kids and PBS Kids, plus Eddie's essentials; Eddie's DNS has loaded the rules. I haven't seen their traffic blocked yet, and it only applies while they use Eddie for DNS.” |
-| Off | “Turn off kid mode? Kids' Tablet will get full internet through Eddie again. Say yes to confirm or no to cancel.” On yes, each device's `*` block goes first, then its kid-safe allow rules; its other rules stay. |
-| No child's device | “No device is marked as a child's yet. Open devices on the dashboard and set one to child, then ask again. Nothing changed.” |
-| Already on (or off) | “Kid mode is already on for Kids' Tablet. Nothing changed.” |
+| On | “Turn on kid mode? Yes or no?” |
+| Yes, every rule stored and loaded | “Kid mode turned on.” |
+| Yes, stored but not loaded by DNS | “Kid mode saved as on, but Eddie's DNS hasn't loaded it yet.” |
+| Off | “Turn off kid mode? Yes or no?”, then “Kid mode turned off.” On yes, each device's `*` block goes first, then its kid-safe allow rules; its other rules stay. |
+| No child's device | “No device is marked as a child's yet; set one on the dashboard.” |
+| Already on (or off) | “Kid mode is already on.” |
 
-A device that fails or isn't loaded by DNS gets its own sentence (the lockdown table's wording), and kid mode isn't called on. Kid mode is on when every child's device has a `*` block rule; it has no stored state of its own. A device marked as a child's while kid mode is on isn't covered until kid mode is turned on again, and marking a locked device as an adult's doesn't unlock it (the dashboard asks first). Tests: `tests/test_voice_kid_mode.py`. Not yet checked on hardware: a real tablet in kid mode.
+A device that fails gets its own sentence after “Kid mode only partly turned on.” (the lockdown table's wording). Kid mode is on when every child's device has a `*` block rule; it has no stored state of its own. A device marked as a child's while kid mode is on isn't covered until kid mode is turned on again, and marking a locked device as an adult's doesn't unlock it (the dashboard asks first). Tests: `tests/test_voice_kid_mode.py`. Not yet checked on hardware: a real tablet in kid mode.
 
 The registered risky actions are `allow` (#13) and `lockdown` (#17), both parsed in `route`: a typed wildcard needs the raw text's dots, and lockdown looks the device up first. `block` and `home_mode` are registered for the model's write tools (#108) only; spoken “block x.com” and “turn on home mode” still run directly. `RISKY_COMMANDS` stays empty until email (#37) lands. Closing the dashboard overlay by hand does not notify the worker; the 15 second expiry still applies.
 
 ## New device (#98)
 
-“Allow the new device” (also “approve” or “let in”) and “deny the new device” (also “block” or “reject”) act on the newest device `GET /devices` lists as `pending`. Eddie reads it back by name and first-seen time (“Allow the new device, kindle, first seen at 2:14 AM?”) and says how many others are waiting; only a yes posts `/devices/<mac>/approve` or `/deny`. The reply comes from the backend's stored status, and says Eddie's DNS has loaded it only when the API answered `applied: true`. With no pending device, or the backend down, nothing changes. Tested in `tests/test_voice_new_device.py`; not checked with a real device joining.
+“Allow the new device” (also “approve” or “let in”) and “deny the new device” (also “block” or “reject”) act on the newest device `GET /devices` lists as `pending`. Eddie reads it back by name (“Allow the new device, kindle? Yes or no?”); only a yes posts `/devices/<mac>/approve` or `/deny`. The reply comes from the backend's stored status, and says Eddie's DNS has loaded it only when the API answered `applied: true`. With no pending device, or the backend down, nothing changes. Tested in `tests/test_voice_new_device.py`; not checked with a real device joining.
 
 ## Guest Mode permissions (#163)
 
@@ -219,7 +224,7 @@ The owner turns Guest Mode on from the dashboard's devices sheet on the Eddie co
 | Say | Eddie |
 |---|---|
 | “Set a timer for 10 minutes”, “set a 10 minute timer”, “timer for an hour and a half” | “Timer set for 10 minutes.” Up to 24 hours. |
-| “Remind me in 20 minutes to check the oven”, “remind me to call my mom at 6 PM”, “remind me tomorrow at 7 to run”, “set a reminder for 5 to leave” | “Okay, I'll remind you at 6 PM to call your mom.” Up to 7 days ahead. |
+| “Remind me in 20 minutes to check the oven”, “remind me to call my mom at 6 PM”, “remind me tomorrow at 7 to run”, “set a reminder for 5 to leave” | “I'll remind you at 6 PM to call your mom.” Up to 7 days ahead. |
 | “Remind me to call mom” (no time) | Asks when; nothing is set. |
 | “What timers do I have?”, “how much time is left?”, “list my reminders” | Each one, with time left or when it's due. |
 | “Cancel the timer”, “cancel the 10 minute timer”, “cancel the reminder to call mom”, “cancel all timers” | Cancels it. With several and no way to tell which, Eddie lists them and cancels nothing. |
@@ -228,7 +233,7 @@ A bare hour (“at 6”) means the next 6 o'clock, AM or PM; “tomorrow at 7”
 
 When one is due, the bridge (`frontend/serve.py`) plays the alarm, then says it: “Your timer for 10 minutes is done.” or “Reminder to call your mom.” The dashboard shows “Timer done” or “Reminder”. This works with the microphone off; it waits for any reply Eddie is speaking. The alarm is a generated chime (three rising beeps, three times, about 3.4 s), so there's nothing to provision; `EDDIE_ALARM_SOUND` swaps in a local WAV. It rings once and doesn't repeat until stopped.
 
-They persist in `EDDIE_TIMERS_FILE` (owner-only JSON, rewritten on each change). One that came due while the bridge was off rings as soon as it restarts: “Sorry, I'm late. Your timer for 10 minutes finished at 3:30 PM.” Each item is removed before it rings, so a crash mid-alarm never rings it twice. An unreadable file is reported at startup and replaced on the next change. Tested in `tests/test_voice_timers.py`; the chime hasn't been checked on the Pi's speaker.
+They persist in `EDDIE_TIMERS_FILE` (owner-only JSON, rewritten on each change). One that came due while the bridge was off rings as soon as it restarts: “Your timer for 10 minutes finished at 3:30 PM.” Each item is removed before it rings, so a crash mid-alarm never rings it twice. An unreadable file is reported at startup and replaced on the next change. Tested in `tests/test_voice_timers.py`; the chime hasn't been checked on the Pi's speaker.
 
 ## House guide (#165)
 
@@ -250,7 +255,7 @@ Guests can ask Eddie about the house: “What's the Wi-Fi password?”, “what 
 | `keywords` | Optional. Other words or phrases a question might use. Matched as whole words, with an optional plural s; case, hyphens and apostrophes are ignored (“Wi-Fi” is “wifi”). |
 | `audience` | `guest` or `owner`. **Defaults to `owner`**: an entry is spoken to guests only when marked `guest`. |
 
-Any other field, a missing topic or answer, or an unknown audience makes the file invalid; Eddie then says “I can't read the house guide right now. Please ask the host.”
+Any other field, a missing topic or answer, or an unknown audience makes the file invalid; Eddie then says “I can't read the house guide; ask the host.”
 
 **How it answers.** An utterance is a house question when it is phrased as a question (what, where, when, how, is, can I, tell me…) and names a guide keyword or a common house topic (Wi-Fi, checkout, towels, parking, laundry, thermostat, trash, hot tub…), or when it is just a topic's name (“the dishwasher”, the reply to “which one?”). The entry whose keywords cover the most words wins, so “washing machine” beats “dishwasher” in a question naming both. A tie asks “I have notes on dishwasher and washing machine. Which one?” No matching entry is “I don't know that one. Please ask the host.” It runs after timers and before home mode, block, allow and the model; “what does the TV know about me”, empty-house and privacy-tips questions skip it.
 
@@ -260,7 +265,7 @@ Tested in `tests/test_voice_house_guide.py` (schema, lookup, ambiguity, missing 
 
 ## Text a contact
 
-“Text Will, I'm running late”, “message Sam: back by 6” or “send a text to Will saying on my way” drafts a text to someone in Eddie's contacts. Eddie reads it back word for word, the way Whisper heard it (“Text Will: "I'm running late." Send it? Say yes to confirm or no to cancel.”), and sends it only on a yes within **30 seconds** (longer than other confirmations, so there's time to hear the read-back). No, an unclear reply twice, the timeout or dismissing the conversation sends nothing. The text is never rewritten by the local model, and the model has no texting tool.
+“Text Will, I'm running late”, “message Sam: back by 6” or “send a text to Will saying on my way” drafts a text to someone in Eddie's contacts. Eddie reads it back word for word, the way Whisper heard it (“Text Will: "I'm running late." Send it? Yes or no?”), and sends it only on a yes within **30 seconds** (longer than other confirmations, so there's time to hear the read-back). No, an unclear reply twice, the timeout or dismissing the conversation sends nothing. The text is never rewritten by the local model, and the model has no texting tool.
 
 **Where it goes.** Eddie sends through the Messages app on the Mac that runs the voice loop, signed in to your Apple ID: by iMessage (through Apple's servers, end-to-end encrypted) or, for contacts marked `SMS`, through your iPhone's Text Message Forwarding and then your carrier. The sent text shows up in Messages on your other Apple devices. There's no cloud SMS API and no texting on Linux yet (see [known gaps](#texting-gaps)).
 
@@ -275,9 +280,9 @@ Tested in `tests/test_voice_house_guide.py` (schema, lookup, ambiguity, missing 
 | After the yes | Eddie says |
 |---|---|
 | Messages marks it sent with no error (checked for up to 10 s) | “Sent to Will.” |
-| Messages records an error, or refuses the send | “Messages couldn't send that to Will. Check Messages before trying again.” |
-| Handed to Messages, not marked sent within 10 s | “I handed that to Messages, but it hasn't confirmed it went out to Will. …” |
-| Handed to Messages, but `chat.db` can't be read (no Full Disk Access) | “… I can't read its status on this Mac, so I can't confirm it went out to Will. …” |
+| Messages records an error, or refuses the send | “Messages couldn't send that to Will.” |
+| Handed to Messages, not marked sent within 10 s | “Messages hasn't confirmed it went to Will; check before resending.” |
+| Handed to Messages, but `chat.db` can't be read (no Full Disk Access) | “I can't confirm it went to Will; check Messages before resending.” |
 
 Unknown names (“I can only text Will or Sam”), an empty message, a message over 160 characters, missing or invalid `contacts.json` and texting being off are all spoken refusals; nothing is pending. Tested in `tests/test_voice_text.py` with a faked `osascript` and a stand-in `chat.db`; the AppleScript was compiled against macOS 26's Messages dictionary but **no real text has been sent by the tests**. Check a send to your own number on the Mac before relying on it.
 
@@ -290,13 +295,13 @@ Unknown names (“I can only text Will or Sam”), an empty message, a message o
 
 ## Confirmation for risky actions
 
-Risky actions (service and wildcard allows, lockdown, texts, and every write the local model proposes; email once built) never run from the command that asks for them. `voice_agent.Confirmation` holds at most **one** pending action, `{kind, args, prompt, expires_at}`, and speaks the read-back prompt followed by “Say yes to confirm or no to cancel.”
+Risky actions (service and wildcard allows, lockdown, texts, and every write the local model proposes; email once built) never run from the command that asks for them. `voice_agent.Confirmation` holds at most **one** pending action, `{kind, args, prompt, expires_at}`, and speaks the read-back prompt followed by “Yes or no?”
 
 | Next reply | Result |
 |---|---|
 | Exactly “yes”, “yeah”, “yep”, “yes please”, “do it”, “yes do it”, “go ahead” or “confirm” | Runs the action once. Success is spoken only if the action reports backend acknowledgment; otherwise Eddie says it couldn't confirm the change. |
-| Exactly “no”, “nope”, “no thanks”, “cancel”, “cancel it”, “stop”, “don't” or “never mind” | Discards it: “Cancelled. Nothing changed.” |
-| Another risky command | Replaces the pending action and says the earlier one was dropped. |
+| Exactly “no”, “nope”, “no thanks”, “cancel”, “cancel it”, “stop”, “don't” or “never mind” | Discards it: “Cancelled.” |
+| Another risky command | Replaces the pending action. |
 | Anything else, including missed speech | Re-prompts once; a second unclear reply discards it without running. |
 | 15 seconds after the request (30 for a text) | Expires. A late yes or no is told it expired; nothing runs. |
 | Conversation dismissed, microphone stopped or errored | Discarded. |

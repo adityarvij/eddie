@@ -18,7 +18,7 @@ import voice_agent
 CONTACTS = {'Will': '+15551234567', 'Will Smith': {'address': 'will@example.com'},
             'Sam': {'address': '+15557654321', 'service': 'SMS'}}
 BODY = "I'm running late."
-READ_BACK = 'Text Will: "I\'m running late." Send it? Say yes to confirm or no to cancel.'
+READ_BACK = 'Text Will: "I\'m running late." Send it? Yes or no?'
 
 
 class Clock:
@@ -94,14 +94,14 @@ class TextFlow(unittest.TestCase):
 
     def test_no_sends_nothing(self):
         self.ask()
-        self.assertEqual(voice_agent.respond('No.'), 'Cancelled. Nothing changed.')
+        self.assertEqual(voice_agent.respond('No.'), 'Cancelled.')
         voice_agent.respond('yes')
         self.sender.send.assert_not_called()
 
     def test_unclear_reply_never_sends(self):
         self.ask()
-        self.assertTrue(voice_agent.respond('yes but change it').startswith('I need a yes or no. Text Will: "'))
-        self.assertEqual(voice_agent.respond('maybe'), "I didn't get a clear yes, so I didn't do it.")
+        self.assertTrue(voice_agent.respond('yes but change it').startswith('Yes or no? Text Will: "'))
+        self.assertEqual(voice_agent.respond('maybe'), "No clear yes, so I didn't.")
         self.sender.send.assert_not_called()
 
     def test_timeout_sends_nothing(self):
@@ -110,14 +110,14 @@ class TextFlow(unittest.TestCase):
         self.assertIsNotNone(voice_agent.confirmation.status())
         self.clock.now += 11
         self.assertEqual(voice_agent.respond('yes'),
-                         "That request expired, so I didn't do it. Ask again if you still want it.")
+                         "That expired; ask again.")
         self.sender.send.assert_not_called()
 
     def test_sent_is_spoken_only_on_acknowledgment(self):
         for status, reply in [('failed', "Messages couldn't send that to Will."),
-                              ('pending', "I handed that to Messages, but it hasn't confirmed"),
-                              ('unknown', "I can't read its status on this Mac"),
-                              (OSError('boom'), "I handed that to Messages, but it hasn't confirmed")]:
+                              ('pending', "Messages hasn't confirmed it went to Will"),
+                              ('unknown', "I can't confirm it went to Will"),
+                              (OSError('boom'), "Messages hasn't confirmed it went to Will")]:
             with self.subTest(status=status):
                 self.sender.send.reset_mock(return_value=True, side_effect=True)
                 if isinstance(status, Exception):
@@ -131,14 +131,14 @@ class TextFlow(unittest.TestCase):
                 self.sender.send.assert_called_once()
 
     def test_refusals_leave_nothing_pending(self):
-        for raw, reply in [('text Bob hello', 'I can only text Will, Will Smith or Sam. Nothing was sent.'),
-                           ('text Will', 'What should the text to Will say? Say text Will, then the message.'),
-                           ('text Will ' + 'x' * 161, "That's too long for me to read back.")]:
+        for raw, reply in [('text Bob hello', 'I can only text Will, Will Smith or Sam.'),
+                           ('text Will', 'What should the text to Will say?'),
+                           ('text Will ' + 'x' * 161, "That's too long; keep it under 30 words.")]:
             with self.subTest(raw=raw):
                 self.assertIn(reply, voice_agent.respond(raw))
                 self.assertIsNone(voice_agent.confirmation.status())
         with patch.object(voice_agent, 'text_sender', None):
-            self.assertEqual(voice_agent.respond(f'text Will {BODY}'), "Texting isn't set up on this Eddie. Nothing was sent.")
+            self.assertEqual(voice_agent.respond(f'text Will {BODY}'), "Texting isn't set up.")
         self.assertIsNone(voice_agent.confirmation.status())
         self.sender.send.assert_not_called()
 

@@ -11,8 +11,8 @@ from pathlib import Path
 GUIDE = Path(__file__).with_name('house_guide.json')
 AUDIENCES = ('guest', 'owner')
 FIELDS = {'topic', 'answer', 'keywords', 'audience'}
-DONT_KNOW = "I don't know that one. Please ask the host."
-UNREADABLE = "I can't read the house guide right now. Please ask the host."
+DONT_KNOW = "I don't know that one; ask the host."
+UNREADABLE = "I can't read the house guide; ask the host."
 # Questions that sound like they're about the house, so Eddie owns up to not knowing
 # instead of guessing, even with no guide or no matching entry.
 HOUSE_TOPICS = re.compile(

@@ -45,8 +45,8 @@ class TimerParsingTests(unittest.TestCase):
 
     def test_too_long_or_zero_sets_nothing(self):
         s = store()
-        self.assertEqual(timers.handle(s, 'set a timer for 25 hours'), 'I can set timers up to 24 hours. Nothing was set.')
-        self.assertEqual(timers.handle(s, 'set a timer for 0 minutes'), 'I can set timers up to 24 hours. Nothing was set.')
+        self.assertEqual(timers.handle(s, 'set a timer for 25 hours'), 'Timers can only be 24 hours.')
+        self.assertEqual(timers.handle(s, 'set a timer for 0 minutes'), 'Timers can only be 24 hours.')
         self.assertEqual(s.pending(), [])
 
     def test_not_a_timer_command(self):
@@ -61,13 +61,13 @@ class ReminderParsingTests(unittest.TestCase):
 
     def test_relative(self):
         reply, s = self.remind('remind me in 20 minutes to check the oven')
-        self.assertEqual(reply, "Okay, I'll remind you in 20 minutes to check the oven.")
+        self.assertEqual(reply, "I'll remind you in 20 minutes to check the oven.")
         self.assertEqual(due(s), [SAT + timedelta(minutes=20)])
         self.assertEqual(s.pending()[0]['task'], 'check the oven')
 
     def test_task_first(self):
         reply, s = self.remind('Remind me to call my mom at 6 p.m.')
-        self.assertEqual(reply, "Okay, I'll remind you at 6 PM to call your mom.")
+        self.assertEqual(reply, "I'll remind you at 6 PM to call your mom.")
         self.assertEqual(due(s), [datetime(2026, 11, 7, 18, 0)])
 
     def test_bare_hour_is_the_next_one(self):
@@ -75,7 +75,7 @@ class ReminderParsingTests(unittest.TestCase):
         # At 7 PM, "at 6" is 6 AM tomorrow.
         reply, s = self.remind('remind me at 6 to take out the trash', SAT.replace(hour=19))
         self.assertEqual(due(s), [datetime(2026, 11, 8, 6, 0)])
-        self.assertEqual(reply, "Okay, I'll remind you at 6 AM tomorrow to take out the trash.")
+        self.assertEqual(reply, "I'll remind you at 6 AM tomorrow to take out the trash.")
 
     def test_clock_forms(self):
         for text, when in [('remind me at 6:30 pm to eat', datetime(2026, 11, 7, 18, 30)),
@@ -98,7 +98,7 @@ class ReminderParsingTests(unittest.TestCase):
 
     def test_past_time_today_sets_nothing(self):
         reply, s = self.remind('remind me at 2 pm today to call')
-        self.assertEqual(reply, 'That time has already passed today. Nothing was set.')
+        self.assertEqual(reply, 'That time already passed today.')
         self.assertEqual(s.pending(), [])
 
     def test_no_time_asks_when(self):
@@ -109,12 +109,12 @@ class ReminderParsingTests(unittest.TestCase):
 
     def test_no_task_is_fine(self):
         reply, s = self.remind('remind me in 5 minutes')
-        self.assertEqual(reply, "Okay, I'll remind you in 5 minutes.")
+        self.assertEqual(reply, "I'll remind you in 5 minutes.")
         self.assertIsNone(s.pending()[0]['task'])
 
     def test_more_than_a_week_ahead_refused(self):
         self.assertEqual(self.remind('remind me in 200 hours to renew')[0],
-                         'I can set reminders up to 7 days ahead. Nothing was set.')
+                         'Reminders can only be 7 days ahead.')
 
 
 class ListCancelTests(unittest.TestCase):
@@ -146,8 +146,7 @@ class ListCancelTests(unittest.TestCase):
         self.say('set a timer for 10 minutes')
         self.say('set a timer for 1 hour')
         reply = self.say('cancel my timer')
-        self.assertIn('Say which one', reply)
-        self.assertTrue(reply.endswith('Nothing was cancelled.'))
+        self.assertTrue(reply.endswith('Which one?'), reply)
         self.assertEqual(len(self.store.pending()), 2)
         self.assertEqual(self.say('cancel the 10 minute timer'), 'Cancelled a timer for 10 minutes with 10 minutes left.')
         self.assertEqual([i['seconds'] for i in self.store.pending()], [3600])
@@ -156,7 +155,7 @@ class ListCancelTests(unittest.TestCase):
         self.say('set a timer for 10 minutes')
         self.say('remind me at 6 pm to call my mom')
         self.say('remind me at 7 pm to feed the cat')
-        self.assertEqual(self.say('cancel the timer for 5 minutes'), "I couldn't find that timer. Nothing was cancelled.")
+        self.assertEqual(self.say('cancel the timer for 5 minutes'), "I couldn't find that timer.")
         self.assertEqual(self.say('cancel the reminder to call mom'), 'Cancelled a reminder at 6 PM to call your mom.')
         self.assertEqual([i['task'] for i in self.store.pending() if i['kind'] == 'reminder'], ['feed the cat'])
 
@@ -173,7 +172,7 @@ class ListCancelTests(unittest.TestCase):
     def test_limit(self):
         for _ in range(timers.MAX_ITEMS):
             self.say('set a timer for 10 minutes')
-        self.assertIn("didn't set another", self.say('set a timer for 10 minutes'))
+        self.assertIn("cancel one first", self.say('set a timer for 10 minutes'))
         self.assertEqual(len(self.store.pending()), timers.MAX_ITEMS)
 
 
@@ -196,12 +195,12 @@ class SchedulingTests(unittest.TestCase):
         timer = {'kind': 'timer', 'due': SAT.timestamp(), 'seconds': 600, 'task': None}
         self.assertEqual(timers.announcement(timer, SAT), ('Timer done', 'Your timer for 10 minutes is done.'))
         self.assertEqual(timers.announcement(timer, SAT + timedelta(minutes=5)),
-                         ('Timer done', "Sorry, I'm late. Your timer for 10 minutes finished at 3:30 PM."))
+                         ('Timer done', "Your timer for 10 minutes finished at 3:30 PM."))
         reminder = {'kind': 'reminder', 'due': SAT.timestamp(), 'seconds': None, 'task': 'call my mom'}
         self.assertEqual(timers.announcement(reminder, SAT), ('Reminder', 'Reminder to call your mom.'))
         self.assertEqual(timers.announcement(dict(reminder, task=None), SAT), ('Reminder', 'This is your reminder.'))
         self.assertEqual(timers.announcement(reminder, SAT + timedelta(hours=2)),
-                         ('Reminder', "Sorry, I'm late. This was your reminder for 3:30 PM to call your mom."))
+                         ('Reminder', 'Your reminder for 3:30 PM to call your mom.'))
 
 
 class PersistenceTests(unittest.TestCase):
@@ -222,7 +221,7 @@ class PersistenceTests(unittest.TestCase):
         self.assertEqual([i['kind'] for i in again.pending()], ['timer', 'reminder'])
         rang = again.take_due()
         self.assertEqual([i['kind'] for i in rang], ['timer'])
-        self.assertIn("Sorry, I'm late", timers.announcement(rang[0], datetime.fromtimestamp(clock.now))[1])
+        self.assertIn("finished at", timers.announcement(rang[0], datetime.fromtimestamp(clock.now))[1])
         # Rung items are gone from disk too, so a second restart doesn't ring them again.
         self.assertEqual([i['kind'] for i in json.loads(self.path.read_text())], ['reminder'])
 
@@ -297,7 +296,7 @@ class RouterTests(unittest.TestCase):
 
     def test_bare_cancel_still_answers_a_pending_confirmation(self):
         voice_agent.confirmation.request('home_mode', {'enabled': True}, 'Turn on home mode?')
-        self.assertEqual(voice_agent.respond('cancel'), 'Cancelled. Nothing changed.')
+        self.assertEqual(voice_agent.respond('cancel'), 'Cancelled.')
 
 
 if __name__ == '__main__':

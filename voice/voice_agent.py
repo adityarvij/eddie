@@ -62,11 +62,14 @@ def home_mode_reply(enabled):
     try:
         result = set_home_mode(enabled)
     except Exception:
-        return "I couldn't update home mode. Check the local backend before trying again."
-    state = 'on' if enabled else 'off'
-    if not result['home_applied']:
-        return f"Home mode is saved as {state}, but Eddie's DNS hasn't confirmed it, so I can't say it's being enforced."
-    return f"Home mode is {state} and Eddie's DNS has loaded it. It stays {state} until you change it, whoever's phone is home."
+        return "I couldn't change home mode."
+    return mode_turned('Home mode', enabled, result['home_applied'])
+
+
+def mode_turned(name, on, applied):
+    """Every mode's spoken result: "<name> turned on/off." once DNS loaded it, else only saved."""
+    state = 'on' if on else 'off'
+    return f"{name} turned {state}." if applied else f"{name} saved as {state}, but Eddie's DNS hasn't loaded it yet."
 
 
 # Home mode by voice. The whole request must be the command, so negations, questions and extra
@@ -77,7 +80,6 @@ _HOME_ON = (rf'(?:(?:turn|switch|flip|put) on {_HOME}|(?:turn|switch|flip|put|se
             rf'|(?:i want|id like) {_HOME} (?:on|enabled)|{_HOME} on)')
 _HOME_OFF = (rf'(?:(?:turn|switch|flip|put) off {_HOME}|(?:turn|switch|flip|put|set) {_HOME} off|(?:disable|deactivate|stop|end) {_HOME}'
              rf'|(?:i want|id like) {_HOME} (?:off|disabled)|{_HOME} off)')
-_MODE_ASK = r'(?:please )?(?:(?:can|could|would|will) you (?:please )?)?(?:go ahead and )?'
 _MODE_TAIL = r'(?: please| now| for me| eddie)*'
 NOT_A_LEAD_IN = {'dont', 'do', 'not', 'never', 'no', 'is', 'was', 'are', 'isnt', 'what', 'whats', 'why', 'how', 'did',
                  'does', 'should', 'if', 'when', 'might', 'maybe', 'whether', 'and', 'or', 'but'}
@@ -86,7 +88,7 @@ NOT_A_LEAD_IN = {'dont', 'do', 'not', 'never', 'no', 'is', 'was', 'are', 'isnt',
 def home_mode_command(text):
     """True or False for a whole-utterance home mode on/off command, else None."""
     for on, core in ((True, _HOME_ON), (False, _HOME_OFF)):
-        match = re.fullmatch(rf'(?:(?P<lead>[a-z0-9]+(?: [a-z0-9]+)?) )?{_MODE_ASK}{core}{_MODE_TAIL}', text)
+        match = re.fullmatch(rf'(?:(?P<lead>[a-z0-9]+(?: [a-z0-9]+)?) )?{LEAD}(?:go ahead and )?{core}{_MODE_TAIL}', text)
         if match and not set((match['lead'] or '').split()) & NOT_A_LEAD_IN:
             return on
     return None
@@ -181,17 +183,19 @@ def _command(verb):
         rf'{verb} (?P<target>.+?)(?: (?:please|for me|now|too|as well))*')
 
 
+NOT_CAUGHT = "I didn't quite catch that."
+# Rather than reading every capability aloud, Eddie points at the dashboard's capabilities pane.
+CAPABILITIES_HINT = "Tap capabilities to see what I can do."
+SAVED_NOT_LOADED = "Saved, but Eddie's DNS hasn't loaded it yet."
 BLOCK = _command('block')
 ALLOW = _command('allow')
-NOT_RESOLVED = 'Which domain should I block? Say block, then the full domain name. Nothing changed.'
-RULE_FAILED = "I couldn't add that rule. Nothing changed."
+NOT_RESOLVED = 'Which domain? Say block, then the full name.'
+RULE_FAILED = "I couldn't add that rule."
 # Spoken service name -> patterns for "allow <service>"; one file, covered by tests/test_voice_allow.py.
 SERVICES = {key: value for key, value in json.loads(
     (Path(__file__).with_name('services.json')).read_text()).items() if not key.startswith('_')}
 SERVICE_ALIASES = {alias: key for key, service in SERVICES.items() for alias in service['aliases']}
-_names = [service['name'] for service in SERVICES.values()]
-ALLOW_UNRESOLVED = (f"Which service or domain should I allow? I know {', '.join(_names[:-1])} and {_names[-1]}, "
-                    "or say allow, then the full domain name. Nothing changed.")
+ALLOW_UNRESOLVED = "Which service or domain should I allow?"
 # The last domain Eddie spoke about in this conversation; memory only, cleared by forget_conversation.
 context = {'domain': None}
 # Rules this worker created, one entry per command, newest last:
@@ -297,8 +301,12 @@ def essential(domain):
 
 
 def essential_reply(domain):
-    return (f"{domain} is one of Eddie's essentials, like sign-in, updates and time, so I won't block it. "
-            "Nothing changed.")
+    return f"{domain} is essential, so I won't block it."
+
+
+def loaded(said, applied):
+    """A change's spoken result: said once Eddie's DNS has loaded it, else only that it's saved."""
+    return f"{said}." if applied else SAVED_NOT_LOADED
 
 
 def block_domain(domain):
@@ -314,7 +322,7 @@ def block_command(kind, domain):
         try:
             domain = resolve_it()
         except Exception:
-            return "I can't reach Eddie’s traffic backend, so I don't know what it is. Nothing changed."
+            return UNREACHABLE
     if domain is None:
         return NOT_RESOLVED
     if essential(domain):
@@ -323,10 +331,7 @@ def block_command(kind, domain):
         applied = block_domain(domain)
     except Exception:
         return RULE_FAILED
-    if applied:
-        return f"Blocked {domain} on every device. The rule is saved and Eddie's DNS has loaded it."
-    return (f"I saved a rule to block {domain}, but Eddie's DNS hasn't loaded it yet, "
-            "so it may still get through.")
+    return loaded(f'Blocked {domain}', applied)
 
 
 def allow_target(raw):
@@ -353,10 +358,10 @@ def allow_request(kind, value):
     if kind == 'service':
         service = SERVICES[value]
         name, patterns = service['name'], service['patterns']
-        prompt = f'Allow {name} on every device? That adds {len(patterns)} allow rules for its domains.'
+        prompt = f'Allow {name}?'
     else:
         name, patterns = f'{value[2:]} and every subdomain', [value]
-        prompt = f'Allow {name} on every device?'
+        prompt = f'Allow {name}?'
     return 'allow', {'name': name, 'patterns': patterns}, prompt
 
 
@@ -376,13 +381,8 @@ def allow_patterns(name, patterns):
     if saved == 0:
         return RULE_FAILED
     if saved < len(patterns):
-        return (f"I only saved {saved} of {len(patterns)} allow rules for {name} before the backend "
-                f"stopped answering, so {name} may still be blocked. The saved rules stay.")
-    if not applied:
-        return f"I saved the allow rules for {name}, but Eddie's DNS hasn't loaded them yet, so it may still be blocked."
-    loaded = ("The rule is saved and Eddie's DNS has loaded it." if saved == 1
-              else "The rules are saved and Eddie's DNS has loaded them.")
-    return f'Allowed {name} on every device. {loaded}'
+        return f"I only allowed part of {name}; it may still be blocked."
+    return loaded(f'Allowed {name}', applied)
 
 
 def allow_command(kind, value):
@@ -396,9 +396,7 @@ def allow_command(kind, value):
         return RULE_FAILED
     finally:
         remember_rules(f'allow rule for {value}', saved)
-    if applied:
-        return f"Allowed {value} on every device. The rule is saved and Eddie's DNS has loaded it."
-    return f"I saved a rule to allow {value}, but Eddie's DNS hasn't loaded it yet, so it may still be blocked."
+    return loaded(f'Allowed {value}', applied)
 
 
 LOCKDOWN = _command(r'lock ?down')
@@ -411,8 +409,8 @@ LOCKDOWN_KEEP = [key for key, service in SERVICES.items() if not service.get('ki
 KID_KEEP = json.loads(Path(__file__).with_name('kid_safe.json').read_text())['keep']
 if not KID_KEEP or set(KID_KEEP) - SERVICES.keys():
     raise ValueError('voice/kid_safe.json keep must list services.json keys')
-LOCKDOWN_UNREACHABLE = "I can't reach Eddie's backend, so I can't look up that device. Nothing changed."
-UNNAMED = '---'  # how the dashboard's device list shows a device nobody has named yet
+UNREACHABLE = "I can't reach Eddie's backend."
+LOCKDOWN_UNREACHABLE = UNREACHABLE
 
 
 def words(text):
@@ -441,19 +439,6 @@ def named(device):
     return bool(device.get('label') and words(device['label']))
 
 
-def known_names(devices):
-    """The devices voice can find by name, and how many have none: the dashboard shows those as ---."""
-    names = sorted({d['label'] for d in devices if named(d)})
-    unnamed = sum(not named(d) for d in devices)
-    rest = (f"{unnamed} more {'have' if unnamed > 1 else 'has'} no name yet and "
-            f"show{'' if unnamed > 1 else 's'} as {UNNAMED}")
-    if names:
-        return f" The devices I know by name are {join(names)}{f'; {rest}' if unnamed else ''}."
-    if unnamed:
-        return f" None of your devices has a name yet; {'they show' if unnamed > 1 else 'it shows'} as {UNNAMED}."
-    return ''
-
-
 # "List my rules" / "list my devices": Eddie reads them out, the same lists the dashboard's footer opens.
 _LIST = (r'(?:(?:hey|ok|okay) )?(?:eddie )?(?:please )?(?:(?:can|could|would|will) you )?'
          r'(?:list|read|read out|show|show me|tell me|go through|give me|what are)(?: me)?(?: all)?(?: of)?'
@@ -474,9 +459,9 @@ def list_rules():
     try:
         rules = request('/rules')
     except Exception:
-        return "I can't reach Eddie's backend, so I can't read your rules right now."
+        return UNREACHABLE
     if not rules:
-        return "You don't have any rules yet. Say block, then a domain, to add one."
+        return "You don't have any rules yet."
     def phrase(rule):
         target = 'everything' if rule['pattern'] == '*' else rule['pattern']
         where = f" on {rule['device']}" if rule.get('device') else ''
@@ -493,7 +478,7 @@ def list_devices():
     try:
         devices = request('/devices')['devices']
     except Exception:
-        return "I can't reach Eddie's backend, so I can't list your devices right now."
+        return UNREACHABLE
     if not devices:
         return "I haven't seen any devices in the last day."
     busiest = sorted(devices, key=lambda d: d.get('queries', 0), reverse=True)
@@ -507,7 +492,7 @@ def list_devices():
 
 def keep_text(keep):
     names = [SERVICES[key]['name'] for key in keep]
-    return f"{join(names)}, plus Eddie's essentials" if names else "Eddie's essentials"
+    return join(names) if names else "the essentials"
 
 
 def lockdown_request(article, spoken, keep=None):
@@ -521,10 +506,9 @@ def lockdown_request(article, spoken, keep=None):
         return LOCKDOWN_UNREACHABLE
     found = find_devices(spoken, devices)
     if not found:
-        return (f"I don't know a device called {spoken}.{known_names(devices)} Name it in the dashboard's "
-                "device list, then ask again. Nothing changed.")
+        return f"I don't know a device called {spoken}."
     if len({d['mac'] for d in found}) > 1:
-        return f"Which one: {join([d['label'] for d in found], 'or')}? Nothing changed."
+        return f"Which one: {join([d['label'] for d in found], 'or')}?"
     device = found[0]
     name = article + device['label']
     try:
@@ -532,12 +516,11 @@ def lockdown_request(article, spoken, keep=None):
     except Exception:
         return LOCKDOWN_UNREACHABLE
     if locked:
-        return f'{name[0].upper()}{name[1:]} is already locked down. Nothing changed.'
+        return f'{name[0].upper()}{name[1:]} is already locked down.'
     child = keep is None and device.get('kid')
     if keep is None:
         keep = KID_KEEP if child else LOCKDOWN_KEEP
-    why = "It's marked as a child's, so it'll" if child else "It'll"
-    prompt = f"Lock down {name}? {why} only reach {keep_text(keep)} like sign-in and updates."
+    prompt = f"Lock down {name} to {keep_text(keep)}?"
     return 'lockdown', {'device': device['mac'], 'name': name, 'keep': list(keep)}, prompt
 
 
@@ -593,21 +576,14 @@ def lock_device(device, name, keep, by='voice'):
         delete_rules(rules)
         remember(f'leftover lockdown rules for {name}', rules)
         if saved == 0:
-            return 'failed', f"I couldn't lock down {name}; the backend didn't save any rules. Nothing changed."
+            return 'failed', f"I couldn't lock down {name}."
         if not rules:
-            return 'failed', (f"I only saved {saved} of {len(patterns) + 1} lockdown rules for {name} before the "
-                              "backend stopped answering, so I removed them again. Nothing is locked down.")
+            return 'failed', f"I couldn't lock down {name}."
         fix = 'say undo to remove them.' if by == 'voice' else 'turning kid mode off removes them.'
-        return 'failed', (f"I only saved {saved} of {len(patterns) + 1} lockdown rules for {name}, and couldn't "
-                          f"remove {len(rules)} of them. Nothing is locked down, but those allow rules are still "
-                          f"saved; {fix}")
+        return 'failed', f"I couldn't lock down {name}, and some of its rules are left; {fix}"
     remember(f'lockdown rules for {name}', rules)
-    if not applied:
-        return 'saved', (f"I saved the lockdown rules for {name}, but Eddie's DNS hasn't loaded them yet, "
-                         "so nothing is blocked yet.")
-    return 'applied', (f"{name[0].upper()}{name[1:]} is locked down. The rules are saved and Eddie's DNS has "
-                       "loaded them. I haven't seen its traffic blocked yet, and it only applies while it uses "
-                       "Eddie for DNS.")
+    said = loaded(f"Locked down {name}", applied)
+    return ('applied' if applied else 'saved'), said
 
 
 def lockdown_device(device, name, keep):
@@ -629,11 +605,8 @@ def unlock_device(device, name, keep, by='voice'):
     rules = keeps + blocks  # delete_rules works from the end: the "*" blocks go first
     applied = delete_rules(rules)
     if any(row in rules for row in blocks):
-        return 'failed', f"I couldn't unlock {name}; the backend didn't confirm it. It's still locked down."
-    left = f" {len(rules)} of its kid-safe allow rules are still saved." if rules else ''
-    if not applied:
-        return 'saved', f"I removed {name}'s lockdown, but Eddie's DNS hasn't loaded the change yet.{left}"
-    return 'applied', f"{name[0].upper()}{name[1:]} is unlocked, and Eddie's DNS has loaded the change.{left}"
+        return 'failed', f"I couldn't unlock {name}."
+    return ('applied' if applied else 'saved'), loaded(f"Unlocked {name}", applied)
 
 
 # Kid mode (#119): every device marked as a child's on the dashboard, locked down to KID_KEEP
@@ -644,7 +617,7 @@ KID_MODE = re.compile(
     r'|(?P<verb>enable|disable|start|stop) (?:the )?kids? mode|kids? mode (?P<on3>on|off)'
     r'|(?P<lock>lock ?down|unlock) (?:the |my |our |all (?:of )?(?:the |my |our )?)?(?:kids?|childrens?|childs) devices)'
     r'(?: (?:please|for me|now))*')
-KID_UNREACHABLE = "I can't reach Eddie's backend, so I can't look up the children's devices. Nothing changed."
+KID_UNREACHABLE = UNREACHABLE
 
 
 def kid_mode_target(raw):
@@ -676,19 +649,12 @@ def kid_mode_request(on):
         return KID_UNREACHABLE
     kids = [d for d in devices if d.get('kid')]
     if not kids:
-        return ("No device is marked as a child's yet. Open devices on the dashboard and set one to child, "
-                "then ask again. Nothing changed.")
+        return "No device is marked as a child's yet; set one on the dashboard."
     todo = [d for d in kids if (d['mac'] in locked) != on]
     if not todo:
-        return f"Kid mode is already {'on' if on else 'off'} for {join([kid_name(d) for d in kids])}. Nothing changed."
+        return f"Kid mode is already {'on' if on else 'off'}."
     targets = [{'device': d['mac'], 'name': kid_name(d)} for d in todo]
-    names = join([t['name'] for t in targets])
-    names = names[0].upper() + names[1:]
-    if on:
-        prompt = f"Turn on kid mode? {names} will only reach {keep_text(KID_KEEP)} like sign-in and updates."
-    else:
-        prompt = f"Turn off kid mode? {names} will get full internet through Eddie again."
-    return 'kid_mode', {'on': on, 'devices': targets}, prompt
+    return 'kid_mode', {'on': on, 'devices': targets}, f"Turn {'on' if on else 'off'} kid mode?"
 
 
 def set_kid_mode(on, devices, by='voice'):
@@ -696,22 +662,11 @@ def set_kid_mode(on, devices, by='voice'):
     Speaks only what the backend acknowledged, never that traffic was seen blocked."""
     change = lock_device if on else unlock_device
     results = [(d['name'], *change(d['device'], d['name'], KID_KEEP, by)) for d in devices]
-    done = [name for name, status, _ in results if status == 'applied']
-    trouble = [text for _, status, text in results if status != 'applied']
-    one, lead = len(done) == 1, ''
-    if done and on:
-        lead = (f"{join(done)} {'is' if one else 'are'} locked down to {keep_text(KID_KEEP)}; "
-                "Eddie's DNS has loaded the rules.")
-    elif done:
-        lead = f"{join(done)} {'has' if one else 'have'} full internet through Eddie again; Eddie's DNS has loaded the change."
-    lead = lead[:1].upper() + lead[1:]
-    if not trouble:
-        state = f"Kid mode is {'on' if on else 'off'}. {lead}"
-        if on:
-            state += (f" I haven't seen {'its' if one else 'their'} traffic blocked yet, and it only applies while "
-                      f"{'it uses' if one else 'they use'} Eddie for DNS.")
-        return state
-    return ' '.join(filter(None, [lead, *trouble]))
+    failed = [text for _, status, text in results if status == 'failed']
+    if failed:
+        partly = f"Kid mode only partly turned {'on' if on else 'off'}." if len(failed) < len(results) else ''
+        return ' '.join(filter(None, [partly, *failed]))
+    return mode_turned('Kid mode', on, all(status == 'applied' for _, status, _ in results))
 
 
 def kid_mode_change(on, by='dashboard'):
@@ -731,11 +686,6 @@ NEW_DEVICE_STATUS = {'allow': 'approve', 'approve': 'approve', 'let in': 'approv
                      'deny': 'deny', 'block': 'deny', 'reject': 'deny'}
 
 
-def spoken_time(ms):
-    """A first_seen time as people say it: 2:14 AM."""
-    return time.strftime('%I:%M %p', time.localtime(ms / 1000)).lstrip('0')
-
-
 def new_device_request(verb):
     """Confirmation.request args for approving or denying the newest pending device, or the
     spoken reply when there is none (nothing changes then)."""
@@ -747,16 +697,9 @@ def new_device_request(verb):
     pending = sorted((d for d in devices if d.get('status') == 'pending'),
                      key=lambda d: d.get('first_seen') or 0, reverse=True)
     if not pending:
-        return "There's no new device waiting for a decision. Nothing changed."
+        return "There's no new device waiting."
     device = pending[0]
-    seen = f", first seen at {spoken_time(device['first_seen'])}" if device.get('first_seen') else ''
-    others = (f" {len(pending) - 1} other new device{'s are' if len(pending) > 2 else ' is'} still waiting."
-              if len(pending) > 1 else '')
-    if decision == 'approve':
-        prompt = f"Allow the new device, {device['name']}{seen}? It'll get full internet through Eddie.{others}"
-    else:
-        prompt = (f"Deny the new device, {device['name']}{seen}? Eddie will block everything it looks up "
-                  f"except the essentials, even with quarantine off.{others}")
+    prompt = f"{'Allow' if decision == 'approve' else 'Deny'} the new device, {device['name']}?"
     return decision, {'device': device['mac'], 'name': device['name']}, prompt
 
 
@@ -765,13 +708,8 @@ def decide_new_device(decision, device, name):
     want = 'approved' if decision == 'approve' else 'denied'
     result = request(f'/devices/{device}/{decision}', {}, timeout=RULE_TIMEOUT)
     if result.get('mac') != device or result.get('status') != want:
-        return f"I couldn't {decision} {name}; the backend didn't confirm it. Nothing changed."
-    if result.get('applied') is not True:
-        return f"I saved that {name} is {want}, but Eddie's DNS hasn't loaded it yet."
-    if want == 'approved':
-        return f"{name} is approved, and Eddie's DNS has loaded the change."
-    return (f"{name} is denied, and Eddie's DNS has loaded the change. It only applies while "
-            "the device uses Eddie for DNS.")
+        return f"I couldn't {decision} {name}."
+    return loaded(f"{name} {want}", result.get('applied') is True)
 
 
 def still_voice_rule(row, rule):
@@ -790,11 +728,11 @@ def undo_command():
         return NOTHING_TO_UNDO
     entry = undo_stack[-1]
     rules, what = entry['rules'], entry['what']
-    total, removed, gone, applied = len(rules), 0, 0, False
+    removed, gone, applied = 0, 0, False
     try:
         current = {row.get('id'): row for row in request('/rules')}
     except Exception:
-        return f"I can't reach Eddie's backend, so I couldn't undo the {what}. Nothing changed."
+        return UNREACHABLE
     while rules:
         rule = rules[-1]
         if not still_voice_rule(current.get(rule['id']), rule):
@@ -819,16 +757,14 @@ def undo_command():
         applied = result.get('applied') is True  # DNS loads whole revisions; the last delete covers the rest
     if rules:
         if removed == 0:
-            return f"I couldn't undo the {what}; the backend didn't confirm it. Nothing changed."
-        return (f"I only removed {removed} of the {total} {what} before the backend stopped "
-                "answering. Say undo again to remove the rest.")
+            return "I couldn't undo that."
+        return "I only undid part of that; say undo again."
     undo_stack.pop()
     if removed == 0:
-        return f"The {what} had already been removed elsewhere, so there was nothing to undo."
+        return "That was already removed."
     if not applied:
-        return (f"I removed the {what}, but Eddie's DNS hasn't loaded the change yet, "
-                "so it may still apply for a moment.")
-    return f"Undone. I removed the {what}, and Eddie's DNS has loaded the change."
+        return f"Removed the {what}, but Eddie's DNS hasn't loaded the change yet."
+    return f"Undid the {what}."
 
 
 # Ask before blocking (#79): ids of API questions already read out, so each is spoken once per worker run.
@@ -850,7 +786,7 @@ def question_announcement():
         if type(qid) is not int or not isinstance(prompt, str) or qid in announced:
             continue
         announced.add(qid)
-        return "I've got one question for you. " + confirmation.request('question', {'question_id': qid}, prompt)
+        return confirmation.request('question', {'question_id': qid}, prompt)
     return None
 
 
@@ -861,7 +797,7 @@ def answer_question(question_id):
     except urllib.error.HTTPError as error:
         error.close()
         if error.code == 404:
-            return 'That question was already answered. Nothing changed.'
+            return 'That was already answered.'
         return RULE_FAILED
     except Exception:
         return RULE_FAILED
@@ -872,9 +808,7 @@ def answer_question(question_id):
         return RULE_FAILED
     names = join([r['pattern'] for r in saved])
     remember_rules(f"block on {names}" if len(saved) == 1 else f"blocks on {names}", saved)
-    if result.get('applied') is True:
-        return f"Blocked {names} on every device. Eddie's DNS has loaded the change."
-    return f"I saved a block for {names}, but Eddie's DNS hasn't loaded it, so it isn't confirmed blocked yet."
+    return loaded(f'Blocked {names}', result.get('applied') is True)
 
 
 LEAD = r'(?:(?:ok|okay|eddie|hey eddie|please) )*(?:(?:can|could|would|will) you (?:please )?)?'
@@ -890,7 +824,7 @@ AWAY_ON = re.compile(
 AWAY_OFF = re.compile(
     LEAD + r'(?:(?:turn|switch) off away mode|(?:turn|switch) away mode off|disable away mode|stop away mode|'
     r'end away mode|(?:i am|im|we are|were) (?:back|home|back home)(?: now)?)(?: please)?')
-AWAY_TOO_LONG = f"I can only set away mode for up to {AWAY_MAX_DAYS} days. Nothing changed."
+AWAY_TOO_LONG = f"Away mode can only last {AWAY_MAX_DAYS} days."
 
 
 def away_end(match, now=None):
@@ -927,29 +861,13 @@ def away_command(text, now=None):
     until, when = away_end(match, now)
     if until is not None and until > (now + timedelta(days=AWAY_MAX_DAYS)).timestamp() * 1000:
         return AWAY_TOO_LONG
-    prompt = (f"Turn on away mode{when}? I'll cut telemetry from the devices whose traffic shows when "
-              "someone's home. Cameras, doorbells and alarms stay up.")
-    return 'away', {'on': True, 'until': until, 'when': when}, prompt
-
-
-# A display name that's only a MAC, IPv4 or IPv6 address (devices.display_name's last resort).
-ADDRESS = re.compile(r'(?:ip:)?(?:[0-9a-f]{2}(?::[0-9a-f]{2}){5}|\d{1,3}(?:\.\d{1,3}){3}|[0-9a-f]*:[0-9a-f:]*)')
-
-
-def some(devices, most=3):
-    """Device names to speak: labels and vendor names, unlabelled addresses only counted."""
-    names = [d['name'] for d in devices if not ADDRESS.fullmatch(str(d['name']).lower())]
-    unnamed = len(devices) - len(names)
-    if unnamed:
-        names.append(f"{unnamed} unnamed device{'s' if unnamed > 1 else ''}" if names else
-                     f"{unnamed} device{'s' if unnamed > 1 else ''} without a name")
-    return join(names) if len(names) <= most else f"{', '.join(names[:most])} and {len(names) - most} more"
+    return 'away', {'on': True, 'until': until, 'when': when}, f'Turn on away mode{when}?'
 
 
 def set_away_mode(on, until=None, when=''):
     """RISKY_ACTIONS['away']: POST /mode and speak only what the backend acknowledged.
 
-    On means DNS loaded it; never that a device's traffic was seen blocked.
+    Without the caveat it means DNS loaded it; never that a device's traffic was seen blocked.
     """
     body = {'away': on}
     if until is not None:
@@ -957,20 +875,7 @@ def set_away_mode(on, until=None, when=''):
     result = request('/mode', body, timeout=RULE_TIMEOUT)
     if result.get('away') is not on or result.get('away_until') != until:
         raise ValueError('Away mode was not acknowledged')
-    applied = result.get('away_applied') is True
-    if not on:
-        if not applied:
-            return "I turned away mode off, but Eddie's DNS hasn't loaded the change yet, so it may still block for a moment."
-        return "Away mode is off, and Eddie's DNS has loaded the change."
-    if not applied:
-        return f"I saved away mode{when}, but Eddie's DNS hasn't loaded it yet, so nothing is blocked yet."
-    covered = result.get('away_devices') or []
-    exempt = result.get('away_exempt') or []
-    if not covered:
-        return (f"Away mode is on{when}, but I haven't seen a device whose traffic shows someone's home this week, "
-                "so it isn't blocking anything.")
-    kept = f" {some(exempt)} {'stays' if len(exempt) == 1 else 'stay'} up." if exempt else ''
-    return f"Away mode is on{when}. Eddie's DNS has loaded it and is cutting telemetry from {some(covered)}.{kept}"
+    return mode_turned('Away mode', on, result.get('away_applied') is True)
 
 
 # Sensitivity modes (#110): spoken category word -> the mode POST /sensitivity takes.
@@ -982,9 +887,6 @@ SENSITIVITY_WORDS = {
     'belief': 'beliefs', 'beliefs': 'beliefs', 'religion': 'beliefs', 'religious': 'beliefs',
     'politics': 'beliefs', 'political': 'beliefs', 'news': 'beliefs',
 }
-SENSITIVITY_MINUTES = 5  # eddie/sensitivity.py WINDOW_MS
-SENSITIVITY_SITES = {'health': 'health', 'kids': "kids'", 'money': 'banking or shopping',
-                     'beliefs': 'news, religious or political'}
 _CATEGORY = r'(?P<cat>' + '|'.join(sorted(SENSITIVITY_WORDS, key=len, reverse=True)) + r')'
 _THINGS = r'(?: (?:related|stuff|sites|apps|things|data|traffic))*'
 SENSITIVITY_ON = [re.compile(LEAD + p + r'(?: please)?') for p in (
@@ -1012,7 +914,7 @@ def sensitivity_target(text):
 def sensitivity_reply(mode, on):
     """POST /sensitivity and read back only what the backend acknowledged.
 
-    On means DNS loaded the mode; never that a tracker was seen blocked.
+    Without the caveat it means DNS loaded the mode; never that a tracker was seen blocked.
     """
     name = mode.capitalize()
     try:
@@ -1020,22 +922,8 @@ def sensitivity_reply(mode, on):
         if result.get('mode') != mode or result.get('on') is not on:
             raise ValueError('Sensitivity mode was not acknowledged')
     except Exception:
-        return f"I couldn't change {mode} protection. Check the local backend before trying again."
-    applied = result.get('applied') is True
-    if not on:
-        if not applied:
-            return (f"I turned {mode} protection off, but Eddie's DNS hasn't loaded the change yet, "
-                    "so it may still block for a moment.")
-        return f"{name} protection is off, and Eddie's DNS has loaded the change."
-    if not applied:
-        return f"I saved {mode} protection, but Eddie's DNS hasn't loaded it yet, so nothing is blocked yet."
-    examples = result.get('examples') or []
-    like = f" like {join(examples, 'or')}" if examples else ''
-    count = result.get('trackers')
-    trackers = f"the {count} trackers and data brokers I know" if isinstance(count, int) else "the trackers I know"
-    sites = SENSITIVITY_SITES[mode]
-    return (f"{name} protection is on, and Eddie's DNS has loaded it. For {SENSITIVITY_MINUTES} minutes after a "
-            f"device opens a {sites} site{like}, I block {trackers} on it. The {sites} sites themselves keep working.")
+        return f"I couldn't change {mode} protection."
+    return mode_turned(f'{name} protection', on, result.get('applied') is True)
 
 
 # Sends confirmed texts (texting.py); None when EDDIE_TEXTING is off or unsupported here.
@@ -1044,10 +932,9 @@ text_sender = texting.configured_sender()
 TEXT_CONFIRM_SECONDS = 30
 TEXT_REPLIES = {
     'sent': 'Sent to {name}.',
-    'failed': "Messages couldn't send that to {name}. Check Messages before trying again.",
-    'pending': "I handed that to Messages, but it hasn't confirmed it went out to {name}. Check Messages before sending it again.",
-    'unknown': ("I handed that to Messages, but I can't read its status on this Mac, so I can't confirm "
-                "it went out to {name}. Check Messages before sending it again."),
+    'failed': "Messages couldn't send that to {name}.",
+    'pending': "Messages hasn't confirmed it went to {name}; check before resending.",
+    'unknown': "I can't confirm it went to {name}; check Messages before resending.",
 }
 
 
@@ -1059,21 +946,21 @@ def text_request(raw):
     if not texting.VERB.fullmatch(raw):
         return None
     if text_sender is None:
-        return "Texting isn't set up on this Eddie. Nothing was sent."
+        return "Texting isn't set up."
     try:
         contacts = texting.load_contacts()
     except texting.ContactsError as error:
-        return f"I can't text anyone because {error}. Nothing was sent."
+        return "I can't read your contacts."
     if not contacts:
-        return "I don't have anyone to text yet. Add contacts to voice/contacts.json. Nothing was sent."
+        return "I don't have any contacts yet."
     contact, body = texting.parse(raw, contacts)
     if contact is None:
-        return f"I can only text {join([c['name'] for c in contacts.values()], 'or')}. Nothing was sent."
+        return f"I can only text {join([c['name'] for c in contacts.values()], 'or')}."
     name = contact['name']
     if not body:
-        return f"What should the text to {name} say? Say text {name}, then the message."
+        return f"What should the text to {name} say?"
     if len(body) > texting.MAX_BODY:
-        return f"That's too long for me to read back. Keep texts to {name} under about 30 words. Nothing was sent."
+        return "That's too long; keep it under 30 words."
     args = {'name': name, 'address': contact['address'], 'service': contact['service'], 'body': body}
     return 'text', args, f'Text {name}: "{body}" Send it?'
 
@@ -1135,8 +1022,7 @@ class Confirmation:
             replaced = self.pending is not None
             self.pending = {'kind': kind, 'args': dict(args), 'prompt': prompt,
                             'expires_at': self.clock() + (seconds or self.seconds), 'reprompted': False}
-        lead = "Okay, I dropped the earlier request. " if replaced else ''
-        return f'{lead}{prompt} Say yes to confirm or no to cancel.'
+        return f'{prompt} Yes or no?'
 
     def status(self):
         """Screen-safe view of the pending action; arguments are never exposed."""
@@ -1160,17 +1046,17 @@ class Confirmation:
             if self.clock() >= pending['expires_at']:
                 self.pending = None
                 if text in YES or text in NO:
-                    return "That request expired, so I didn't do it. Ask again if you still want it."
+                    return "That expired; ask again."
                 return None
             if text in NO:
                 self.pending = None
-                return 'Cancelled. Nothing changed.'
+                return 'Cancelled.'
             if text not in YES:
                 if pending['reprompted']:
                     self.pending = None
-                    return "I didn't get a clear yes, so I didn't do it."
+                    return "No clear yes, so I didn't."
                 pending['reprompted'] = True
-                return f"I need a yes or no. {pending['prompt']}"
+                return f"Yes or no? {pending['prompt']}"
             self.pending = None
         # Guest Mode may have come on since the owner asked: a guest's yes never runs it.
         denied = profile.check(RISKY_CATEGORIES[pending['kind']])
@@ -1179,7 +1065,7 @@ class Confirmation:
         try:
             return str(RISKY_ACTIONS[pending['kind']](**pending['args']))
         except Exception:
-            return "I couldn't confirm that went through. Check the local backend before trying again."
+            return "I couldn't confirm that went through."
 
 
 confirmation = Confirmation()
@@ -1217,7 +1103,7 @@ def stop_microphone():
     """The router's and the local model's stop_microphone. Takes no yes: turning the mic off only shares less."""
     if microphone_off is None or not microphone_off():
         return 'The microphone is already off.'
-    return "Okay, I'm turning the microphone off. Start it again from the dashboard."
+    return 'Microphone turned off.'
 
 
 TIME_NUMBERS = {'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5, 'six': 6, 'seven': 7,
@@ -1289,7 +1175,7 @@ def route(text):
     if pending_reply is not None:
         return pending_reply
     if not text:
-        return "Didn't catch that. Try again."
+        return NOT_CAUGHT
     # A guest gets a separate store, so the household's reminders are never read out or cancelled.
     # Without permission the command runs against a throwaway store, only to know it was one.
     store = timer_store if profile.role() == 'owner' else guest_timers
@@ -1333,7 +1219,7 @@ def route(text):
             return NOT_RESOLVED
         if allow:
             return ALLOW_UNRESOLVED
-        return "I haven't changed anything. Tap capabilities, bottom right, to see what I can do."
+        return NOT_CAUGHT
     if WHAT_THEY_KNOW.search(text):
         denied = profile.check('reports')
         if denied:
@@ -1341,7 +1227,7 @@ def route(text):
         try:
             report = what_they_know(report_hours(raw))
         except Exception:
-            return "I can't reach Eddie’s traffic backend, so I can't say what they know right now."
+            return UNREACHABLE
         if report.get('enough_data') is False:
             return str(report['text'])
         if phrase_inferences is not None and report.get('facts'):
@@ -1356,7 +1242,7 @@ def route(text):
         try:
             return str(burglars_eye(report_hours(raw))['text'])
         except Exception:
-            return "I can't reach Eddie’s traffic backend, so I can't say when the house looked empty right now."
+            return UNREACHABLE
     if PRIVACY_TIPS.search(text):
         denied = profile.check('devices')
         if denied:
@@ -1364,7 +1250,7 @@ def route(text):
         try:
             return str(privacy_suggestions()['text'])
         except Exception:
-            return "I can't read Eddie's device list right now, so I can't suggest privacy settings."
+            return UNREACHABLE
     if profile.role() == 'guest':
         # The local model's tools are all household data; guest concierge routing is #166.
         if text in ('hello', 'hi', 'hey', 'hey eddie'):
@@ -1373,7 +1259,7 @@ def route(text):
             return profile.check('traffic')
         return guest.HELP
     if text in ('hello', 'hi', 'hey', 'hey eddie'):
-        return "Hey, I'm Eddie. Tap capabilities, bottom right, to see what I can do."
+        return f"Hey, I'm Eddie. {CAPABILITIES_HINT}"
     if intent_model is not None:
         reply = intent_model(raw, context.get('domain'))
         if reply is not None:
@@ -1386,5 +1272,8 @@ def route(text):
         try:
             return profile.check('traffic') or str(request('/summary')['text'])
         except Exception:
-            return "I can't reach Eddie’s traffic backend, so I don't have a current summary."
-    return "I don't know how to answer that yet. Tap capabilities, bottom right, to see what I can do."
+            return UNREACHABLE
+    # A stray yes or no (nothing waiting for one) is just not caught; anything else gets the pointer.
+    if text in ('yes', 'yeah', 'yep', 'sure', 'no', 'nope', 'ok', 'okay'):
+        return NOT_CAUGHT
+    return f"{NOT_CAUGHT} {CAPABILITIES_HINT}"

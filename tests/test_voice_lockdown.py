@@ -11,7 +11,6 @@ import voice_agent
 TV = 'aa:bb:cc:dd:ee:01'
 STICK = 'aa:bb:cc:dd:ee:02'
 KEEP = [p for key in voice_agent.LOCKDOWN_KEEP for p in voice_agent.SERVICES[key]['patterns']]
-TOTAL = len(KEEP) + 1
 
 
 class Clock:
@@ -69,7 +68,7 @@ class LockdownBase(unittest.TestCase):
 
     def ask(self, phrase='Lock down the TV.', name='the TV'):
         reply = voice_agent.respond(phrase)
-        self.assertTrue(reply.startswith(f'Lock down {name}? It'), reply)
+        self.assertTrue(reply.startswith(f'Lock down {name} to '), reply)
         return reply
 
     def rules(self):
@@ -100,16 +99,14 @@ class Phrasing(unittest.TestCase):
 class Confirm(LockdownBase):
     def test_read_back_names_the_device_and_keep_list_and_changes_nothing(self):
         reply = self.ask()
-        self.assertEqual(reply, "Lock down the TV? It'll only reach Netflix, YouTube, Prime Video and Apple TV, "
-                                "plus Eddie's essentials like sign-in and updates. Say yes to confirm or no to cancel.")
+        self.assertEqual(reply, "Lock down the TV to Netflix, YouTube, Prime Video and Apple TV? Yes or no?")
         self.assertEqual([], self.backend.posts)
         self.assertEqual('lockdown', voice_agent.confirmation.status()['kind'])
 
     def test_yes_writes_keep_rules_then_the_block_last(self):
         self.ask('lock down the fire stick', 'the Fire Stick')
         reply = voice_agent.respond('yes')
-        self.assertEqual(reply, "The Fire Stick is locked down. The rules are saved and Eddie's DNS has loaded them. "
-                                "I haven't seen its traffic blocked yet, and it only applies while it uses Eddie for DNS.")
+        self.assertEqual(reply, "Locked down the Fire Stick.")
         self.assertEqual([{'pattern': p, 'action': 'allow', 'created_by': 'voice', 'device_mac': STICK} for p in KEEP]
                          + [{'pattern': '*', 'action': 'block', 'created_by': 'voice', 'device_mac': STICK}],
                          self.backend.posts)
@@ -119,22 +116,21 @@ class Confirm(LockdownBase):
         self.backend.applied = False
         self.ask()
         reply = voice_agent.respond('yes')
-        self.assertEqual(reply, "I saved the lockdown rules for the TV, but Eddie's DNS hasn't loaded them yet, "
-                                "so nothing is blocked yet.")
-        self.assertNotIn('locked down.', reply)
+        self.assertEqual(reply, voice_agent.SAVED_NOT_LOADED)
+        self.assertNotIn('ocked down', reply)
 
     def test_undo_removes_the_whole_lockdown(self):
         self.ask()
         voice_agent.respond('yes')
         reply = voice_agent.respond('undo')
-        self.assertEqual(reply, "Undone. I removed the lockdown rules for the TV, and Eddie's DNS has loaded the change.")
+        self.assertEqual(reply, "Undid the lockdown rules for the TV.")
         self.assertEqual([], self.rules())
 
     def test_already_locked_down(self):
         self.ask()
         voice_agent.respond('yes')
         posts = len(self.backend.posts)
-        self.assertEqual(voice_agent.respond('lock down the TV'), 'The TV is already locked down. Nothing changed.')
+        self.assertEqual(voice_agent.respond('lock down the TV'), 'The TV is already locked down.')
         self.assertEqual(posts, len(self.backend.posts))
         self.assertIsNone(voice_agent.confirmation.status())
 
@@ -142,24 +138,22 @@ class Confirm(LockdownBase):
 class DeclineAndTimeout(LockdownBase):
     def test_no_changes_nothing(self):
         self.ask()
-        self.assertEqual(voice_agent.respond('no'), 'Cancelled. Nothing changed.')
-        self.assertIn("don't know how to answer that yet", voice_agent.respond('yes'))
+        self.assertEqual(voice_agent.respond('no'), 'Cancelled.')
+        self.assertEqual(voice_agent.NOT_CAUGHT, voice_agent.respond('yes'))
         self.assertEqual([], self.backend.posts)
 
     def test_timeout_never_executes(self):
         self.ask()
         self.clock.now += voice_agent.CONFIRM_SECONDS
         self.assertEqual(voice_agent.respond('yes'),
-                         "That request expired, so I didn't do it. Ask again if you still want it.")
+                         "That expired; ask again.")
         self.assertEqual([], self.backend.posts)
 
 
 class Devices(LockdownBase):
     def test_unknown_device_asks_and_changes_nothing(self):
         reply = voice_agent.respond('lock down the fridge')
-        self.assertEqual(reply, "I don't know a device called fridge. The devices I know by name are Fire Stick and TV; "
-                                "1 more has no name yet and shows as ---. Name it in the dashboard's device list, "
-                                "then ask again. Nothing changed.")
+        self.assertEqual(reply, "I don't know a device called fridge.")
         self.assertIsNone(voice_agent.confirmation.status())
         self.assertEqual([], self.backend.posts)
 
@@ -170,7 +164,7 @@ class Devices(LockdownBase):
         self.backend.devices.append({'mac': 'aa:bb:cc:dd:ee:03', 'label': 'Bedroom TV', 'name': 'Bedroom TV'})
         self.backend.devices[0]['label'] = 'Living Room TV'
         self.assertEqual(voice_agent.respond('lock down the TV'),
-                         'Which one: Living Room TV or Bedroom TV? Nothing changed.')
+                         'Which one: Living Room TV or Bedroom TV?')
         self.assertIsNone(voice_agent.confirmation.status())
         self.assertEqual([], self.backend.posts)
 
@@ -182,7 +176,7 @@ class Devices(LockdownBase):
 
     def test_one_partial_label_match_is_read_back_in_full(self):
         self.backend.devices[0]['label'] = 'Living Room TV'
-        self.assertTrue(voice_agent.respond('lock down the TV').startswith('Lock down the Living Room TV?'))
+        self.assertTrue(voice_agent.respond('lock down the TV').startswith('Lock down the Living Room TV to '))
 
     def test_backend_down(self):
         self.backend.down = True
@@ -195,22 +189,21 @@ class PartialFailure(LockdownBase):
         self.backend.fail_add_at = 0
         self.ask()
         self.assertEqual(voice_agent.respond('yes'),
-                         "I couldn't lock down the TV; the backend didn't save any rules. Nothing changed.")
+                         "I couldn't lock down the TV.")
         self.assertEqual(voice_agent.respond('undo'), voice_agent.NOTHING_TO_UNDO)
 
     def test_some_saved_are_rolled_back(self):
         self.backend.fail_add_at = 5
         self.ask()
         self.assertEqual(voice_agent.respond('yes'),
-                         f"I only saved 5 of {TOTAL} lockdown rules for the TV before the backend stopped answering, "
-                         "so I removed them again. Nothing is locked down.")
+                         "I couldn't lock down the TV.")
         self.assertEqual([], self.rules())
         self.assertEqual(voice_agent.respond('undo'), voice_agent.NOTHING_TO_UNDO)
 
     def test_block_rule_failing_rolls_back_every_keep_rule(self):
         self.backend.fail_add_at = len(KEEP)
         self.ask()
-        self.assertIn('so I removed them again. Nothing is locked down.', voice_agent.respond('yes'))
+        self.assertEqual("I couldn't lock down the TV.", voice_agent.respond('yes'))
         self.assertEqual([], self.rules())
 
     def test_failed_rollback_is_reported_and_left_for_undo(self):
@@ -218,12 +211,11 @@ class PartialFailure(LockdownBase):
         self.backend.fail_deletes = True
         self.ask()
         self.assertEqual(voice_agent.respond('yes'),
-                         f"I only saved 3 of {TOTAL} lockdown rules for the TV, and couldn't remove 3 of them. "
-                         "Nothing is locked down, but those allow rules are still saved; say undo to remove them.")
+                         "I couldn't lock down the TV, and some of its rules are left; say undo to remove them.")
         self.assertNotIn((TV, '*', 'block'), self.rules())
         self.backend.fail_deletes = False
         self.assertEqual(voice_agent.respond('undo'),
-                         "Undone. I removed the leftover lockdown rules for the TV, and Eddie's DNS has loaded the change.")
+                         "Undid the leftover lockdown rules for the TV.")
         self.assertEqual([], self.rules())
 
 
