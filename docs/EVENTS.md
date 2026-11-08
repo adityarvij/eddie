@@ -31,7 +31,7 @@ Body is one event or a list of events.
 | `domain`     | string | lowercase, no trailing dot |
 | `qtype`      | string | `A`, `AAAA`, `HTTPS`, ... |
 | `action`     | string | `allow` \| `block` \| `flag` \| `spoof` (answered with Eddie's IP, #99) |
-| `source`     | string | `rule` \| `allowlist` \| `blocklist` \| `heuristic` \| `ai` \| `home_mode` \| `away_mode` \| `sensitivity` \| `quarantine` \| `default` |
+| `source`     | string | `rule` \| `allowlist` \| `blocklist` \| `heuristic` \| `ai` \| `home_mode` \| `away_mode` \| `sensitivity` \| `quarantine` \| `cname` (answer was a CNAME to a blocklisted name) \| `default` |
 | `reason`     | string | one short human line, shown on screen |
 
 The DNS server sends every lookup here through `eddie/feed.py`: fire-and-forget

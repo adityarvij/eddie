@@ -32,6 +32,12 @@ The same port also takes DNS over TCP (RFC 7766), where devices retry an
 answer too big for UDP: the same decision and logging, forwarded upstream
 over TCP. A UDP reply that won't fit the client's buffer (an offline answer
 first fetched over TCP) is sent truncated, so the device retries over TCP.
+CNAME uncloaking: a lookup the engine let through on its own judgement (not
+a rule or the allowlist) whose answer has a CNAME to a blocklisted name is a
+tracker hiding behind the site's own domain (smetrics.brand.com -> Adobe's
+omtrdc.net). It gets the block answer instead, logged with source cname, and
+decision.uncloak remembers the domain. Each lookup is logged once, after its
+answer, so the log and feed show what the device actually got.
 Geo alerts (#102, geoip.py): each forwarded answer is queued for a worker
 thread that looks its addresses up in the pinned offline country database and
 sends a geo_alert when a device starts using a new country; EDDIE_GEOIP=off.
@@ -88,6 +94,15 @@ def block_reply(request: DNSRecord) -> DNSRecord:
     elif q.qtype == QTYPE.AAAA:
         reply.add_answer(RR(q.qname, QTYPE.AAAA, ttl=BLOCK_TTL, rdata=AAAA("::")))
     return reply
+
+
+def cname_targets(answer: bytes) -> list[str]:
+    """The names an upstream answer's CNAME records point to; none if it doesn't parse."""
+    try:
+        reply = DNSRecord.parse(answer)
+    except Exception:
+        return []
+    return [str(rr.rdata) for rr in reply.rr if rr.rtype == QTYPE.CNAME]
 
 
 def udp_limit(request: DNSRecord) -> int:
@@ -216,14 +231,19 @@ async def resolve(packet: bytes, client_ip: str, upstreams: list[tuple[str, int]
     qtype = QTYPE.get(request.q.qtype, str(request.q.qtype))
     mac = device if device != client_ip else None
     name = device_map.name(device) if device_map else None
-    if query_log:
-        query_log.log(domain, device, qtype, verdict.action, verdict.source, verdict.reason, ts=arrived)
-    if feed:
-        feed.publish(query_event(arrived, client_ip, domain, qtype, verdict.action, verdict.source, verdict.reason,
-                                 mac=mac, name=name))
+
+    def record(verdict: decision.Decision) -> None:
+        if query_log:
+            query_log.log(domain, device, qtype, verdict.action, verdict.source, verdict.reason, ts=arrived)
+        if feed:
+            feed.publish(query_event(arrived, client_ip, domain, qtype, verdict.action, verdict.source,
+                                     verdict.reason, mac=mac, name=name))
+
     if verdict.action == "spoof":
+        record(verdict)
         return (spoof_reply(request, spoof["ip"]) if spoof["ip"] else block_reply(request)).pack()
     if verdict.action == "block":
+        record(verdict)
         return block_reply(request).pack()
 
     if offline_mode.on:
@@ -231,9 +251,14 @@ async def resolve(packet: bytes, client_ip: str, upstreams: list[tuple[str, int]
     else:
         answer = await (forward_tcp if tcp else forward)(packet, upstreams, timeout)
     if answer is None:
+        record(verdict)
         reply = request.reply()
         reply.header.rcode = RCODE.SERVFAIL
         return reply.pack()
+    if verdict.source not in ("rule", "allowlist") and (cloaked := decision.uncloak(domain, cname_targets(answer))):
+        record(cloaked)
+        return block_reply(request).pack()
+    record(verdict)
     if not offline_mode.on:
         offline_mode.put(request, answer)
         if geo["watch"]:  # a queue put; the lookup happens in geoip's worker thread

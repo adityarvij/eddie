@@ -11,6 +11,11 @@ First match wins:
    (CAMERA_DOMAINS) is blocked, source home_mode.
 3. Blocklist, then, only while block_doh is on (EDDIE_BLOCK_DOH=on), the
    encrypted DNS resolver names in bypass.RESOLVERS (#97).
+   Cloaked tracker: a domain whose upstream answer was a CNAME to a
+   blocklisted name (uncloak, called by the DNS server with the answer's
+   CNAME targets) is blocked, source cname. The DNS server blocks that first
+   answer itself; the engine remembers the domain so later lookups are
+   blocked here without waiting for upstream.
    ACR (#104, acr.py): a seeded content recognition domain this device looks
    up on a regular timer (beacons.py) is blocked, source heuristic, and stays
    blocked for that device until restart. Until it's seen beaconing it falls
@@ -39,7 +44,7 @@ First match wins:
 This runs on the DNS hot path: no model calls, no network, no disk. Everything
 it reads is in memory; the only state it writes is the bounded in-memory
 lookup timing for unknown and ACR domains (beacons.Beacons, acr_caught) and
-the sensitivity windows (Engine.windows). Writers (rules API #12, list loader #8, classifier #27, quarantine #98)
+the sensitivity windows (Engine.windows) and the cloaked domains (Engine.cloaked). Writers (rules API #12, list loader #8, classifier #27, quarantine #98)
 replace whole snapshots with set_rules / set_lists / set_verdicts / set_quarantined instead of
 mutating them, so a lookup never sees a half-updated table.
 
@@ -73,6 +78,8 @@ BEACON = "looked up every {} s, likely telemetry; waiting for classifier"
 ACR_BLOCK = "ACR ({}): looked up every {} s, likely sending what's on screen"
 MAX_ACR = 10_000  # device and ACR domain pairs kept blocked; least recently seen are dropped
 MAX_WINDOWS = 10_000  # devices with an open sensitivity window; least recently opened are dropped
+MAX_CLOAKED = 10_000  # domains remembered as CNAMEs to a blocklisted name; least recently seen are dropped
+CLOAKED = "hidden tracker: its address is a CNAME to {}, on the blocklist"
 SENSITIVE = "{} protection: {} is a third-party tracker, looked up within {} min of a protected site"
 QUARANTINE = "new device, quarantined until approved"
 DENIED = "device denied"
@@ -222,6 +229,7 @@ class Engine:
         self.protected: dict[str, str] = {}  # first-party domain -> sensitivity mode protecting it
         self.sensitive_trackers: frozenset[str] = frozenset()
         self.windows: OrderedDict[str, tuple[int, str]] = OrderedDict()  # device -> (until ms, mode)
+        self.cloaked: OrderedDict[str, str] = OrderedDict()  # domain -> blocklist entry its CNAME hit
 
     def set_rules(self, rules) -> None:
         self.rules = RuleIndex(rules)
@@ -229,6 +237,7 @@ class Engine:
     def set_lists(self, allowlist, blocklist) -> None:
         self.allowlist = frozenset(map(normalize, allowlist))
         self.blocklist = frozenset(map(normalize, blocklist))
+        self.cloaked = OrderedDict()  # found against the old lists
 
     def set_verdicts(self, verdicts: dict[str, Verdict]) -> None:
         self.verdicts = {normalize(d): v for d, v in verdicts.items()}
@@ -305,6 +314,25 @@ class Engine:
                 self.acr_caught.popitem(last=False)
         return every
 
+    def uncloak(self, domain: str, targets) -> Decision | None:
+        """Block a domain whose answer CNAMEs to a blocklisted, non-allowlisted name, and remember it.
+
+        Only for a lookup evaluate let through on its own judgement: the
+        caller skips rules and the allowlist, which always win.
+        """
+        for target in targets:
+            target = normalize(target)
+            if matches(target, self.allowlist):
+                continue
+            if entry := matches(target, self.blocklist):
+                domain = normalize(domain)
+                self.cloaked[domain] = entry
+                self.cloaked.move_to_end(domain)
+                if len(self.cloaked) > MAX_CLOAKED:
+                    self.cloaked.popitem(last=False)
+                return Decision("block", "cname", CLOAKED.format(entry))
+        return None
+
     def evaluate(self, domain: str, device: str, ip: str | None = None, now_ms: int | None = None) -> Decision:
         domain = normalize(domain)
         if not domain:
@@ -335,6 +363,9 @@ class Engine:
             return Decision("block", "blocklist", entry)
         if self.block_doh and (entry := matches(domain, RESOLVERS)):
             return Decision("block", "blocklist", f"encrypted DNS resolver {entry}")
+        if entry := self.cloaked.get(domain):
+            self.cloaked.move_to_end(domain)
+            return Decision("block", "cname", CLOAKED.format(entry))
         now_ms = int(time.time() * 1000) if now_ms is None else now_ms
         if (found := acr.endpoint(domain)) and (every := self.acr_timer(device, domain, now_ms)):
             return Decision("block", "heuristic", ACR_BLOCK.format(found[1], round(every / 1000)))
@@ -370,3 +401,7 @@ engine = Engine()
 
 def evaluate(domain: str, device: str, ip: str | None = None, now_ms: int | None = None) -> Decision:
     return engine.evaluate(domain, device, ip, now_ms)
+
+
+def uncloak(domain: str, targets) -> Decision | None:
+    return engine.uncloak(domain, targets)
