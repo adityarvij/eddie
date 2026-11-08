@@ -14,11 +14,14 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT.parent / 'voice'))
+import timers
+import voice_agent
 from voice_agent import confirmation, forget_conversation, question_announcement, request as api_request, respond
 from voice_runtime import run as run_voice
 stopped = threading.Event()
@@ -96,7 +99,8 @@ def emit(event):
             except queue.Full:
                 pass
 
-def answer(text, reply=None):
+def answer(text, reply=None, alarm=None):
+    """alarm: a title ("Timer done"); the alarm sound plays first and the dashboard shows the title."""
     # Serialize both typed and spoken requests, including the full playback duration.
     with voice_lock:
         speaking.set()
@@ -104,7 +108,12 @@ def answer(text, reply=None):
             emit({'type': 'voice_state', 'state': 'thinking'})
             response = (reply or respond)(text)
             emit({'type': 'agent_reply', 'text': response})
-            emit({'type': 'speaking', 'text': response})
+            emit({'type': 'speaking', 'text': response, **({'title': alarm} if alarm else {})})
+            if alarm:
+                try:
+                    timers.play_alarm()
+                except Exception as error:
+                    emit({'type': 'voice_status', 'status': voice_state['status'], 'message': f'Alarm sound unavailable: {error}'})
             piper_model = os.environ.get('EDDIE_PIPER_MODEL')
             if piper_model:
                 from piper import PiperVoice
@@ -128,6 +137,14 @@ def answer(text, reply=None):
             emit({'type': 'speech_end'})
             pending = confirmation.status()
             emit({'type': 'voice_state', 'state': 'confirming', **pending} if pending else {'type': 'voice_state', 'state': 'idle'})
+
+def ring_timers():
+    """Ring timers and reminders as they come due (#122), whether or not the microphone is on."""
+    while True:
+        for item in voice_agent.timer_store.take_due():
+            title, text = timers.announcement(item, datetime.now())
+            answer(text, reply=str, alarm=title)
+        time.sleep(1)
 
 def microphone():
     try:
@@ -360,6 +377,11 @@ if __name__ == '__main__':
             print(f'Local agent: {agent.model} at {agent.url} (keyword router if it is unavailable).', flush=True)
         except ValueError as error:
             print(f'Local agent off: EDDIE_OLLAMA_URL refused: {error}.', flush=True)
+    timers_file = os.environ.get('EDDIE_TIMERS_FILE', str(ROOT.parent / 'voice' / 'timers.json'))
+    voice_agent.timer_store = timers.Timers(None if timers_file == 'off' else timers_file)
+    if voice_agent.timer_store.load_error:
+        print(voice_agent.timer_store.load_error, flush=True)
+    threading.Thread(target=ring_timers, daemon=True).start()
     print(f'Eddie dashboard: http://localhost:{args.port}', flush=True)
     if not is_local(args.host):
         # The token rides in the fragment, which browsers never send, so it stays out of request logs.

@@ -71,7 +71,7 @@ Dashboard at http://localhost:5173, API at http://localhost:8000. The traffic AP
 - **Multiple voices** — recognize household members, with per-person permissions
 
 ### Personal assistant
-- Reminders and timers
+- Reminders and timers (implemented, #122: `voice/timers.py`; spoken, kept in a local file, rung with a generated chime)
 - Calendar summary
 - Draft and send texts/emails
 - Control local smart-home devices (lights, plugs) without cloud apps
