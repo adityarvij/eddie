@@ -49,7 +49,7 @@ from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocket
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 
-from . import acr, away, baselines, beacons, bypass, decision, demo_week, devices, inferences, insights, labels, occupancy, offline, quarantine, questions, rollback, rules, store
+from . import acr, away, coach, baselines, beacons, bypass, decision, demo_week, devices, inferences, insights, labels, occupancy, offline, quarantine, questions, rollback, rules, store
 from .events import Action, AIVerdictEvent, GeoAlertEvent, ModeUpdate, NewDeviceEvent, OfflineUpdate, QuarantineUpdate, QueryEvent
 
 # In memory for now; SQLite (store.py) replaces this once the DNS side lands.
@@ -532,6 +532,29 @@ class LabelIn(BaseModel):
 async def list_devices(hours: int = Query(24, ge=1, le=168)):
     since = int(time.time() * 1000) - hours * 3_600_000
     return {"hours": hours, "devices": devices.all_devices(rules_db(), since), **quarantine_state()}
+
+
+def coach_devices() -> list[dict]:
+    """coach.suggestions on its own read-only connection, for a worker thread: a week of rows."""
+    conn = sqlite3.connect(f"file:{os.environ.get('EDDIE_DB', 'eddie.db')}?mode=ro", uri=True)
+    try:
+        return coach.suggestions(conn, int(time.time() * 1000) - coach.WEEK_MS)
+    finally:
+        conn.close()
+
+
+@app.get("/suggestions")
+async def suggestions():
+    """Privacy settings to change on recognised devices (#112); guidance only, Eddie changes nothing."""
+    path = os.environ.get("EDDIE_DB", "eddie.db")
+    if path == "off" or not os.path.exists(path):
+        raise HTTPException(503, "Device log unavailable.")
+    try:
+        found = await asyncio.to_thread(coach_devices)
+    except sqlite3.Error:
+        raise HTTPException(503, "Device log unavailable.")
+    return {"devices": [{**d, "guide": coach.GUIDES[d["kind"]]} for d in found],
+            "guides": [g["name"] for g in coach.GUIDES.values()], "text": coach.spoken_text(found)}
 
 
 @app.post("/geo/alerts")

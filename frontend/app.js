@@ -304,11 +304,32 @@ function renderReport(report) {
   const demo = report.demo === true;
   $('report-title').textContent = demo ? `what they know · DEMO WEEK` : `what they know · last ${report.hours}h${report.source === 'eddie.db' ? ' · from eddie.db' : ''}`;
   $('report-demo').textContent = demo ? `DEMO DATA · ${report.label}` : ''; $('report-demo').hidden = !demo;
-  const items = (report.facts || []).map(f => { const li = document.createElement('li'); li.textContent = `${f.fact} — ${f.evidence} (confidence ${Math.round(f.confidence * 100)}%)`; return li; });
+  const items = (report.facts || []).map(f => { const li = document.createElement('li'); li.textContent = `${f.category ? `${f.category}${f.sensitive ? ' · sensitive' : ''}: ` : ''}${f.fact} — ${f.evidence} (confidence ${Math.round(f.confidence * 100)}%)`; return li; });
   if (!items.length) { const li = document.createElement('li'); li.textContent = 'Not enough traffic yet to say what anyone could guess.'; items.push(li); }
   $('report-facts').replaceChildren(...items); $('report').hidden = false;
 }
-window.eddie = { pushEvent: addEvent, wake, voiceEvent, renderReport, ask: text => control('/api/voice/ask', {text}) };
+// Privacy settings coach (#112): the hand-written guide for each recognised device, with its sources.
+function showSuggestions(open) { $('suggestions').hidden = !open; $('suggestions-open').setAttribute('aria-expanded', String(open)); if (open) loadSuggestions(); }
+function renderSuggestions(data) {
+  const blocks = (data.devices || []).map(({name, guide: d}) => {
+    const div = document.createElement('div'); div.className = 'suggestion';
+    const head = document.createElement('div'); head.className = 'suggestion-head'; head.textContent = `${name} · ${d.name}`;
+    const steps = document.createElement('ol'); steps.append(...d.steps.map(s => { const li = document.createElement('li'); li.textContent = `${s.do}: ${s.setting} — ${s.why}`; return li; }));
+    const sources = document.createElement('p'); sources.className = 'modes-note'; sources.append('sources: ');
+    d.sources.forEach((s, i) => { const a = document.createElement('a'); a.href = s.url; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.textContent = s.title; sources.append(...(i ? ['; ', a] : [a])); });
+    const where = document.createElement('p'); where.textContent = d.where; const note = document.createElement('p'); note.className = 'modes-note'; note.textContent = d.note;
+    div.append(head, where, steps, note, sources); return div;
+  });
+  if (!blocks.length) { const p = document.createElement('p'); p.textContent = data.text || 'No recognised devices yet.'; blocks.push(p); }
+  $('suggestions-list').replaceChildren(...blocks);
+}
+async function loadSuggestions() {
+  try { const r = await fetch('/api/suggestions'); const data = await r.json(); if (!r.ok) throw Error(data.message || data.detail); renderSuggestions(data); }
+  catch (e) { const p = document.createElement('p'); p.textContent = `unavailable${e.message ? `: ${e.message}` : ''}`; $('suggestions-list').replaceChildren(p); }
+}
+$('suggestions-open').onclick = () => showSuggestions($('suggestions').hidden);
+$('suggestions-close').onclick = () => { showSuggestions(false); $('suggestions-open').focus(); };
+window.eddie = { pushEvent: addEvent, wake, voiceEvent, renderReport, renderSuggestions, ask: text => control('/api/voice/ask', {text}) };
 $('report-close').onclick = () => { $('report').hidden = true; };
 $('open-logs').onclick = () => toggleLogs($('assistant-logs').hidden);
 $('close-logs').onclick = () => { toggleLogs(false); $('open-logs').focus(); };

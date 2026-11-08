@@ -7,3 +7,4 @@ eddie.db-*
 eddie/data/geoip/
 voice/timers.json
 voice/timers.json.tmp
+voice/contacts.json

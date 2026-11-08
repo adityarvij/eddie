@@ -1,3 +1,14 @@
+# Hand-written domain labels
+
+`eddie/labels.py` `DOMAINS` maps a domain suffix to `(company, category)`. The entries for the "What they know" report categories (#134) were written by hand on 2026-11-07, from each service's own public domain: the address its website, app or device is known to use. Sources by group:
+
+- **kids** (YouTube Kids, PBS Kids, ABCmouse, Roblox), **music** (Spotify and its `scdn.co` CDN, Pandora, Apple Music), **health** (GoodRx, CVS, Walgreens, Teladoc, BetterHelp, MyFitnessPal), **finance** (Chase, Venmo, Affirm, Credit Karma), **shopping** (Target, Walmart, eBay), **work** (Slack, Zoom, Microsoft Teams), **jobs** (Indeed, Glassdoor, ZipRecruiter), **news** (The New York Times, Fox News, CNN, NPR), **religion** (Bible Gateway, Quran.com, Chabad.org) and **politics** (the Democratic and Republican parties' sites, Ballotpedia): the service's own registered website domain.
+- **doorbell** (`skybell.com`) and **thermostat** (`ecobee.com`, Honeywell's Total Connect Comfort `tccna.honeywell.com`): the maker's own domain, which its app and cloud use.
+- **assistant**: Amazon's Alexa Voice Service hosts (`avs-alexa-na.amazon.com`, `alexa.na.gateway.devices.a2z.com`) and Siri's `guzzoni.apple.com`, hosts commonly reported for these assistants in DNS logs.
+- **id-sync** (in `TRACKING`): ID syncing domains of identity companies: LiveRamp (`rlcdn.com`), ID5 (`id5-sync.com`), Tapad (`tapad.com`) and The Trade Desk's Unified ID 2.0 (`uidapi.com`).
+
+Known gaps: these were written from the contributors' knowledge of each service, and none was checked against a capture or a real device's lookups on this network (only the Fire TV entries came from one). The lists are short samples, not complete; a service that changes its domains or serves through a CDN under another name is missed and shows as `unknown`. Google Nest is left out because `nest.com` serves its cameras, doorbells and thermostats alike. A label is a domain lookup only: it says a service was contacted, never what was read, bought or said.
+
 # Tracker ownership snapshot
 
 `tracker_owners.json` is a small domain → display-name extract from [DuckDuckGo Tracker Radar](https://github.com/duckduckgo/tracker-radar/blob/main/build-data/generated/domain_map.json), downloaded 2026-11-07. Upstream SHA-256: `99beaa7201c7f0d668cf45b19ea6cb53c8cf2990a538e52d501cc7ae332dc53c`. Attribution: Copyright 2020 Duck Duck Go, Inc.; CC BY-NC-SA 4.0, see TRACKER_RADAR_LICENSE. This extract is under the same license. No DuckDuckGo marks are included.
