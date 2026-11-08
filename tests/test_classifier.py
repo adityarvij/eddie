@@ -247,3 +247,79 @@ class RetentionTests(DBTestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class BehaviorTests(DBTestCase):
+    """#204: an unsure name becomes a tracker when its lookups look like telemetry."""
+    UNSURE = Verdict('unsure', 0.5, "Name alone doesn't show what it is")
+
+    def setUp(self):
+        super().setUp()
+        with self.conn:
+            self.conn.execute("INSERT INTO devices (mac, ip, label) VALUES (?, ?, 'Fire TV')", (TV_MAC, TV_IP))
+
+    def lookups(self, domain, minutes_ago, device=TV_MAC):
+        for minutes in minutes_ago:
+            self.query(domain, ago_ms=minutes * 60_000, device=device)
+
+    def media(self, minutes_ago):
+        for minutes in minutes_ago:
+            self.query('netflix.com', ago_ms=minutes * 60_000, device=TV_MAC, source='allowlist', action='allow')
+
+    def judged(self, domain, verdict=UNSURE):
+        return classifier.judge(domain, verdict, classifier.behavior(self.conn, domain, now_ms()))
+
+    def test_frequent_lookups_while_idle_make_a_tracker(self):
+        self.media([55])  # watched something, then left it idle
+        self.lookups('unagi-na.amazon.com', [40, 31, 17, 9, 2])
+        verdict = self.judged('unagi-na.amazon.com')
+        self.assertEqual(('tracker', 0.7), (verdict.label, verdict.confidence))
+        self.assertEqual('Looked up 5 times in an hour, 5 while idle', verdict.reason)
+        self.assertNotIn('Fire TV', verdict.reason, 'verdicts keep no device')
+        contract = {'label': verdict.label, 'confidence': verdict.confidence, 'reason': verdict.reason}
+        self.assertEqual(verdict, classifier.parse_verdict(json.dumps(contract)), 'still a valid verdict')
+
+    def test_a_regular_timer_makes_a_tracker_without_media_history(self):
+        self.lookups('msh.amazon.com', [50, 40, 30, 20, 10, 0])
+        self.assertEqual('Looked up every 600 s, like a timer', self.judged('msh.amazon.com').reason)
+
+    def test_the_same_host_while_something_plays_stays_unsure(self):
+        self.media([40, 31, 17, 9, 2])
+        self.lookups('unagi-na.amazon.com', [40, 31, 17, 9, 2])
+        self.assertEqual(self.UNSURE, self.judged('unagi-na.amazon.com'))
+
+    def test_one_off_lookups_stay_unsure(self):
+        self.media([55])
+        self.lookups('avs-alexa-19-na.amazon.com', [20, 5])
+        self.assertEqual(self.UNSURE, self.judged('avs-alexa-19-na.amazon.com'))
+
+    def test_essentials_are_never_trackers_however_regular(self):
+        self.media([58])
+        for host in ('firetvcaptiveportal.com', 'ftv-smtv.ntp-fireos.com', 'credential-locker-service.amazon.com',
+                     'softwareupdates.amazon.com'):
+            self.lookups(host, [50, 40, 30, 20, 10, 0.1])
+            self.assertEqual(self.UNSURE, self.judged(host), host)
+
+    def test_a_confident_name_verdict_is_kept(self):
+        self.media([55])
+        self.lookups('api.example.com', [40, 31, 17, 9, 2])
+        needed = Verdict('needed', 0.99, 'Name resembles common hosts no blocklist blocks')
+        self.assertEqual(needed, self.judged('api.example.com', needed))
+
+    def test_unsure_verdicts_are_looked_at_again_as_lookups_build_up(self):
+        self.media([55])
+        self.lookups('unagi-na.amazon.com', [40])
+        stale = now_ms() - classifier.REJUDGE_EVERY_MS - 1000
+        with self.conn:
+            self.conn.execute("INSERT INTO ai_verdicts VALUES ('unagi-na.amazon.com', 'unsure', 0.5, 'x', ?)", (stale,))
+            self.conn.execute("INSERT INTO ai_verdicts VALUES ('msh.amazon.com', 'unsure', 0.5, 'x', ?)", (now_ms(),))
+        self.assertEqual([], classifier.rejudge(self.conn, now_ms()), 'one lookup is not enough yet')
+        self.lookups('unagi-na.amazon.com', [31, 17, 9, 2])
+        self.lookups('msh.amazon.com', [31, 17, 9, 2, 1])
+        self.assertEqual([], classifier.rejudge(self.conn, now_ms()), 'checked a moment ago: not due again yet')
+        with self.conn:
+            self.conn.execute("UPDATE ai_verdicts SET ts = ? WHERE domain = 'unagi-na.amazon.com'", (stale,))
+        changed = classifier.rejudge(self.conn, now_ms())
+        self.assertEqual(['unagi-na.amazon.com'], [domain for domain, _ in changed])
+        self.assertEqual(('unagi-na.amazon.com', 'tracker'), self.verdicts()[1][:2])
+        self.assertEqual('unsure', self.verdicts()[0][1], 'msh was judged recently, so it waits its turn')
