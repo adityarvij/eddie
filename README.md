@@ -255,7 +255,7 @@ Settings: `EDDIE_DHCP_LEASES` (dnsmasq leases file for device hostnames; default
 ### SQLite schema
 
 ```sql
-CREATE TABLE devices (mac TEXT PRIMARY KEY, ip TEXT, hostname TEXT, vendor TEXT, label TEXT, first_seen INTEGER, last_seen INTEGER, kid INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE devices (mac TEXT PRIMARY KEY, ip TEXT, hostname TEXT, vendor TEXT, label TEXT, first_seen INTEGER, last_seen INTEGER, kid INTEGER NOT NULL DEFAULT 0, phone INTEGER NOT NULL DEFAULT 0, security INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE queries (id INTEGER PRIMARY KEY, ts INTEGER, device_mac TEXT, domain TEXT, qtype TEXT, action TEXT, source TEXT, reason TEXT);
 CREATE TABLE rules (id INTEGER PRIMARY KEY, scope TEXT, device_mac TEXT, pattern TEXT, action TEXT, created_by TEXT, ts INTEGER);
 CREATE TABLE ai_verdicts (domain TEXT PRIMARY KEY, label TEXT, confidence REAL, reason TEXT, ts INTEGER);
@@ -299,7 +299,7 @@ Writes from anywhere but loopback need `Authorization: Bearer $EDDIE_API_TOKEN`,
 | Method | Path | Returns / does |
 |---|---|---|
 | GET | `/devices?hours=24` | Devices Eddie has seen, with name, vendor, lookup / blocked / flagged counts, distinct trackers blocked and the latest blocked domains (see docs/EVENTS.md) |
-| PUT | `/devices/{mac}` | `{label?, kid?, phone?}`: `label` names a device ("Fire Stick"; `""` or `null` clears it), `kid` marks it as a child's for kid mode (#119), `phone` as a household phone for home mode (#20) |
+| PUT | `/devices/{mac}` | `{label?, kid?, phone?, security?}`: `label` names a device ("Fire Stick"; `""` or `null` clears it), `kid` marks it as a child's for kid mode (#119), `phone` as a household phone for home mode (#20), `security` as an outdoor/security device exempt from home mode (#46) |
 | GET | `/events?since=&device=` | Recent query rows |
 | GET | `/summary?window=1h` | Totals: queries, blocked, top blocked domains, top companies, per device, data broker and ad exchange counts |
 | GET | `/what-they-know?hours=24` | "What they know about you" facts `{fact, evidence, confidence, category, sensitive}` + spoken text, from `eddie.db` (else the in-memory feed); `?demo=true` returns the labelled seeded demo week instead (see docs/EVENTS.md) |
