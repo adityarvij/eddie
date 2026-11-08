@@ -1,22 +1,23 @@
-"""Labels unknown domains with the local model, off the DNS path.
+"""Labels unknown domains with the local domain-name model, off the DNS path.
 
 The queue is eddie.db itself: every lookup the decision engine couldn't place
 is already a queries row with source "default". This worker picks recent ones
-that have no verdict yet, asks Ollama, and writes the verdict to ai_verdicts.
+that have no verdict yet, asks the model (eddie/domain_model.py, shipped
+weights, no Ollama) and writes the verdict to ai_verdicts.
 The DNS server reloads verdicts within about a second (dns_server.StoreWatcher),
 so it never waits on the model. Nothing new about the household is stored.
 
 Privacy (docs/PRIVACY.md):
-- The model gets only the domain, the device's label (never its MAC or IP),
-  lookups in the last 10 minutes and whether the device was idle.
-- EDDIE_OLLAMA_URL must be localhost or a private LAN IP literal. Public hosts
-  and hostnames are refused, redirects aren't followed and proxy settings are
-  ignored, so lookups can't leave the house through the model.
+- The model runs in this process and scores only the domain name. facts()
+  is everything a model may be told: the domain, the device's label (never
+  its MAC or IP), lookups in the last 10 minutes and whether it was idle.
+- Verdict events go only to the local API (check_local): public hosts and
+  hostnames are refused, redirects aren't followed and proxies are ignored.
 - Domains, model output and verdicts are never written to the log.
 - Malformed model output is rejected, not stored.
 - Verdicts are pruned with the query log after EDDIE_RETENTION_DAYS.
 
-Run:  uv run python -m eddie.classifier    (Ollama must be running)
+Run:  uv run python -m eddie.classifier
 """
 from concurrent.futures import ThreadPoolExecutor
 import ipaddress
@@ -29,11 +30,9 @@ import time
 import urllib.parse
 import urllib.request
 
-from . import labels, store
+from . import domain_model, labels, store
 from .decision import PLUMBING_SQL, Verdict
 
-DEFAULT_URL = "http://127.0.0.1:11434"
-DEFAULT_MODEL = "llama3.2:3b"
 LABELS = {"tracker", "needed", "unsure"}
 MAX_REASON_WORDS = 14  # README contract: "<15 words"
 MAX_REASON_CHARS = 120
@@ -42,31 +41,10 @@ COUNT_WINDOW_MS = 600_000  # "query count in the last 10 min"
 IDLE_WINDOW_MS = 300_000  # "no allowed media traffic in 5 min"
 BATCH = 10  # domains per synchronous compatibility pass
 POLL_EVERY = 0.25  # seconds between passes
-UNREACHABLE_WAIT = 10.0  # seconds to wait when Ollama is down
+UNREACHABLE_WAIT = 10.0  # seconds to wait after a failed answer
 REJECT_BACKOFF = 300.0  # seconds before retrying a domain whose answer was rejected
-MODEL_TIMEOUT = 7.0
 MAX_IN_FLIGHT = 2
 DOMAIN = re.compile(r"[a-z0-9_-]+(\.[a-z0-9_-]+)*")
-
-PROMPT = """You label one internet domain looked up by a device on a home network.
-Judge by what the domain is: who runs it and what it is for.
-- "tracker": its only job is ads, analytics, telemetry, crash reports, A/B testing or usage data collection, and the app or page works without it. Hostnames often say so: analytics, metrics, telemetry, collector, events, beacon, pixel, ads, adservice, intake, ingest, stats.
-- "needed": content, video, images, fonts, scripts and styles, app or website APIs, sign-in, payments, software updates, time sync, certificate or safety checks, DNS. Blocking it breaks something.
-- "unsure": you don't recognise the domain or it could be either.
-Shared infrastructure is "needed", not a tracker, even when the company also runs ads: static-file and image hosts (gstatic.com, googleusercontent.com, aaplimg.com, *.cdn.*), CDN and cloud hostnames (akamaiedge.net, cloudfront.net, fastly, amazonaws.com, elb), DNS resolvers, and safe-browsing or security checks.
-Never call a domain a tracker because of the company that owns it, because it is looked up often, or because the device is idle. queries_10min and idle (null means unknown) are weak hints only.
-If you can't name what the domain does, answer "unsure". A wrong "tracker" is worse than "unsure".
-Examples:
-{"domain": "ssl.gstatic.com"} -> {"label": "needed", "confidence": 0.9, "reason": "Google static files used by many sites"}
-{"domain": "swscan.apple.com"} -> {"label": "needed", "confidence": 0.9, "reason": "Apple software update catalog"}
-{"domain": "d1abc2xyz.cloudfront.net"} -> {"label": "unsure", "confidence": 0.4, "reason": "Amazon CloudFront CDN host, owner unknown"}
-{"domain": "dns.google"} -> {"label": "needed", "confidence": 0.9, "reason": "Google public DNS resolver"}
-{"domain": "www.google-analytics.com"} -> {"label": "tracker", "confidence": 0.95, "reason": "Google Analytics usage tracking"}
-{"domain": "api.mixpanel.com"} -> {"label": "tracker", "confidence": 0.9, "reason": "Mixpanel product analytics events"}
-{"domain": "events.statsig.com"} -> {"label": "tracker", "confidence": 0.85, "reason": "Statsig A/B testing and event logging"}
-{"domain": "status.example-app.io"} -> {"label": "unsure", "confidence": 0.3, "reason": "Unrecognised app host"}
-confidence is how sure you are of the label, from 0 to 1. Use below 0.7 unless you recognise the domain.
-Reply with JSON only: {"label": "tracker" | "needed" | "unsure", "confidence": <number>, "reason": "<under 15 words, about what the domain is>"}"""
 
 log = logging.getLogger("eddie.classifier")
 
@@ -155,21 +133,9 @@ def idle(conn: sqlite3.Connection, device: str | None, now_ms: int) -> bool | No
     return max(media) < now_ms-IDLE_WINDOW_MS
 
 
-def ask_ollama(question: dict, url: str = DEFAULT_URL, model: str = DEFAULT_MODEL,
-               timeout: float = MODEL_TIMEOUT) -> str:
-    """The model's raw reply text. Raises OSError if Ollama can't be reached."""
-    check_local(url)
-    body = {"model": model, "stream": False, "format": "json", "options": {"temperature": 0, "num_predict": 160},
-            "messages": [{"role": "system", "content": PROMPT},
-                         {"role": "user", "content": json.dumps(question)}]}
-    request = urllib.request.Request(url.rstrip("/") + "/api/chat", data=json.dumps(body).encode(),
-                                     headers={"Content-Type": "application/json"})
-    with _OPENER.open(request, timeout=timeout) as response:
-        raw = response.read()
-    try:
-        return json.loads(raw)["message"]["content"]
-    except (ValueError, KeyError, TypeError):
-        return ""  # rejected by parse_verdict
+def ask_model(question: dict) -> str:
+    """The local domain-name model's answer as contract JSON. Only the domain is used."""
+    return json.dumps(domain_model.default().verdict(question["domain"]))
 
 
 class Classifier:
@@ -299,14 +265,12 @@ def main() -> None:
     path = os.environ.get("EDDIE_DB", "eddie.db")
     if path == "off":
         raise SystemExit("The classifier's queue is the query log in eddie.db; with EDDIE_DB=off there is nothing to classify.")
-    url = os.environ.get("EDDIE_OLLAMA_URL", DEFAULT_URL)
     try:
-        check_local(url)
-    except ValueError as exc:
-        raise SystemExit(f"EDDIE_OLLAMA_URL refused: {exc}.")
-    model = os.environ.get("EDDIE_CLASSIFIER_MODEL", DEFAULT_MODEL)
-    worker = AsyncClassifier(store.connect(path), lambda question: ask_ollama(question, url, model))
-    log.info("classifying unknown domains in %s with %s at %s", path, model, url)
+        domain_model.default()
+    except (OSError, ValueError, KeyError) as exc:
+        raise SystemExit(f"Domain model {domain_model.MODEL_PATH} unreadable ({exc}); rebuild it with scripts/build_domain_model.py.")
+    worker = AsyncClassifier(store.connect(path), ask_model)
+    log.info("classifying unknown domains in %s with the local domain model", path)
     try:
         while True:
             try:
@@ -315,7 +279,7 @@ def main() -> None:
                     log.info("stored %d verdicts", stored)
                 time.sleep(POLL_EVERY)
             except OSError as exc:
-                log.warning("Ollama unreachable (%s), retrying in %gs", type(exc).__name__, UNREACHABLE_WAIT)
+                log.warning("classifier error (%s), retrying in %gs", type(exc).__name__, UNREACHABLE_WAIT)
                 time.sleep(UNREACHABLE_WAIT)
             except sqlite3.Error as exc:
                 log.warning("eddie.db error (%s)", exc)

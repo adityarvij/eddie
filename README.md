@@ -19,13 +19,13 @@
 ./scripts/run_all.sh --no-fake  # API only, for a real DNS server posting to :8000
 ```
 
-Dashboard at http://localhost:5173, API at http://localhost:8000. The traffic API and `fake_traffic.py` run in Docker (`compose.yaml`) with `restart: unless-stopped`, so they keep running until `docker compose down`. The dashboard (`frontend/serve.py`, launched through `scripts/run_voice.sh` with the Vosk wake prototype and Piper voice) stays on the host because it also runs the voice loop, and Docker on macOS can't reach the microphone or speaker; Ctrl-C stops it. Ollama also stays on the host for Metal GPU access. For the iPad, run `EDDIE_BIND=0.0.0.0 EDDIE_DASHBOARD_HOST=0.0.0.0 ./scripts/run_all.sh` and open `http://<Mac IP>:5173`: the API and the dashboard then accept network connections, the page finds the API on the same host, and the mic controls stay on the Mac. The fake traffic's verdicts, including the "AI:" ones, are scripted, not real classifier output. `run_all.sh` gives the API, fake traffic, classifier and voice bridge a shared random `EDDIE_API_TOKEN`, because the containerised API sees host callers as remote; export your own before running it to give the same token to a DNS server started in another shell.
+Dashboard at http://localhost:5173, API at http://localhost:8000. The traffic API and `fake_traffic.py` run in Docker (`compose.yaml`) with `restart: unless-stopped`, so they keep running until `docker compose down`. The dashboard (`frontend/serve.py`, launched through `scripts/run_voice.sh` with the Vosk wake prototype and Piper voice) stays on the host because it also runs the voice loop, and Docker on macOS can't reach the microphone or speaker; Ctrl-C stops it. For the iPad, run `EDDIE_BIND=0.0.0.0 EDDIE_DASHBOARD_HOST=0.0.0.0 ./scripts/run_all.sh` and open `http://<Mac IP>:5173`: the API and the dashboard then accept network connections, the page finds the API on the same host, and the mic controls stay on the Mac. The fake traffic's verdicts, including the "AI:" ones, are scripted, not real classifier output. `run_all.sh` gives the API, fake traffic, classifier and voice bridge a shared random `EDDIE_API_TOKEN`, because the containerised API sees host callers as remote; export your own before running it to give the same token to a DNS server started in another shell.
 
 ## Stack (hackathon version)
 
 - **Network core:** Python + dnslib (DNS server) on the Raspberry Pi; devices point their DNS at it; optional traffic monitor for non-DNS traffic (`eddie/traffic.py`, header counts only, router mode)
 - **Rules/data:** SQLite; public blocklists (StevenBlack, Pi-hole lists)
-- **AI brain:** Ollama + Llama 3.2 3B or Qwen, using tool calling (read logs, block/allow, send email)
+- **AI brain:** small local models, no LLM on the Pi: a MiniLM intent model for voice and typed asks, and a domain-name model that labels unknown domains. Ollama tool calling is an opt-in development extra (`EDDIE_AGENT=ollama`)
 - **Voice:** openWakeWord ("Hey Eddie"), faster-whisper (speech to text), Piper (voice) — all offline
 - **Backend:** FastAPI + WebSocket for live events
 - **Dashboard:** React or plain HTML, full-screen kiosk mode
@@ -127,7 +127,7 @@ Rehearse Sunday morning and record a backup video.
 | Device | Job |
 |---|---|
 | iPhone | Personal Hotspot over Wi-Fi: the network everything joins (venue Wi-Fi may block devices from seeing each other). Keep it plugged in. |
-| Raspberry Pi 5 (CanaKit) | Eddie's box, running everything (#18): DNS server, decision engine, SQLite, traffic API, dashboard, Ollama and the voice loop |
+| Raspberry Pi 5 (CanaKit) | Eddie's box, running everything (#18): DNS server, decision engine, SQLite, traffic API, dashboard, classifier and the voice loop (no Ollama) |
 | MacBook Pro (M1, 16GB) | Development, and the fallback if the Pi fights you |
 | USB speakerphone | Plugs into the Pi for "Hey Eddie" |
 | Fire TV Stick + borrowed HDMI monitor | The device Eddie catches (demo only, not part of the product) |
@@ -150,37 +150,36 @@ Rehearse Sunday morning and record a backup video.
 7. Start the microphone from the dashboard on the Pi's own screen (`http://localhost:5173`). The iPad can ask by typing but can't switch the mic on (#40).
 8. Record real Fire Stick traffic around 5 to 6 PM as a replay backup.
 
-**Fallback:** if the Pi fights you, run everything on the Mac: `EDDIE_BIND=0.0.0.0 EDDIE_DASHBOARD_HOST=0.0.0.0 ./scripts/run_all.sh --no-fake`, and in another shell with the same `EDDIE_API_TOKEN` exported, `uv run python -m eddie.dns_server` (Internet Sharing off). Point the Fire Stick's DNS and the iPad at the Mac's IP. A halfway option keeps DNS on the Pi and uses the Mac's faster model: run `OLLAMA_HOST=0.0.0.0 ollama serve` on the Mac, then `sudo ./scripts/install_pi.sh --ollama http://<Mac IP>:11434` on the Pi and restart. Neither has been rehearsed on the hardware yet.
+**Fallback:** if the Pi fights you, run everything on the Mac: `EDDIE_BIND=0.0.0.0 EDDIE_DASHBOARD_HOST=0.0.0.0 ./scripts/run_all.sh --no-fake`, and in another shell with the same `EDDIE_API_TOKEN` exported, `uv run python -m eddie.dns_server` (Internet Sharing off). Point the Fire Stick's DNS and the iPad at the Mac's IP. This hasn't been rehearsed on the hardware yet.
 
 ### Running on the Raspberry Pi (#18)
 
 Everything runs on the Pi as systemd services, without Docker. Do this once, as your own user on the Pi, from the cloned repo:
 
 ```bash
-uv sync --locked                          # DNS, API, classifier, dashboard
-curl -fsSL https://ollama.com/install.sh | sh && ollama pull llama3.2:3b   # Ollama's own service, localhost only
+uv sync --locked                          # DNS, API, classifier (its model ships in the repo), dashboard
 sudo ./scripts/install_pi.sh              # writes /etc/eddie/eddie.env and the eddie-* units, enables them on boot
 sudo systemctl start eddie.target
 ```
 
-For voice, also set up `.venv-frontend` and the models as in [voice/README.md](voice/README.md) (`libportaudio2`, `voice/requirements.txt`, `scripts/provision_voice.py`), then rerun `install_pi.sh`. The dashboard service then runs `scripts/run_voice.sh` instead of the dashboard alone. Without voice, the dashboard, typed asks and the model still work, but there's no microphone or spoken reply.
+For voice, also set up `.venv-frontend` and the models as in [voice/README.md](voice/README.md) (`libportaudio2`, `voice/requirements.txt`, `scripts/provision_voice.py`), then rerun `install_pi.sh`. The dashboard service then runs `scripts/run_voice.sh` instead of the dashboard alone. Without voice, the dashboard, typed asks and the classifier still work, but there's no microphone or spoken reply.
 
 | Unit | Runs | Port |
 |---|---|---|
 | `eddie-api` | `uvicorn eddie.api:app` | 8000 |
 | `eddie-dns` | `python -m eddie.dns_server`, as your user with only `CAP_NET_BIND_SERVICE` | 53 |
-| `eddie-classifier` | `python -m eddie.classifier` against Ollama (`EDDIE_OLLAMA_URL`, default the Pi's own) | none |
+| `eddie-classifier` | `python -m eddie.classifier`, the local domain-name model in-process | none |
 | `eddie-dashboard` | `scripts/run_voice.sh`, or `frontend/serve.py` without the voice environment | 5173 |
 
-`eddie.target` groups them: `sudo systemctl start|stop|restart eddie.target`, with logs from `journalctl -u 'eddie-*' -f`. `/etc/eddie/eddie.env` (root-only, `0600`) holds a fixed `EDDIE_API_TOKEN` and `EDDIE_DASHBOARD_TOKEN`, so the iPad's pairing link survives reboots. Add any other `EDDIE_*` setting there, such as `EDDIE_DB` or `EDDIE_CLASSIFIER_MODEL`. Voice and typed asks use deterministic parsers plus the provisioned local MiniLM intent model, so the Ollama voice agent is off by default; set `EDDIE_AGENT=ollama` (and optionally `EDDIE_AGENT_MODEL`) only to opt back into it. Rerunning `install_pi.sh` keeps the tokens. `./scripts/run_pi.sh` starts the same processes in the foreground with a fresh token, for debugging; Ctrl-C stops them all.
+`eddie.target` groups them: `sudo systemctl start|stop|restart eddie.target`, with logs from `journalctl -u 'eddie-*' -f`. `/etc/eddie/eddie.env` (root-only, `0600`) holds a fixed `EDDIE_API_TOKEN` and `EDDIE_DASHBOARD_TOKEN`, so the iPad's pairing link survives reboots. Add any other `EDDIE_*` setting there, such as `EDDIE_DB`. Voice and typed asks use deterministic parsers plus the provisioned local MiniLM intent model, so the Ollama voice agent is off by default; set `EDDIE_AGENT=ollama` (and optionally `EDDIE_AGENT_MODEL`) only to opt back into it. Rerunning `install_pi.sh` keeps the tokens. `./scripts/run_pi.sh` starts the same processes in the foreground with a fresh token, for debugging; Ctrl-C stops them all.
 
 Everything runs from the cloned repo as your user, so `eddie.db` lives there unless `EDDIE_DB` says otherwise. Nothing else on Raspberry Pi OS uses port 53 by default; if `eddie-dns` fails with "Can't listen", check `sudo ss -lunp 'sport = :53'`.
 
-**Updating:** the Pi follows `main` by itself. Develop and merge on the Mac as usual (CI runs the tests on x86 and ARM64); within 5 minutes `eddie-update.timer` runs `scripts/update_pi.sh`, which fetches `origin/main` and, only if it moved, checks it out, runs `uv sync --locked` (plus the voice requirements or assets if those changed, and `install_pi.sh` if the units did) and restarts `eddie.target`. If a dependency install fails it goes back to the previous commit and restarts nothing. The Pi's checkout is deploy-only: local edits to tracked files are overwritten, while `eddie.db`, `voice/models` and the environments are untracked and kept. The restart takes a few seconds and devices get no DNS answers during it, so **hold updates before a demo** with `sudo touch /etc/eddie/hold` (resume with `sudo rm /etc/eddie/hold`). `sudo systemctl start eddie-update` updates now; `journalctl -u eddie-update` shows what it did. Ollama is a separate service and keeps its model loaded.
+**Updating:** the Pi follows `main` by itself. Develop and merge on the Mac as usual (CI runs the tests on x86 and ARM64); within 5 minutes `eddie-update.timer` runs `scripts/update_pi.sh`, which fetches `origin/main` and, only if it moved, checks it out, runs `uv sync --locked` (plus the voice requirements or assets if those changed, and `install_pi.sh` if the units did) and restarts `eddie.target`. If a dependency install fails it goes back to the previous commit and restarts nothing. The Pi's checkout is deploy-only: local edits to tracked files are overwritten, while `eddie.db`, `voice/models` and the environments are untracked and kept. The restart takes a few seconds and devices get no DNS answers during it, so **hold updates before a demo** with `sudo touch /etc/eddie/hold` (resume with `sudo rm /etc/eddie/hold`). `sudo systemctl start eddie-update` updates now; `journalctl -u eddie-update` shows what it did.
 
-**Model speed:** the Pi 5 runs the domain classifier on its CPU, off the DNS path. Voice does not call Ollama by default: supported questions use the small local intent model and backend-authored answers, and unsupported questions list what Eddie can do. The optional Ollama voice agent is several times slower than on the M1 (not yet measured); if explicitly enabled, a smaller `EDDIE_AGENT_MODEL` such as `llama3.2:1b` trades accuracy for speed.
+**Model speed:** the Pi 5 runs the domain classifier on its CPU, off the DNS path; it scores a name in well under a millisecond. Nothing on the Pi needs Ollama. A Pi that had it installed for the old classifier can drop it to free 2–5 GB of RAM: `sudo systemctl disable --now ollama` (and `sudo rm /usr/local/bin/ollama; sudo rm -rf /usr/share/ollama` to remove it). Voice does not call Ollama by default: supported questions use the small local intent model and backend-authored answers, and unsupported questions list what Eddie can do. The optional Ollama voice agent is several times slower than on the M1 (not yet measured); if explicitly enabled, a smaller `EDDIE_AGENT_MODEL` such as `llama3.2:1b` trades accuracy for speed.
 
-**Not yet checked on the hardware:** booting the units, binding port 53 through the capability, ARP device names, the speakerphone through the `audio` group, model speed and memory with voice running alongside, and the Mac fallback.
+**Not yet checked on the hardware:** the classifier loading its model and labelling live lookups on the Pi with Ollama uninstalled (#181), booting the units, binding port 53 through the capability, ARP device names, the speakerphone through the `audio` group, model speed and memory with voice running alongside, and the Mac fallback.
 
 Keep boxes and receipts so anything unused can be returned.
 
@@ -191,8 +190,8 @@ Hand this section and the ones below to a coding agent (Claude Code etc.). Targe
 ### Runtime topology
 
 1. Every device joins the iPhone Personal Hotspot over Wi-Fi.
-2. The Raspberry Pi runs everything (#18): `eddie-dns` on port 53, the decision engine, SQLite, FastAPI on port 8000, the dashboard on port 5173, Ollama on `127.0.0.1:11434`, and the voice loop with the USB speakerphone. Fallback: the Mac runs these instead (tested: dnslib binds fine on macOS when Internet Sharing is off).
-3. Optional: the Pi uses the Mac's Ollama (`EDDIE_OLLAMA_URL=http://<Mac IP>:11434`) for faster answers.
+2. The Raspberry Pi runs everything (#18): `eddie-dns` on port 53, the decision engine, SQLite, FastAPI on port 8000, the dashboard on port 5173, the classifier, and the voice loop with the USB speakerphone. Fallback: the Mac runs these instead (tested: dnslib binds fine on macOS when Internet Sharing is off).
+3. Optional, development only: the opt-in Ollama voice agent (`EDDIE_AGENT=ollama`) can use the Mac's Ollama (`EDDIE_OLLAMA_URL=http://<Mac IP>:11434`).
 4. Devices to protect have DNS set manually to the Pi's IP (Fire Stick: Settings → Network → Advanced → DNS 1). No hotspot or DNS takeover needed.
 5. The iPad shows the dashboard at `http://<Pi IP>:5173`, which reads the live feed from port 8000.
 6. Upstream resolver for allowed queries: `1.1.1.1` or `9.9.9.9`.
@@ -204,14 +203,14 @@ Hand this section and the ones below to a coding agent (Claude Code etc.). Targe
 |---|---|---|
 | eddie-dns | Python, dnslib, asyncio | Answers every DNS query from devices pointed at Eddie; calls the decision engine; forwards or sinkholes; emits events |
 | decision | Python | Ordered rules: user rules → allowlist → blocklist + keyword heuristics → cache → AI classifier → default allow + flag |
-| classifier | Ollama HTTP API on the Pi (port 11434), Llama 3.2 3B or Qwen 2.5 3B | Labels unknown domains tracker / needed / unsure with a reason and confidence; runs async so DNS never waits on it |
+| classifier | Python, a logistic regression over the domain name (`eddie/domain_model.py`, weights in `eddie/data/domain_model.json`) | Labels unknown domains tracker / needed / unsure with a reason and confidence; runs async so DNS never waits on it |
 | devices | Python, reads the Pi's ARP table (`ip neigh`) | Maps client IP → MAC → friendly name ("Fire Stick") via hostname, MAC vendor prefix (OUI) and user labels |
 | store | SQLite (`eddie.db`) | Queries log, decisions, rules, devices, AI verdict cache, traffic counts |
 | traffic | Python, Linux raw socket (optional, off by default) | Counts bytes and packets per device, remote IP, port and protocol from packet headers on the LAN interface, so upload volume, hard-coded IPs and long streams show up. Only useful when Eddie is the router (#22) |
 | api | FastAPI + uvicorn, WebSocket | REST for dashboard and agent tools; `/ws/events` pushes each decision live |
 | dashboard | Plain HTML/JS or React, kiosk full-screen | Black, minimal live feed; counters; per-device view; listening animation |
 | voice | openWakeWord, faster-whisper (base.en), Piper TTS, sounddevice | Wake word "Hey Eddie" → record until silence → transcribe → agent → speak reply |
-| agent | Ollama tool calling | Turns speech into tool calls (summaries, block/allow, email) and a short spoken answer |
+| agent | MiniLM intent model + parsers; Ollama tool calling only with `EDDIE_AGENT=ollama` | Turns speech into tool calls (summaries, block/allow, email) and a short spoken answer |
 | email | Gmail API (OAuth desktop flow) | The only deliberate outbound call; sends only after spoken confirmation |
 
 ### Request flow (one DNS query)
@@ -235,13 +234,13 @@ Spoof rules (#99) need two more things on the Pi: `EDDIE_SPOOF_IP=<Pi's LAN IPv4
 
 ### Running the classifier
 
-`eddie/classifier.py` labels unknown domains with the local model. Its queue is the query log itself: flagged `queries` rows from the last hour with no `ai_verdicts` row yet. Each verdict is written to `ai_verdicts`, and the DNS server reloads rules and verdicts from `eddie.db` within about 0.2 s, so the next lookup of that domain uses it (about 2.5 s end to end with `llama3.2:3b` on the development Mac). DNS never waits on the model. Each verdict is also sent to the live feed as an `ai_verdict` event (`POST /ai/verdict`). Network plumbing (reverse lookups, service-discovery names, `.local`) is never queued, since it isn't a company to judge.
+`eddie/classifier.py` labels unknown domains with the local domain-name model (`eddie/domain_model.py`, no Ollama). Its queue is the query log itself: flagged `queries` rows from the last hour with no `ai_verdicts` row yet. Each verdict is written to `ai_verdicts`, and the DNS server reloads rules and verdicts from `eddie.db` within about 0.2 s, so the next lookup of that domain uses it (the model itself takes well under a millisecond). DNS never waits on the model. Each verdict is also sent to the live feed as an `ai_verdict` event (`POST /ai/verdict`). Network plumbing (reverse lookups, service-discovery names, `.local`) is never queued, since it isn't a company to judge.
 
 ```bash
-uv run python -m eddie.classifier   # needs Ollama running and the same EDDIE_DB as the DNS server
+uv run python -m eddie.classifier   # needs the same EDDIE_DB as the DNS server
 ```
 
-Settings: `EDDIE_OLLAMA_URL` (default `http://127.0.0.1:11434`; must be `localhost` or a loopback or private IP literal, so a Pi using the Mac's model sets `http://<Mac IP>:11434`), `EDDIE_CLASSIFIER_MODEL` (default `llama3.2:3b`). With `EDDIE_DB=off` there's no queue, and the classifier refuses to start.
+The model is a logistic regression over the hostname's labels, words and character n-grams, trained on the shipped blocklists against real DNS hostnames no list blocks. Its weights ship in `eddie/data/domain_model.json`; rebuild them with `scripts/build_domain_model.py` (setup only, see its docstring and docs/ARCHITECTURE.md for how well it does). It answers `tracker` only for a host with a subdomain whose name looks like the blocklisted ones, `needed` for names like common unlisted hosts, and `unsure` otherwise. With `EDDIE_DB=off` there's no queue, and the classifier refuses to start.
 
 ```bash
 uv run python -m eddie.dns_server                      # Mac: 0.0.0.0:53 binds without sudo on recent macOS
@@ -284,15 +283,15 @@ CREATE INDEX t_dev ON traffic(device_mac, last_ts);
 6. **Beacon:** an unknown domain the device looks up on a regular timer (gap coefficient of variation ≤ 0.15, see `eddie/beacons.py`) → `FLAG`, source `heuristic`, reason "looked up every 60 s, likely telemetry"; still queued for AI.
 7. **Unknown:** `ALLOW` + `FLAG` now, queue for AI.
 
-### Classifier prompt contract
+### Classifier contract
 
-Input: domain, device label, query count in the last 10 min, whether the device was idle (no allowed media traffic in 5 min). Output strict JSON:
+Input: domain, device label, query count in the last 10 min, whether the device was idle (no allowed media traffic in 5 min); the domain-name model uses only the domain. Output strict JSON:
 
 ```json
 {"label": "tracker|needed|unsure", "confidence": 0-1, "reason": "<15 words"}
 ```
 
-Use Ollama `format: json`, temperature 0. Never send anything but the domain and these counts.
+The output is validated before it's stored. Never give a model anything but the domain and these counts.
 
 ### REST API (localhost:8000)
 
@@ -352,7 +351,8 @@ eddie/
     dns_server.py      dnslib resolver, forward/sinkhole
     feed.py            sends each decision to the live feed (/ingest)
     decision.py        rule order, lists, heuristics
-    classifier.py      Ollama queue worker
+    classifier.py      domain-model queue worker
+    domain_model.py    domain-name model (features, scoring)
     devices.py         ARP/DHCP → device labels
     store.py           SQLite access
     api.py             FastAPI + WebSocket

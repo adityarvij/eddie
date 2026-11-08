@@ -1,4 +1,4 @@
-"""Classify the scripted feed with real local Ollama, using an in-memory queue.
+"""Classify the scripted feed with the real local domain model, using an in-memory queue.
 
 This adapter is for the fake-traffic demo. Real DNS uses eddie.classifier and
 its existing durable query-log queue. No demo audio or network history is saved.
@@ -57,10 +57,8 @@ def fetch_events(base):
 def main():
     logging.basicConfig(level=logging.INFO,format='%(name)s %(message)s')
     base = os.environ.get('EDDIE_API_URL','http://127.0.0.1:8000')
-    url = os.environ.get('EDDIE_OLLAMA_URL',classifier.DEFAULT_URL)
-    classifier.check_local(base); classifier.check_local(url)
-    model = os.environ.get('EDDIE_CLASSIFIER_MODEL',classifier.DEFAULT_MODEL)
-    adapter = FeedClassifier(lambda facts:classifier.ask_ollama(facts,url,model), classifier.publish_verdict)
+    classifier.check_local(base)
+    adapter = FeedClassifier(classifier.ask_model, classifier.publish_verdict)
     next_poll = 0
     log.info('real local AI enabled for the scripted demo feed; queue/cache are memory only')
     try:

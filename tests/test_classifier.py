@@ -4,6 +4,7 @@ import tempfile
 import threading
 import time
 import unittest
+import unittest.mock
 from pathlib import Path
 
 from eddie import classifier, decision, dns_server, store
@@ -181,47 +182,56 @@ class ClassifierTests(DBTestCase):
         watcher.close()
 
 
-class FakeOllama(http.server.BaseHTTPRequestHandler):
-    reply = {'message': {'content': GOOD}}
+class FakeAPI(http.server.BaseHTTPRequestHandler):
     status = 200
     seen = []
 
     def do_POST(self):
-        FakeOllama.seen.append((self.path, json.loads(self.rfile.read(int(self.headers['Content-Length'])))))
+        FakeAPI.seen.append((self.path, json.loads(self.rfile.read(int(self.headers['Content-Length'])))))
         self.send_response(self.status)
         if self.status == 302:
-            self.send_header('Location', 'http://8.8.8.8/api/chat')
+            self.send_header('Location', 'http://8.8.8.8/ai/verdict')
+        self.send_header('Content-Type', 'application/json')
         self.end_headers()
-        self.wfile.write(json.dumps(self.reply).encode())
+        self.wfile.write(b'{"ok": true}')
 
     def log_message(self, *args):
         pass
 
 
-class AskOllamaTests(unittest.TestCase):
+class AskModelTests(unittest.TestCase):
+    def test_answers_from_the_local_model_with_contract_json(self):
+        question = {'domain': 'adsync.brightnest-tv.com', 'device': 'TV', 'queries_10min': 2, 'idle': True}
+        verdict = classifier.parse_verdict(classifier.ask_model(question))
+        self.assertEqual('tracker', verdict.label)
+
+    def test_classifier_no_longer_talks_to_ollama(self):
+        source = Path(classifier.__file__).read_text()
+        for gone in ('ask_ollama', 'EDDIE_OLLAMA_URL', '11434', '/api/chat'):
+            self.assertNotIn(gone, source)
+
+
+class PublishVerdictTests(unittest.TestCase):
     def setUp(self):
-        FakeOllama.seen, FakeOllama.status = [], 200
-        self.server = http.server.HTTPServer(('127.0.0.1', 0), FakeOllama)
+        FakeAPI.seen, FakeAPI.status = [], 200
+        self.server = http.server.HTTPServer(('127.0.0.1', 0), FakeAPI)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
-        self.url = f'http://127.0.0.1:{self.server.server_port}'
+        self.addCleanup(self.server.server_close)
+        self.addCleanup(self.server.shutdown)
+        self.env = unittest.mock.patch.dict('os.environ', {'EDDIE_API_URL': f'http://127.0.0.1:{self.server.server_port}'})
+        self.env.start()
+        self.addCleanup(self.env.stop)
 
-    def tearDown(self):
-        self.server.shutdown()
-        self.server.server_close()
-
-    def test_sends_json_mode_temperature_zero_and_only_the_facts(self):
-        question = {'domain': 't.example', 'device': None, 'queries_10min': 2, 'idle': None}
-        self.assertEqual(GOOD, classifier.ask_ollama(question, self.url, 'llama3.2:3b'))
-        path, body = FakeOllama.seen[0]
-        self.assertEqual('/api/chat', path)
-        self.assertEqual(('json', {'temperature': 0, 'num_predict': 160}, False), (body['format'], body['options'], body['stream']))
-        self.assertEqual(question, json.loads(body['messages'][1]['content']))
+    def test_posts_the_verdict_to_the_local_api(self):
+        event = {'domain': 't.example', 'label': 'tracker', 'confidence': 0.9, 'reason': 'x', 'ts': 1}
+        classifier.publish_verdict(event)
+        self.assertEqual([('/ai/verdict', event)], FakeAPI.seen)
 
     def test_does_not_follow_redirects(self):
-        FakeOllama.status = 302
+        FakeAPI.status = 302
         with self.assertRaises(OSError):
-            classifier.ask_ollama({'domain': 't.example'}, self.url)
-        self.assertEqual(1, len(FakeOllama.seen))
+            classifier.publish_verdict({'domain': 't.example'})
+        self.assertEqual(1, len(FakeAPI.seen))
 
 
 class RetentionTests(DBTestCase):
