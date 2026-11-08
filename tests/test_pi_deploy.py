@@ -14,6 +14,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 INSTALL = ROOT / 'scripts' / 'install_pi.sh'
 UNITS = sorted(p.name for p in (ROOT / 'deploy' / 'systemd').iterdir())
+# eddie-update restarts eddie.target from a timer, so it isn't one of the target's services.
+EDDIE_SERVICES = [name for name in UNITS if name.endswith('.service') and name != 'eddie-update.service']
 
 
 def install(dest, *args):
@@ -39,6 +41,7 @@ class InstallPi(unittest.TestCase):
             self.assertNotRegex(text, r'@[A-Z]+@', name)
             if name.endswith('.service'):
                 self.assertIn(f'WorkingDirectory={ROOT}', text)
+            if name in EDDIE_SERVICES:
                 self.assertIn(f'EnvironmentFile={self.dest}/eddie.env', text)
                 self.assertIn('WantedBy=eddie.target', text)
 
@@ -97,15 +100,36 @@ class InstallPi(unittest.TestCase):
         self.assertIn('private IP', result.stderr)
         self.assertEqual(before, (Path(self.dest) / 'eddie.env').read_text())
 
+    def test_update_timer_runs_the_updater_outside_the_target(self):
+        install(self.dest)
+        service = (Path(self.dest) / 'eddie-update.service').read_text()
+        user = subprocess.run(['id', '-un'], capture_output=True, text=True).stdout.strip()
+        self.assertIn(f'ExecStart={ROOT}/scripts/update_pi.sh {user}', service)
+        self.assertNotIn('PartOf=eddie.target', service)  # it restarts the target, so it mustn't be stopped with it
+        self.assertNotIn('EnvironmentFile', service)  # it needs no tokens
+        timer = (Path(self.dest) / 'eddie-update.timer').read_text()
+        self.assertIn('OnUnitActiveSec=5min', timer)
+        self.assertIn('WantedBy=timers.target', timer)
+
     def test_rejects_unknown_arguments(self):
         self.assertEqual(2, install(self.dest, '--bogus').returncode)
 
 
 class Scripts(unittest.TestCase):
     def test_pi_scripts_parse(self):
-        for name in ('run_pi.sh', 'install_pi.sh'):
+        for name in ('run_pi.sh', 'install_pi.sh', 'update_pi.sh'):
             result = subprocess.run(['bash', '-n', str(ROOT / 'scripts' / name)], capture_output=True, text=True)
             self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_update_hold_exits_before_touching_git(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            hold = Path(tmp) / 'hold'
+            hold.touch()
+            env = {**os.environ, 'EDDIE_UPDATE_HOLD': str(hold), 'PATH': '/usr/bin:/bin'}
+            result = subprocess.run(['bash', str(ROOT / 'scripts' / 'update_pi.sh'), 'nobody'],
+                                    capture_output=True, text=True, env=env, timeout=10)
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertIn('Updates held', result.stdout)
 
 
 if __name__ == '__main__':

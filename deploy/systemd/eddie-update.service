@@ -1,0 +1,10 @@
+[Unit]
+Description=Update Eddie to the latest main (#18)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+# Root so it can restart eddie.target; git and uv inside run as @USER@. Not PartOf eddie.target, which it restarts.
+WorkingDirectory=@REPO@
+ExecStart=@REPO@/scripts/update_pi.sh @USER@
