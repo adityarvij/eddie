@@ -36,6 +36,7 @@ Configuration:
 | `EDDIE_API_URL` | `http://127.0.0.1:8000`; use the Pi address for split deployment |
 | `EDDIE_API_TOKEN` | Bearer token for the traffic API's writes (rules, modes); needed when the API isn't on this machine's loopback, such as in Docker or on the Pi |
 | `EDDIE_TIMERS_FILE` | `voice/timers.json`; pending timers and reminders. `off` keeps them in memory only, so a restart loses them |
+| `EDDIE_HOUSE_GUIDE` | `voice/house_guide.json`; the concierge house guide, read on each question. Missing means an empty guide |
 | `EDDIE_ALARM_SOUND` | Unset plays the generated chime; or a local 16-bit PCM `.wav` (first 10 s played) |
 
 Say “Hey Eddie,” then ask your question. The detector uses 16 kHz mono audio in 80 ms frames. Recording ends after 800 ms of silence following speech, or after 10 seconds of speech. After each reply Eddie listens again for a follow-up without the wake phrase; if no speech starts within 4 seconds, the conversation ends and Eddie is dismissed. Audio stays in memory. Speech output suspends recognition and queued audio is discarded before rearming. There is no always-on cloud transcription.
@@ -204,6 +205,34 @@ A bare hour (“at 6”) means the next 6 o'clock, AM or PM; “tomorrow at 7”
 When one is due, the bridge (`frontend/serve.py`) plays the alarm, then says it: “Your timer for 10 minutes is done.” or “Reminder to call your mom.” The dashboard shows “Timer done” or “Reminder”. This works with the microphone off; it waits for any reply Eddie is speaking. The alarm is a generated chime (three rising beeps, three times, about 3.4 s), so there's nothing to provision; `EDDIE_ALARM_SOUND` swaps in a local WAV. It rings once and doesn't repeat until stopped.
 
 They persist in `EDDIE_TIMERS_FILE` (owner-only JSON, rewritten on each change). One that came due while the bridge was off rings as soon as it restarts: “Sorry, I'm late. Your timer for 10 minutes finished at 3:30 PM.” Each item is removed before it rings, so a crash mid-alarm never rings it twice. An unreadable file is reported at startup and replaced on the next change. Tested in `tests/test_voice_timers.py`; the chime hasn't been checked on the Pi's speaker.
+
+## House guide (#165)
+
+Guests can ask Eddie about the house: “What's the Wi-Fi password?”, “what time is checkout?”, “where are the towels?”, “can I park on the street?”, “how do I start the dishwasher?”. Eddie answers with the owner's own words from a local file, quoted as written. `voice/house_guide.py` does the lookup; the guide never reaches the local model or the traffic API, and needs no network.
+
+**Set it up.** Copy `voice/house_guide.example.json` to `voice/house_guide.json` (gitignored) and write your own entries. `EDDIE_HOUSE_GUIDE` points at another file. Edits take effect on the next question; no restart.
+
+```json
+{"entries": [
+  {"topic": "Wi-Fi", "keywords": ["wifi", "internet", "network"], "answer": "The network is ...", "audience": "guest"},
+  {"topic": "alarm code", "keywords": ["alarm"], "answer": "...", "audience": "owner"}
+]}
+```
+
+| Field | |
+|---|---|
+| `topic` | Required. Also a keyword, and the name Eddie uses when he asks which one you mean. |
+| `answer` | Required. Spoken word for word. Keep it to a sentence or two. |
+| `keywords` | Optional. Other words or phrases a question might use. Matched as whole words, with an optional plural s; case, hyphens and apostrophes are ignored (“Wi-Fi” is “wifi”). |
+| `audience` | `guest` or `owner`. **Defaults to `owner`**: an entry is spoken to guests only when marked `guest`. |
+
+Any other field, a missing topic or answer, or an unknown audience makes the file invalid; Eddie then says “I can't read the house guide right now. Please ask the host.”
+
+**How it answers.** An utterance is a house question when it is phrased as a question (what, where, when, how, is, can I, tell me…) and names a guide keyword or a common house topic (Wi-Fi, checkout, towels, parking, laundry, thermostat, trash, hot tub…), or when it is just a topic's name (“the dishwasher”, the reply to “which one?”). The entry whose keywords cover the most words wins, so “washing machine” beats “dishwasher” in a question naming both. A tie asks “I have notes on dishwasher and washing machine. Which one?” No matching entry is “I don't know that one. Please ask the host.” It runs after timers and before home mode, block, allow and the model; “what does the TV know about me”, empty-house and privacy-tips questions skip it.
+
+**Owner-only entries.** Concierge roles (#163) aren't built yet, so Eddie can't tell a guest from the owner and always answers as a guest (`voice_agent.house_guide_role = 'guest'`): owner entries are never spoken. A guest asking about one hears the same don't-know as for a topic that isn't there, and “which one?” never names an owner topic. Owner entries are for the owner reading the file until #163 sets the role.
+
+Tested in `tests/test_voice_house_guide.py` (schema, lookup, ambiguity, missing answers, owner-only entries, the starter example, and that nothing is printed or logged). Not tried with real guests or on the Pi's microphone. **Gap:** a question the guide doesn't recognise as about the house (“where's the nearest coffee shop?”) still goes to the local model, which can answer from its own knowledge; guest routing is #166.
 
 ## Text a contact
 

@@ -1,0 +1,52 @@
+{
+  "entries": [
+    {
+      "topic": "Wi-Fi",
+      "keywords": ["wifi", "internet", "network", "wifi password"],
+      "answer": "The network is ExampleHouse-Guest and the password is on the card by the front door.",
+      "audience": "guest"
+    },
+    {
+      "topic": "checkout",
+      "keywords": ["check out", "checkout time", "leave", "leaving"],
+      "answer": "Checkout is at 11 AM. Please start the dishwasher and leave the keys on the kitchen counter.",
+      "audience": "guest"
+    },
+    {
+      "topic": "towels",
+      "keywords": ["towel", "linens", "sheets", "blankets"],
+      "answer": "Fresh towels and sheets are in the hall closet next to the bathroom.",
+      "audience": "guest"
+    },
+    {
+      "topic": "parking",
+      "keywords": ["park", "car", "driveway"],
+      "answer": "Park in the driveway, on the left side. Street parking is fine after 6 PM.",
+      "audience": "guest"
+    },
+    {
+      "topic": "house rules",
+      "keywords": ["rules", "quiet hours", "smoking", "pets", "party"],
+      "answer": "Quiet hours are 10 PM to 8 AM. No smoking indoors and no parties, please.",
+      "audience": "guest"
+    },
+    {
+      "topic": "dishwasher",
+      "keywords": ["dish washer"],
+      "answer": "Pods are under the sink. Press Normal, then Start; it takes about two hours.",
+      "audience": "guest"
+    },
+    {
+      "topic": "washing machine",
+      "keywords": ["washer", "laundry"],
+      "answer": "Detergent is on the shelf above it. Use the Quick Wash setting.",
+      "audience": "guest"
+    },
+    {
+      "topic": "alarm code",
+      "keywords": ["alarm", "security code"],
+      "answer": "Example owner-only note: replace this with your own, or delete it. Guests never hear owner entries.",
+      "audience": "owner"
+    }
+  ]
+}
