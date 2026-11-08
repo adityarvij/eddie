@@ -19,6 +19,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT.parent / 'voice'))
+import voice_agent
 from voice_agent import confirmation, forget_conversation, question_announcement, request as api_request, respond
 from voice_runtime import run as run_voice
 stopped = threading.Event()
@@ -128,6 +129,14 @@ def answer(text, reply=None):
             emit({'type': 'speech_end'})
             pending = confirmation.status()
             emit({'type': 'voice_state', 'state': 'confirming', **pending} if pending else {'type': 'voice_state', 'state': 'idle'})
+
+def microphone_off():
+    """Stop the microphone (the voice "stop recording"); True if it was on. The thread ends after the reply."""
+    was_on = voice_thread is not None and voice_thread.is_alive() and not stopped.is_set()
+    stopped.set()
+    return was_on
+
+voice_agent.microphone_off = microphone_off
 
 def microphone():
     try:

@@ -49,6 +49,7 @@ SYSTEM_PROMPT = (
     'Use tools for facts; never invent numbers. '
     'To block or allow a domain or service, lock a device down to some services, or turn home mode on or off, '
     'call that one tool once; Eddie reads it back and waits for a yes, so never say a change is done. '
+    'To stop recording or listening, call stop_microphone. '
     'Use the device names the tools return. If a tool reports an error, say plainly what you could not find. '
     'Only state facts that appear in tool results; when a result has a "said" sentence, base your answer on it. '
     'If a tool says enough_data is false, say there is not enough data instead of guessing.'
@@ -148,6 +149,7 @@ TOOLS = [
              {'domain': {'type': 'string'}}, ['domain']),
     voice_agent.WHAT_THEY_KNOW_TOOL,
     voice_agent.BURGLARS_EYE_TOOL,
+    voice_agent.STOP_MIC_TOOL,
 ] + WRITE_TOOLS
 
 
@@ -400,6 +402,8 @@ class Agent:
             calls = message.get('tool_calls') or []
             if not calls:
                 return self.checked(str(message.get('content') or ''), results)
+            if any(tool_name(call) == 'stop_microphone' for call in calls):
+                return voice_agent.stop_microphone()
             writes = [call for call in calls if tool_name(call) in WRITE_SCHEMAS]
             if writes:
                 return self.write(writes)

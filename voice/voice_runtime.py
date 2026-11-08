@@ -173,6 +173,8 @@ def run(emit, answer, speaking, stopped, dismissed=None):
                 continue
             samples = np.concatenate(capture.frames).astype(np.float32) / 32768
             text = transcribe_command(samples, transcriber, emit, answer, retry=not missed)
+            if stopped.is_set():  # "stop recording": the reply is spoken, the mic closes
+                break
             # Closed while Eddie was thinking or speaking, or noise twice in a row: stop here.
             if dismissed.is_set() or (missed and not text):
                 dismissed.clear()

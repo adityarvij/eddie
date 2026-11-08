@@ -87,7 +87,7 @@ uv run python -m eddie.traffic --pcap capture.pcap --router-mac 02:ed:d1:e0:00:0
 
 1. **Host.** The `Host` header must be an IP literal, `localhost` or a `.local` mDNS name, so a DNS-rebound domain can't reach loopback controls from a browser. Then the existing same-origin check rejects cross-origin browser requests.
 2. **Loopback is trusted.** Requests from the Eddie computer itself need no token.
-3. **Other devices need the pairing token and only reach `/api/voice/ask`, the mode toggles (`/api/mode`, `/api/offline-mode`, #35, `/api/quarantine`, #98) and device approval (`/api/devices/decide`).** The token comes from `EDDIE_DASHBOARD_TOKEN`, or is random (`secrets.token_urlsafe`) on each start. When bound beyond loopback, `serve.py` prints `http://<LAN IP>:5173/#pair=<token>`. The page sends it as `Authorization: Bearer <token>` (constant-time compare). A missing or wrong token gets 401. `/api/voice/start`, `/api/voice/stop`, `/api/voice/dismiss` and `/api/events` answer 403 from any other device, with or without the token: the microphone is never switched from the network, and traffic events only come from this machine.
+3. **Other devices need the pairing token and only reach `/api/voice/ask`, the mode toggles (`/api/mode`, `/api/offline-mode`, #35, `/api/quarantine`, #98) and device approval (`/api/devices/decide`).** The token comes from `EDDIE_DASHBOARD_TOKEN`, or is random (`secrets.token_urlsafe`) on each start. When bound beyond loopback, `serve.py` prints `http://<LAN IP>:5173/#pair=<token>`. The page sends it as `Authorization: Bearer <token>` (constant-time compare). A missing or wrong token gets 401. `/api/voice/start`, `/api/voice/stop`, `/api/voice/dismiss` and `/api/events` answer 403 from any other device, with or without the token: the microphone is never switched on from the network, and traffic events only come from this machine. A paired device's typed ask of “stop recording” does turn it off, the same as saying it (#128).
 
 The token is in the URL fragment, which browsers don't send, so it isn't in request lines or access logs, and the page keeps it nowhere but the URL. A random token changes on restart, so set `EDDIE_DASHBOARD_TOKEN` for a Home Screen link that survives restarts. There is no typed-ask box in the page yet; `window.eddie.ask(text)` is the client hook. The traffic API on port 8000 is separate: its writes need `EDDIE_API_TOKEN` from anywhere but loopback and its WebSocket checks `Origin` (#96, docs/EVENTS.md), but its reads are open.
 
@@ -106,7 +106,7 @@ The mode toggles (#35) relay one boolean to `POST /mode` or `POST /offline-mode`
 - Rehearse the calibrated WebRTC VAD on the actual speakerphone; adjust aggressiveness/noise margin for the room.
 - Ready cue and capture suppression are implemented; test acoustic echo tails on final hardware.
 - Add bounded request admission, cancellation, streaming replies, device reconnect and model caching for Piper.
-- Add a visible persistent microphone indicator and shutdown path for deployment.
+- The mic indicator and voice “stop recording” are done (#128); the overlay has no indicator and there is no hardware mic switch yet.
 - Keep models/audio out of git. Never retain raw microphone audio or log transcriptions by default.
 
 ## Explicit prototype engine
