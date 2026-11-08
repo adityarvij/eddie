@@ -1096,6 +1096,9 @@ confirmation = Confirmation()
 # reply, or None when the model is unavailable. Its changes only reach
 # confirmation.request, never the backend. Set by frontend/serve.py (ollama_agent).
 ask_model = None
+# Fast local semantic matcher for factual questions. Set by frontend/serve.py
+# after its provisioned ONNX assets load; commands above always run first.
+intent_model = None
 # Optional local model that writes "what they know" inferences from the backend's
 # facts: callable(facts) -> text, or None to keep the backend's template.
 phrase_inferences = None
@@ -1253,6 +1256,10 @@ def route(text):
             return "I can't read Eddie's device list right now, so I can't suggest privacy settings."
     if text in ('hello', 'hi', 'hey', 'hey eddie'):
         return "Hey, I'm Eddie. Ask me what's been going on, tell me to block a domain, or to turn home mode on or off."
+    if intent_model is not None:
+        reply = intent_model(raw, context.get('domain'))
+        if reply is not None:
+            return reply
     if ask_model is not None:
         reply = ask_model(raw)
         if reply is not None:
