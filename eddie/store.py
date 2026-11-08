@@ -28,7 +28,7 @@ import threading
 import time
 
 SCHEMA = """
-CREATE TABLE IF NOT EXISTS devices (mac TEXT PRIMARY KEY, ip TEXT, hostname TEXT, vendor TEXT, label TEXT, first_seen INTEGER, last_seen INTEGER, kid INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS devices (mac TEXT PRIMARY KEY, ip TEXT, hostname TEXT, vendor TEXT, label TEXT, first_seen INTEGER, last_seen INTEGER, kid INTEGER NOT NULL DEFAULT 0, security INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS queries (id INTEGER PRIMARY KEY, ts INTEGER, device_mac TEXT, domain TEXT, qtype TEXT, action TEXT, source TEXT, reason TEXT);
 CREATE TABLE IF NOT EXISTS rules (id INTEGER PRIMARY KEY, scope TEXT, device_mac TEXT, pattern TEXT, action TEXT, created_by TEXT, ts INTEGER, pinned INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS ai_verdicts (domain TEXT PRIMARY KEY, label TEXT, confidence REAL, reason TEXT, ts INTEGER);
@@ -75,6 +75,8 @@ def connect(path: str) -> sqlite3.Connection:
         conn.execute("ALTER TABLE rules ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0")
     if "kid" not in {r[1] for r in conn.execute("PRAGMA table_info(devices)")}:  # an eddie.db from before #119
         conn.execute("ALTER TABLE devices ADD COLUMN kid INTEGER NOT NULL DEFAULT 0")
+    if "security" not in {r[1] for r in conn.execute("PRAGMA table_info(devices)")}:  # an eddie.db from before #46
+        conn.execute("ALTER TABLE devices ADD COLUMN security INTEGER NOT NULL DEFAULT 0")
     conn.commit()
     return conn
 

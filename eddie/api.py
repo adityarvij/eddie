@@ -534,6 +534,7 @@ async def roll_back(found: rollback.Rollback) -> None:
 class DeviceIn(BaseModel):
     label: str | None = None  # None or "" clears it
     kid: StrictBool | None = None  # a child's device, for kid mode (#119)
+    security: StrictBool | None = None  # a security/outdoor device, exempt from home mode (#46)
 
     @field_validator("label")
     @classmethod
@@ -622,8 +623,10 @@ async def update_device(key: str, body: DeviceIn):
     changes = body.model_dump(include=body.model_fields_set)
     if changes.get("kid") is None:
         changes.pop("kid", None)
+    if changes.get("security") is None:
+        changes.pop("security", None)
     if not changes:
-        raise HTTPException(422, "Expected a label, kid, or both.")
+        raise HTTPException(422, "Expected a label, kid, security, or combination.")
     row = devices.update(rules_db(), key, changes)
     if row is None:
         raise HTTPException(404, f"Eddie hasn't seen a device {key}.")
