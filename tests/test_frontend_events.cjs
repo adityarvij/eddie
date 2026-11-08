@@ -303,6 +303,11 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   context.renderRules([]);
   assert.equal(get('home-mode').attrs['data-spoofing'], 'false');
   assert.equal(get('home-mode').attrs['aria-label'], 'home mode: off');
+  socket.onmessage({data:JSON.stringify({type:'mode', spoof_mode:true, spoof_applied:true})});
+  assert.equal(get('home-mode').attrs['data-spoofing'], 'true', 'acknowledged spoof mode shows Pinocchio');
+  assert.match(get('home-mode').attrs['aria-label'], /spoof mode on/);
+  socket.onmessage({data:JSON.stringify({type:'mode', spoof_mode:false, spoof_applied:true})});
+  assert.equal(get('home-mode').attrs['data-spoofing'], 'false', 'turning spoof mode off restores the house state');
   assert.equal(get('offline-mode').textContent, 'online', 'the footer says just online or offline');
   // Mic indicator (#128): the heading's mic icon shows only while the stream is open, and the footer
   // button only offers to start it; stopping is by voice.

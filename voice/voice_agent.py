@@ -94,6 +94,29 @@ def home_mode_command(text):
     return None
 
 
+_SPOOF = r'(?:the )?spoof ?mode'
+_SPOOF_ON, _SPOOF_OFF = _HOME_ON.replace(_HOME, _SPOOF), _HOME_OFF.replace(_HOME, _SPOOF)
+
+
+def spoof_mode_command(text):
+    """True or False for a whole-utterance spoof mode command, else None."""
+    for on, core in ((True, _SPOOF_ON), (False, _SPOOF_OFF)):
+        match = re.fullmatch(rf'(?:(?P<lead>[a-z0-9]+(?: [a-z0-9]+)?) )?{LEAD}(?:go ahead and )?{core}{_MODE_TAIL}', text)
+        if match and not set((match['lead'] or '').split()) & NOT_A_LEAD_IN:
+            return on
+    return None
+
+
+def spoof_mode_reply(on):
+    try:
+        result = request('/mode', {'spoof_mode': on})
+        if result.get('spoof_mode') is not on:
+            raise ValueError('Mode was not acknowledged')
+    except Exception:
+        return "I couldn't change spoof mode."
+    return mode_turned('Spoof mode', on, result.get('spoof_applied') is True)
+
+
 # Guest Mode by voice (#163), phrased like home mode. Only the owner reaches it (a guest gets the
 # modes refusal first), and only to turn it on: Eddie can't tell voices apart, so "turn off guest
 # mode" would let any guest out. Turning it off stays on the dashboard's guest flag.
@@ -1247,6 +1270,9 @@ def route(text):
     on = home_mode_command(text)
     if on is not None:
         return profile.check('modes') or home_mode_reply(on)
+    spoof_on = spoof_mode_command(text)
+    if spoof_on is not None:
+        return profile.check('modes') or spoof_mode_reply(spoof_on)
     sensitive = sensitivity_target(text)
     if sensitive:
         return profile.check('rules') or sensitivity_reply(*sensitive)
