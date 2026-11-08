@@ -70,6 +70,7 @@ Both are computed by the API from the events it has received, keyed by
 - `mode`: `{home_mode: bool}`
 - `offline_mode`: `{offline: bool, applied: bool}` after every `POST /offline-mode`
 - `rule_change`: a rule was stored or deleted (see Rules below)
+- `question` / `question_resolved`: Eddie is asking whether to block a likely tracker, and its answer (see Ask before blocking below)
 
 ## Home mode: `GET/POST /mode`
 
@@ -113,7 +114,7 @@ before every list: device rule, then the device's lockdown rule, then global rul
 | `pattern`    | `a.com` matches only a.com; `*.a.com` matches a.com and every subdomain. Lowercased, trailing dot dropped. At least two labels: empty, `com` and `*.com` are refused. The one exception is `*` with `action: block` and a `device_mac`: lockdown (#17), which blocks every domain for that device except its own device rules and the allowlist. `*` without a device or as an allow is refused. IP addresses are refused (`192.168.1.10`, `*.10.0.0.1`, `::1`): a name whose last label is all digits isn't a domain. |
 | `action`     | `block` \| `allow` |
 | `device_mac` | optional; omit for every device. Use the device's `mac` from `GET /devices` (its MAC, or its client IP while the MAC is unknown). A rule made with a client IP also matches the device after its MAC becomes known. |
-| `created_by` | optional, default `"user"`; exactly `user` \| `voice` \| `agent` |
+| `created_by` | optional, default `"user"`; exactly `user` \| `voice` \| `agent` \| `dashboard` |
 
 Answers `201` with the stored row plus the DNS acknowledgment:
 
@@ -163,6 +164,53 @@ Every successful add or delete also pushes a `rule_change` on `/ws/events`:
 
 Devices cache answers (60 s for blocked lookups, the upstream TTL for allowed
 ones), so a device may not ask Eddie again until its cache expires.
+
+## Ask before blocking: `GET /questions`, `POST /questions/{id}` (#79)
+
+AI verdicts only flag (Classifier verdicts below), so a `tracker` verdict
+becomes a question for the person instead. `unsure` and `needed` verdicts and
+network plumbing never do. The question lives in the API's memory
+(`eddie/questions.py`) and is lost on restart.
+
+- **Once per domain:** a domain is offered once per API run; repeats are ignored.
+- **Rate limit:** one open question at a time, and a new one at most every
+  180 s after the previous one was asked. Trackers that arrive meanwhile wait
+  and are grouped by device, up to five domains a question, busiest device first.
+- **Device:** the `device` name of the newest feed event for that domain, or
+  `null` ("on your network"). It names the question only; Block and Allow
+  write global rules.
+
+`GET /questions` lists open questions (at most one), releasing one first if it
+is due. Due questions are also released on `/ingest`, `/ai/verdict` and after
+an answer. Each is pushed as `question` on `/ws/events`, and the snapshot
+carries open ones in `questions`:
+
+```json
+{"type": "question", "id": 3, "device": "Laptop", "ts": 1762531200123,
+ "domains": [{"domain": "collector-pxabc.px-cloud.net", "reason": "PerimeterX bot fingerprinting"}],
+ "prompt": "A new likely tracker on Laptop: collector-pxabc.px-cloud.net. Block it?"}
+```
+
+`POST /questions/{id}` with `{"answer": "block" | "allow" | "ignore", "by": "dashboard" | "voice"}`:
+
+- `block` / `allow` writes one global rule per domain with `created_by: by`,
+  exactly like `POST /rules` (each sends `rule_change`), and waits for DNS.
+- `ignore` writes nothing; the domain stays flagged and isn't asked about again.
+- Answers `{"id", "answer", "rules": [stored rows], "applied"}`. `applied` has
+  the `POST /rules` meaning for the last rule (`null` for `ignore`): **only
+  `applied: true` may be shown or spoken as blocked or allowed.** Undo is
+  `DELETE /rules/{id}` with the returned ids.
+- Then pushes `{"type": "question_resolved", "id", "answer", "by", "applied"}`.
+- A question is answered once: a second answer, or an unknown id, is `404`.
+  Bad input is `422`. With `EDDIE_DB=off`, `block` / `allow` answer `503` and
+  the question stays open.
+
+The dashboard shows the open question as a card with Block / Allow / Ignore
+(through the bridge below). The voice worker reads it out once when Eddie is
+woken ("I've got one question for you. … Say yes to confirm or no to cancel");
+a yes answers `block` with `by: voice`, and voice "undo" removes those rules.
+No, silence or expiry leave it open on the dashboard. Eddie never asks
+unprompted; the opt-in for that isn't built.
 
 ## Devices: `GET /devices`, `PUT /devices/{mac}`
 
@@ -243,13 +291,16 @@ Relays to the traffic API (`EDDIE_API_URL`, default `http://127.0.0.1:8000`), so
 | `GET /api/rules` | `GET /rules` | read-only |
 | `GET /api/devices` | `GET /devices?hours=24` | read-only |
 | `GET /api/mode` | `GET /mode` | read-only |
+| `GET /api/questions` | `GET /questions` | read-only |
+| `POST /api/questions/answer` `{id: int, answer}` | `POST /questions/{id}` with `by: "dashboard"` | answers with the API's reply (`applied: false` passed through); `404` if already answered |
+| `POST /api/questions/undo` `{id: int}` | `GET /rules`, then `DELETE /rules/{id}` | deletes only the rules this bridge's answer to that question wrote, if each is still that `dashboard` rule; `{removed, applied}` |
 | `GET /api/what-they-know[?demo=1]` | `GET /what-they-know?hours=168` or `?demo=true` | read-only |
 | `POST /api/mode` `{home_mode: bool}` | `POST /mode` | answers with the API's echo `{home_mode}` |
 | `POST /api/offline-mode` `{offline: bool}` | `POST /offline-mode` | answers with `{offline, applied}`; `applied: false` is passed through |
 
 The two POSTs forward only that one boolean (anything else is 400) and wait up to 5 s for the API.
 
-Control auth (#40): POSTs need a `Host` that is an IP, `localhost` or `.local`, and a same-origin `Origin` if one is sent (403 otherwise). From the Eddie computer (loopback) no token is needed. From another device, only `POST /api/voice/ask` (`{text}`), `POST /api/mode` and `POST /api/offline-mode` are allowed, with `Authorization: Bearer <pairing token>`; a missing or wrong token gets 401 `{message}`. `/api/voice/start`, `/api/voice/stop`, `/api/voice/dismiss` and `/api/events` answer 403 from other devices whatever the token.
+Control auth (#40): POSTs need a `Host` that is an IP, `localhost` or `.local`, and a same-origin `Origin` if one is sent (403 otherwise). From the Eddie computer (loopback) no token is needed. From another device, only `POST /api/voice/ask` (`{text}`), `POST /api/mode`, `POST /api/offline-mode` and the two `/api/questions` POSTs are allowed, with `Authorization: Bearer <pairing token>`; a missing or wrong token gets 401 `{message}`. `/api/voice/start`, `/api/voice/stop`, `/api/voice/dismiss` and `/api/events` answer 403 from other devices whatever the token.
 
 Wake lifecycle: `wake`, `voice_state: listening`, `voice_state: thinking`, optional `transcript`, `agent_reply`, `speaking`, `speech_end`, then `voice_state: listening` again for a follow-up without the wake phrase. If no speech starts within 4 seconds of listening, the worker emits `voice_state: dismissed` and the dashboard closes Eddie and returns to the live feed; the next request needs the wake phrase. No transcript is persisted. Capture or inference failure yields `voice_status: error`.
 

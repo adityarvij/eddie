@@ -31,7 +31,7 @@ class RuleIn(BaseModel):
     pattern: str
     action: Literal["allow", "block"]
     device_mac: str | None = None  # None for a rule that covers every device
-    created_by: Literal["user", "voice", "agent"] = "user"
+    created_by: Literal["user", "voice", "agent", "dashboard"] = "user"
 
     @field_validator("pattern")
     @classmethod

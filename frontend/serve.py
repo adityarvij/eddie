@@ -12,13 +12,14 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
 import urllib.request
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT.parent / 'voice'))
-from voice_agent import confirmation, forget_conversation, request as api_request, respond
+from voice_agent import confirmation, forget_conversation, question_announcement, request as api_request, respond
 from voice_runtime import run as run_voice
 stopped = threading.Event()
 dismissed = threading.Event()  # the close button: end the voice conversation
@@ -35,12 +36,17 @@ counts = {'requests': 0, 'blocked': 0}
 token = os.environ.get('EDDIE_DASHBOARD_TOKEN') or secrets.token_urlsafe(24)
 # Controls a paired device may use. Starting or stopping the microphone, and feeding traffic
 # events, stay on the Eddie computer whatever token is sent.
-PAIRED_CONTROLS = {'/api/voice/ask', '/api/mode', '/api/offline-mode'}
+PAIRED_CONTROLS = {'/api/voice/ask', '/api/mode', '/api/offline-mode', '/api/questions/answer', '/api/questions/undo'}
 # Read-only relays to the traffic API, so the page (and the iPad) need no CORS or direct API access.
 READ_RELAYS = {'/api/rules': ('/rules', 'Rules unavailable.'),
                '/api/devices': ('/devices?hours=24', 'Devices unavailable.'),
-               '/api/mode': ('/mode', 'Modes unavailable.')}
+               '/api/mode': ('/mode', 'Modes unavailable.'),
+               '/api/questions': ('/questions', 'Questions unavailable.')}
 # Mode toggles: bridge path -> (API path, the one boolean field it takes).
+# Rules written by dashboard answers (#79), question id -> rule rows, so its Undo removes only those.
+# Memory only, at most ANSWERS_KEPT answers.
+answered = {}
+ANSWERS_KEPT = 20
 MODE_CONTROLS = {'/api/mode': ('/mode', 'home_mode'), '/api/offline-mode': ('/offline-mode', 'offline')}
 
 def is_local(address):
@@ -85,13 +91,13 @@ def emit(event):
             except queue.Full:
                 pass
 
-def answer(text):
+def answer(text, reply=None):
     # Serialize both typed and spoken requests, including the full playback duration.
     with voice_lock:
         speaking.set()
         try:
             emit({'type': 'voice_state', 'state': 'thinking'})
-            response = respond(text)
+            response = (reply or respond)(text)
             emit({'type': 'agent_reply', 'text': response})
             emit({'type': 'speaking', 'text': response})
             piper_model = os.environ.get('EDDIE_PIPER_MODEL')
@@ -127,6 +133,11 @@ def microphone():
             if event.get('type') == 'voice_status':
                 voice_state.update({key: value for key, value in event.items() if key != 'type'})
             emit(event)
+            if event.get('type') == 'wake':
+                # Ask before blocking (#79): an open question is read out once, as Eddie wakes.
+                question = question_announcement()
+                if question:
+                    answer(question, reply=str)
         run_voice(publish, answer, speaking, stopped, dismissed)
     except Exception as error:
         voice_state['status'] = 'error'
@@ -138,6 +149,43 @@ def microphone():
         if stopped.is_set():
             voice_state['status'] = 'off'
             emit({'type': 'voice_status', 'status': 'off'})
+
+def undo_answer(question_id):
+    """(status, payload) after deleting the rules a dashboard answer wrote, newest first.
+
+    A rule already gone, or whose id now holds another rule, is skipped. `applied` is DNS's
+    acknowledgment of the last delete, as in DELETE /rules/{id}.
+    """
+    saved = answered.get(question_id)
+    if not saved:
+        return 404, {'message': 'Nothing to undo for that question.'}
+    try:
+        current = {row.get('id'): row for row in api_request('/rules')}
+    except Exception:
+        return 502, {'message': 'The traffic API did not answer. Nothing changed.'}
+    removed, applied = 0, None
+    while saved:
+        rule = saved[-1]
+        row = current.get(rule['id'])
+        if row and row.get('created_by') == 'dashboard' and all(row.get(k) == rule.get(k) for k in ('pattern', 'action', 'ts')):
+            try:
+                result = api_request(f"/rules/{rule['id']}", method='DELETE', timeout=5)
+            except urllib.error.HTTPError as error:
+                error.close()
+                if error.code != 404:
+                    break
+            except Exception:
+                break
+            else:
+                removed += 1
+                applied = result.get('applied') is True
+        saved.pop()
+    if saved:
+        return 502, {'message': f'Removed {removed} rule(s); the traffic API stopped answering. Try undo again.',
+                     'removed': removed}
+    answered.pop(question_id, None)
+    return 200, {'removed': removed, 'applied': applied}
+
 
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
@@ -250,6 +298,29 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.json_response(200, api_request(path, {field: body[field]}, timeout=5))
             except Exception:
                 return self.json_response(502, {'message': 'The traffic API did not confirm the change.'})
+        if self.path == '/api/questions/answer':
+            # The dashboard's Block / Allow / Ignore card; the API writes the rule and reports DNS's `applied`.
+            if (not isinstance(body, dict) or type(body.get('id')) is not int
+                    or body.get('answer') not in ('block', 'allow', 'ignore')):
+                return self.json_response(400, {'message': 'Expected a question id and block, allow or ignore.'})
+            try:
+                result = api_request(f"/questions/{body['id']}", {'answer': body['answer'], 'by': 'dashboard'}, timeout=5)
+                if result.get('rules'):
+                    answered[body['id']] = result['rules']
+                    while len(answered) > ANSWERS_KEPT:
+                        answered.pop(next(iter(answered)))
+                return self.json_response(200, result)
+            except urllib.error.HTTPError as error:
+                error.close()
+                if error.code == 404:
+                    return self.json_response(404, {'message': 'That question was already answered.'})
+                return self.json_response(502, {'message': 'The traffic API did not confirm the answer.'})
+            except Exception:
+                return self.json_response(502, {'message': 'The traffic API did not confirm the answer.'})
+        if self.path == '/api/questions/undo':
+            if not isinstance(body, dict) or type(body.get('id')) is not int:
+                return self.json_response(400, {'message': 'Expected a question id.'})
+            return self.json_response(*undo_answer(body['id']))
         if self.path == '/api/events':
             if not isinstance(body, dict) or not body.get('domain'):
                 return self.json_response(400, {'message': 'A domain is required.'})
