@@ -69,6 +69,29 @@ def home_mode_reply(enabled):
     return f"Home mode is {state} and Eddie's DNS has loaded it. It stays {state} until you change it, whoever's phone is home."
 
 
+# Home mode by voice. The whole request must be the command, so negations, questions and extra
+# actions can't flip it, but up to two words may lead in: on the Pi, Whisper heard "Eddie, turn on
+# home mode please" as "Itty, turn on home mode please", and people say "home mode on" with no verb.
+_HOME = r'(?:the )?home ?mode'
+_HOME_ON = (rf'(?:(?:turn|switch|flip|put) on {_HOME}|(?:turn|switch|flip|put|set) {_HOME} on|(?:enable|activate|start) {_HOME}'
+            rf'|(?:i want|id like) {_HOME} (?:on|enabled)|{_HOME} on)')
+_HOME_OFF = (rf'(?:(?:turn|switch|flip|put) off {_HOME}|(?:turn|switch|flip|put|set) {_HOME} off|(?:disable|deactivate|stop|end) {_HOME}'
+             rf'|(?:i want|id like) {_HOME} (?:off|disabled)|{_HOME} off)')
+_MODE_ASK = r'(?:please )?(?:(?:can|could|would|will) you (?:please )?)?(?:go ahead and )?'
+_MODE_TAIL = r'(?: please| now| for me| eddie)*'
+NOT_A_LEAD_IN = {'dont', 'do', 'not', 'never', 'no', 'is', 'was', 'are', 'isnt', 'what', 'whats', 'why', 'how', 'did',
+                 'does', 'should', 'if', 'when', 'might', 'maybe', 'whether', 'and', 'or', 'but'}
+
+
+def home_mode_command(text):
+    """True or False for a whole-utterance home mode on/off command, else None."""
+    for on, core in ((True, _HOME_ON), (False, _HOME_OFF)):
+        match = re.fullmatch(rf'(?:(?P<lead>[a-z0-9]+(?: [a-z0-9]+)?) )?{_MODE_ASK}{core}{_MODE_TAIL}', text)
+        if match and not set((match['lead'] or '').split()) & NOT_A_LEAD_IN:
+            return on
+    return None
+
+
 def home_mode_action(enabled):
     """RISKY_ACTIONS['home_mode']: the model's set_mode after a yes."""
     return home_mode_reply(enabled)
@@ -1284,12 +1307,9 @@ def route(text):
         reply = house_guide.answer(raw, profile.role())
         if reply is not None:
             return profile.check('house_guide') or reply
-    # Match the entire request so negations, questions and additional actions
-    # cannot accidentally activate a privacy setting.
-    on = re.fullmatch(r'(?:please )?(?:(?:turn|switch) on home mode|(?:turn|switch) home mode on|enable home mode|(?:i want|id like) home mode (?:on|enabled)|(?:can|could|would) you (?:turn on|enable) home mode)(?: please)?', text)
-    off = re.fullmatch(r'(?:please )?(?:(?:turn|switch) off home mode|(?:turn|switch) home mode off|disable home mode|(?:i want|id like) home mode (?:off|disabled)|(?:can|could|would) you (?:turn off|disable) home mode)(?: please)?', text)
-    if on or off:
-        return profile.check('modes') or home_mode_reply(bool(on))
+    on = home_mode_command(text)
+    if on is not None:
+        return profile.check('modes') or home_mode_reply(on)
     sensitive = sensitivity_target(text)
     if sensitive:
         return profile.check('rules') or sensitivity_reply(*sensitive)
@@ -1313,7 +1333,7 @@ def route(text):
             return NOT_RESOLVED
         if allow:
             return ALLOW_UNRESOLVED
-        return "I haven't changed anything. I can block or allow a domain, allow a service like Netflix, lock down a device, allow or deny a new device, undo my last rule, protect a category like health, or turn home, away or kid mode on or off; email isn't connected yet."
+        return "I haven't changed anything. Tap capabilities, bottom right, to see what I can do."
     if WHAT_THEY_KNOW.search(text):
         denied = profile.check('reports')
         if denied:
@@ -1353,7 +1373,7 @@ def route(text):
             return profile.check('traffic')
         return guest.HELP
     if text in ('hello', 'hi', 'hey', 'hey eddie'):
-        return "Hey, I'm Eddie. Ask me what's been going on, tell me to block a domain, or to turn home mode on or off."
+        return "Hey, I'm Eddie. Tap capabilities, bottom right, to see what I can do."
     if intent_model is not None:
         reply = intent_model(raw, context.get('domain'))
         if reply is not None:
@@ -1367,5 +1387,4 @@ def route(text):
             return profile.check('traffic') or str(request('/summary')['text'])
         except Exception:
             return "I can't reach Eddie’s traffic backend, so I don't have a current summary."
-    return ("I don't know how to answer that yet. I can summarize activity, explain recent blocks, "
-            "report what a device is doing, or help with privacy controls.")
+    return "I don't know how to answer that yet. Tap capabilities, bottom right, to see what I can do."
