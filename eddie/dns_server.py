@@ -455,7 +455,10 @@ def main() -> None:
         device_watcher = asyncio.create_task(watch_devices(device_map, feed=feed))
         stop = asyncio.Event()
         # docker stop / systemd send SIGTERM; stop cleanly so queued rows get flushed.
-        asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, stop.set)
+        try:
+            asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, stop.set)
+        except (NotImplementedError, AttributeError):
+            pass
         try:
             await stop.wait()
         finally:

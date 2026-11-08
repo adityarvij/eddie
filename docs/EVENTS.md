@@ -545,6 +545,7 @@ this needs `EDDIE_DB` (off answers 503).
 | `recent_domains` | up to three domains the device looked up in the window, whatever the answer, newest first: the dashboard shows them so people can tell which device is which |
 | `kid` | `true` when the device is marked as a child's (#119): kid mode locks it down. Kept like a label when the device goes quiet |
 | `phone` | `true` when the device is marked as a household phone (#20): home mode turns on while one is home. Kept like a label |
+| `security` | `true` when the device is marked as an outdoor camera, doorbell or alarm (#46): exempt from home mode camera blocking. Kept like a label |
 
 Sorted most blocked first. A device's first lookups can be logged under its
 IP before the first ARP read (about a second), so a short-lived IP row may
@@ -554,10 +555,12 @@ appear next to the MAC row.
 seen (`404` otherwise); `""` or `null` clears it. Labels are at most 40
 printable characters. `{"kid": true}` marks it as a child's device and
 `false` unmarks it (#119). `{"phone": true}` marks it as a household phone
-for home mode's presence check, `false` unmarks it (#20). A body may carry
-any of the three and leaves the rest untouched (`{}` or a non-boolean `kid`
-or `phone` is 422). Marking a device writes no rules: kid mode and home
-mode do that. Answers with the stored device, its `kid`, `phone` and `name`.
+for home mode's presence check, `false` unmarks it (#20). `{"security": true}`
+marks it as a security device exempt from home mode camera blocking, `false`
+unmarks it (#46). A body may carry any combination of the four and leaves the
+rest untouched (`{}` or a non-boolean `kid`, `phone` or `security` is 422).
+Marking a device writes no rules: kid mode and home mode do that. Answers with
+the stored device, its `kid`, `phone`, `security` and `name`.
 
 Each device also has `status` (`approved`, `pending` or `denied`; `null` for an
 IP-keyed device), and the response has top-level `quarantine` and
@@ -722,7 +725,7 @@ Relays to the traffic API (`EDDIE_API_URL`, default `http://127.0.0.1:8000`), so
 | `POST /api/offline-mode` `{offline: bool}` | `POST /offline-mode` | answers with `{offline, applied}`; `applied: false` is passed through |
 | `POST /api/quarantine` `{quarantine: bool}` | `POST /quarantine` | answers with `{quarantine, applied}` |
 | `POST /api/devices/decide` `{mac, decision: "approve" \| "deny"}` | `POST /devices/{mac}/{decision}` | answers with the API's `{mac, name, status, applied}`; anything but a MAC and approve/deny is 400 |
-| `POST /api/devices/update` `{mac, label?, kid?}` | `PUT /devices/{mac}` | names a device or marks it as a child's (#119); `mac` is a MAC or client IP; answers with the API's stored device; 400 for anything else, 422 for a bad name, 404 for a device Eddie hasn't seen |
+| `POST /api/devices/update` `{mac, label?, kid?, phone?, security?}` | `PUT /devices/{mac}` | names a device or marks it as a child's, phone, or security device (#46, #119); `mac` is a MAC or client IP; answers with the API's stored device; 400 for anything else, 422 for a bad name, 404 for a device Eddie hasn't seen |
 | `POST /api/kid-mode` `{on: bool}` | `GET /devices`, `GET /rules`, then `POST` / `DELETE /rules` per child's device | runs kid mode with the page's confirm dialog as the yes (`voice_agent.kid_mode_change`, rules `created_by: dashboard`); answers `{message}`, the same wording voice speaks, which says whether DNS loaded the rules |
 | `GET /api/guest` | none | Guest Mode (#163): `{active, allowed, approvable, owner_only}` from the local profile |
 | `POST /api/guest` `{active?: bool, allowed?: [category]}` | none | the Eddie computer only (403 from other devices, token or not); `allowed` may list only `approvable` categories, anything else is 400; answers with the saved profile, 500 if it couldn't be written. Switching it on or off cancels a pending confirmation; off also forgets guest timers |
