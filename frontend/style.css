@@ -75,3 +75,5 @@
 .home-toggle .eye{fill:currentColor;stroke:none}.home-toggle[aria-pressed="true"] .eye{fill:#000}
 /* Data broker watch: lookups of known brokers and ad exchanges get their own counter and highlight. */
 .broker-counter{color:#facc15}.event.broker{background:rgba(250,204,21,.08)}.tag-broker{color:#facc15}
+/* Privacy settings coach (#112): one block per recognised device, inside the report panel style. */
+.suggestions .suggestion{margin:12px 0 0;color:#ddd}.suggestions .suggestion p{margin:4px 0}.suggestion-head{color:#fff;font-weight:700}.suggestions a{color:#ddd;overflow-wrap:anywhere}

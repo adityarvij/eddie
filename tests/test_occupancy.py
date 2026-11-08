@@ -130,7 +130,9 @@ class DemoWeek(unittest.TestCase):
         self.assertTrue(r['full_range'] and r['enough'])
         # Evening TV starts 7 PM give or take 15 minutes; the seeded jitter differs by time zone (DST changes the week's length).
         self.assertRegex(r['text'], r'on weekdays from 6 AM to [67] PM')
-        self.assertEqual({demo_week.TV, demo_week.TABLET}, {d['device'] for d in r['devices']})
+        devices = {d['device']: d for d in r['devices']}
+        self.assertLessEqual({demo_week.TV, demo_week.TABLET, demo_week.PHONE}, set(devices))
+        self.assertEqual({demo_week.DOORBELL}, {name for name, d in devices.items() if d['never_block']})
 
 
 class Endpoint(unittest.IsolatedAsyncioTestCase):
