@@ -52,7 +52,7 @@ class AsyncTests(unittest.TestCase):
             self.assertIsNone(classifier.parse_verdict(json.dumps({'label':label,'confidence':.9,'reason':'x'})))
     def test_verdict_websocket_event_does_not_inflate_counts(self):
         body={'domain':'one.example','label':'tracker','confidence':.9,'reason':'Usage telemetry','ts':1000}
-        with TestClient(api.app) as client, client.websocket_connect('/ws/events') as ws:
+        with TestClient(api.app, client=('127.0.0.1', 50000)) as client, client.websocket_connect('/ws/events') as ws:
             snapshot=ws.receive_json()
             self.assertEqual(client.post('/ai/verdict',json=body).json(),{'ok':True})
             self.assertEqual(ws.receive_json(),{'type':'ai_verdict',**body})

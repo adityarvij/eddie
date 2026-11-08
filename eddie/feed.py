@@ -25,7 +25,7 @@ import queue
 import threading
 import urllib.request
 
-from .classifier import _OPENER, check_local
+from .classifier import _OPENER, auth_headers, check_local
 from .decision import is_plumbing
 
 DEFAULT_URL = "http://127.0.0.1:8000"
@@ -107,7 +107,7 @@ class FeedPublisher:
 
     def _send(self, events: list[dict]) -> None:
         req = urllib.request.Request(self.url + "/ingest", data=json.dumps(events).encode(),
-                                     headers={"Content-Type": "application/json"})
+                                     headers={"Content-Type": "application/json", **auth_headers()})
         try:
             with _OPENER.open(req, timeout=self.timeout) as response:
                 response.read()

@@ -30,7 +30,7 @@ Body is one event or a list of events.
 | `device`     | string | friendly label (`"Fire Stick"`); fall back to the IP |
 | `domain`     | string | lowercase, no trailing dot |
 | `qtype`      | string | `A`, `AAAA`, `HTTPS`, ... |
-| `action`     | string | `allow` \| `block` \| `flag` |
+| `action`     | string | `allow` \| `block` \| `flag` \| `spoof` (answered with Eddie's IP, #99) |
 | `source`     | string | `rule` \| `allowlist` \| `blocklist` \| `heuristic` \| `ai` \| `home_mode` \| `away_mode` \| `default` |
 | `reason`     | string | one short human line, shown on screen |
 
@@ -42,6 +42,17 @@ accept in time are dropped, not retried. Real events carry the device's MAC
 and name (see Devices below); a client whose MAC isn't known yet is
 `device_mac: "ip:<client IP>"` and `device: "<client IP>"`. A new label shows
 in the feed within 30 s.
+
+### Access (#96)
+
+Writes (`POST`, `PUT`, `DELETE`) from loopback need nothing. From any other
+address they need `Authorization: Bearer <EDDIE_API_TOKEN>`; a missing or wrong
+token, or no token configured on the API, gets 401 `{detail}`. Every client
+here (`eddie/feed.py`, the classifier, `voice/voice_agent.py`, the dashboard
+bridge, `scripts/fake_traffic.py`) sends it when `EDDIE_API_TOKEN` is set. A
+write whose `Origin` isn't a loopback page or a page on the same IP or `.local`
+host gets 403. `GET`s are open. `/ws/events` refuses the handshake (403) for
+the same foreign origins; non-browser clients send no `Origin` and connect.
 
 The DNS server doesn't send every lookup. Network plumbing (reverse lookups
 under `.arpa`, service-discovery names with a `_` label such as
@@ -56,7 +67,7 @@ Both are still answered and written to `eddie.db`. So `totals.seen`,
 The API adds `id`, `company` and `category` (from `eddie/labels.py`), plus
 `beacon_s` and `idle` (from `eddie/beacons.py`, #24), and pushes:
 
-- `snapshot`: sent once on connect: `{events, totals, home_mode}`
+- `snapshot`: sent once on connect: `{events, ai_verdicts, bypass, totals, home_mode}`
 - `query`: the event above plus `id`, `company`, `category`, `beacon_s`, `idle`
 
 | Added field | Notes |
@@ -71,6 +82,32 @@ Both are computed by the API from the events it has received, keyed by
 - `offline_mode`: `{offline: bool, applied: bool}` after every `POST /offline-mode`
 - `away_mode`: `{away, away_until, away_applied, away_devices, away_exempt}` after every `POST /mode` with `away` (below)
 - `rule_change`: a rule was stored or deleted (see Rules below)
+- `bypass_suspected`: a device looked up an encrypted DNS resolver (see Bypass detection below)
+
+## Bypass detection: `bypass_suspected` (#97)
+
+For each query event whose `domain` is, or is under, a name in
+`eddie/bypass.py` `RESOLVERS` (`dns.google`, `cloudflare-dns.com`,
+`dns.quad9.net`, `dns.nextdns.io`, …; sources listed in the module), the API
+pushes, right after the query:
+
+```json
+{"type": "bypass_suspected", "ts": 1762531200123, "device_mac": "f0:4f:7c:11:22:33", "device": "Fire Stick",
+ "domain": "dns.google", "resolver": "Google Public DNS", "blocked": false,
+ "reason": "Fire Stick looked up dns.google (Google Public DNS), an encrypted DNS resolver. It may be sending some lookups there, where Eddie can't see or block them."}
+```
+
+- At most once per `device_mac` and resolver name every 10 minutes.
+- `blocked` is the query's own `action == "block"`, i.e. the DNS server's
+  decision for that lookup (with `EDDIE_BLOCK_DOH=on`, or a rule or list).
+  Its `reason` then adds that blocking the name only stops encrypted DNS set
+  up by name, not an app that has the resolver's IP.
+- It's a suspicion: a browser may check a resolver and not use it, and a
+  device with hard-coded resolver IPs never asks Eddie, so no event (or
+  absence of one) means a device is fully covered by Eddie.
+- Not a lookup: it doesn't change `totals`. The last 50 are kept in memory
+  and sent as `bypass` in the `snapshot`; a restart clears them.
+- The dashboard shows it as a `[bypass?]` feed row and a toast with `reason`.
 
 ## Home mode: `GET/POST /mode`
 
@@ -153,7 +190,7 @@ before every list: device rule, then the device's lockdown rule, then global rul
 | Field        | Notes |
 |--------------|-------|
 | `pattern`    | `a.com` matches only a.com; `*.a.com` matches a.com and every subdomain. Lowercased, trailing dot dropped. At least two labels: empty, `com` and `*.com` are refused. The one exception is `*` with `action: block` and a `device_mac`: lockdown (#17), which blocks every domain for that device except its own device rules and the allowlist. `*` without a device or as an allow is refused. IP addresses are refused (`192.168.1.10`, `*.10.0.0.1`, `::1`): a name whose last label is all digits isn't a domain. |
-| `action`     | `block` \| `allow` |
+| `action`     | `block` \| `allow` \| `spoof`. `spoof` (#99) answers the domain with Eddie's IP (`EDDIE_SPOOF_IP`) so the stub server (`eddie/spoof_server.py`) returns 200 OK with an empty body over plain HTTP; without `EDDIE_SPOOF_IP` DNS blocks it instead. `spoof` is a normal rule, not a lockdown: `*` takes only `block`. |
 | `device_mac` | optional; omit for every device. Use the device's `mac` from `GET /devices` (its MAC, or its client IP while the MAC is unknown). A rule made with a client IP also matches the device after its MAC becomes known. |
 | `created_by` | optional, default `"user"`; exactly `user` \| `voice` \| `agent` |
 
@@ -248,7 +285,7 @@ printable characters. Answers with the stored device and its `name`.
 `hours` is 1 to 168. Returns `{demo: false, source, hours, facts, text}`.
 `source` is `"eddie.db"` when the DNS server's query log (`EDDIE_DB`, read-only)
 has lookups in the window, otherwise `"feed"`: the API's in-memory event list
-(at most 20,000 events, lost on restart), which is what `fake_traffic.py` fills.
+(at most 20,000 events and none older than `EDDIE_RETENTION_DAYS`, lost on restart), which is what `fake_traffic.py` fills.
 The two are never mixed. Database rows are named by device label, else
 "<vendor> device", else "unlabeled device" (all such devices share that name);
 never by MAC, IP or DHCP hostname. Each fact is `{fact, evidence, confidence}`
@@ -271,8 +308,12 @@ facts, text}` computed from `eddie/demo_week.py`: an invented, seeded week
 (devices named "Living room TV (demo)" and "Kids' tablet (demo)", every event
 `demo: true`). `text` starts with `label`. Demo events are generated per
 request and never enter `/events`, the WebSocket feed or `eddie.db`. The
-voice tools only read the live report; "what do they know about me" asks for
-`hours=168`, and the dashboard's live panel does too.
+voice tools only read the live report. An explicit spoken range is sent as
+`hours`; with no range, voice and the dashboard omit it so the API uses all
+locally retained history. The response includes `requested_hours`, actual
+`hours`, `limited_by_retention`, `data_points`, `covered_hours`, and
+`enough_data`. Longer requests are capped to retention with a `notice`; fewer
+than two observations make Eddie say there is not enough data instead of infer.
 
 ## Local voice bridge (port 5173)
 
@@ -285,7 +326,7 @@ Relays to the traffic API (`EDDIE_API_URL`, default `http://127.0.0.1:8000`), so
 | `GET /api/rules` | `GET /rules` | read-only |
 | `GET /api/devices` | `GET /devices?hours=24` | read-only |
 | `GET /api/mode` | `GET /mode` | read-only |
-| `GET /api/what-they-know[?demo=1]` | `GET /what-they-know?hours=168` or `?demo=true` | read-only |
+| `GET /api/what-they-know[?demo=1]` | `GET /what-they-know` (all retained data) or `?demo=true` | read-only |
 | `POST /api/mode` `{home_mode: bool}` | `POST /mode` | answers with the API's echo `{home_mode}`; away mode isn't relayed, so a paired device can't set it |
 | `POST /api/offline-mode` `{offline: bool}` | `POST /offline-mode` | answers with `{offline, applied}`; `applied: false` is passed through |
 
@@ -308,14 +349,14 @@ Confirmation: after Eddie reads back a risky action, the bridge emits `voice_sta
 
 ## Per-device counts and event filters (#29)
 
-`GET /summary?window=15m|1h|24h` (default `1h`; anything else gets 422) adds `window` and `devices`: one row per device label seen in that window, `{device, requests, blocked, flagged, blocked_companies}`, busiest first, where `blocked_companies` is up to three `{company, blocked}` rows. `text` and `companies` still cover the last hour. Like the rest of `/summary`, counts come from the API's in-memory feed (at most 20,000 events), so a busy 24-hour window can be partial.
+`GET /summary?window=15m|1h|24h` (default `1h`; anything else gets 422) adds `window` and `devices`: one row per device label seen in that window, `{device, requests, blocked, flagged, blocked_companies}`, busiest first, where `blocked_companies` is up to three `{company, blocked}` rows. `text` and `companies` still cover the last hour. Like the rest of `/summary`, counts come from the API's in-memory feed (at most 20,000 events, none older than `EDDIE_RETENTION_DAYS`), so a busy 24-hour window can be partial.
 
 `GET /events` also takes `action=allow|block|flag` (anything else gets 422) and `domain=` (exact, already-normalized match). The voice agent uses these for recent blocks and domain explanations.
 
 
 ## Classifier verdicts (#27)
 
-`POST /ai/verdict` takes `{domain, label, confidence, reason, ts}`. Label is `tracker|needed|unsure`, confidence is a finite number in [0,1], reason is printable, at most 14 words and 120 characters, and ts is epoch milliseconds. Unknown fields and invalid values get 422. A successful response is `{ok: true}` and broadcasts `{type: "ai_verdict", ...payload}` to `/ws/events`. This event does not change historical queries, counters, or rules; later DNS decisions use the cached verdict. Like `/ingest`, this existing local API has no authentication and should stay loopback-only. The classifier refuses external API URLs and redirects. The outbox is bounded to 1,000 in-memory events, retried without repeating inference; it is not a durable notification log.
+`POST /ai/verdict` takes `{domain, label, confidence, reason, ts}`. Label is `tracker|needed|unsure`, confidence is a finite number in [0,1], reason is printable, at most 14 words and 120 characters, and ts is epoch milliseconds. Unknown fields and invalid values get 422. A successful response is `{ok: true}` and broadcasts `{type: "ai_verdict", ...payload}` to `/ws/events`. This event does not change historical queries, counters, or rules; later DNS decisions use the cached verdict. Like every write, it needs the API token from anywhere but loopback (see Access below). The classifier refuses external API URLs and redirects. The outbox is bounded to 1,000 in-memory events, retried without repeating inference; it is not a durable notification log.
 
 
 ## Real AI on the scripted demo feed

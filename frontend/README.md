@@ -30,13 +30,13 @@ Supported voice tools: factual backend summaries, explicit home-mode on/off, blo
 
 Under the counts, **rules** lists up to five active rules, newest first (`block device-metrics-us.amazon.com · Fire Stick · by voice`), from `GET /api/rules`, which `serve.py` relays read-only from the traffic API (`EDDIE_API_URL`, default `http://127.0.0.1:8000`) so the iPad needs no CORS or direct API access. It refreshes on connect and on every `rule_change` event, and says `unavailable` if the API or `eddie.db` is not reachable. The device panel (#35, below) sits beside it.
 
-The page no longer has buttons for the report; `window.eddie.renderReport(report)` still shows a report panel above the feed with each fact, its evidence and confidence, from `GET /api/what-they-know` (live, last week, from `eddie.db` when the DNS server has logged lookups, else the in-memory feed; the title says “from eddie.db” in the first case) or `GET /api/what-they-know?demo=1`, both still relayed read-only by `serve.py` (voice uses the live report). The demo report always carries an inverted "DEMO DATA · …" banner and "DEMO WEEK" in its title; live reports never do.
+The page no longer has buttons for the report; `window.eddie.renderReport(report)` still shows a report panel above the feed with each fact, its evidence and confidence, from `GET /api/what-they-know` (live, all retained history, from `eddie.db` when the DNS server has logged lookups, else the in-memory feed; the title says “from eddie.db” in the first case) or `GET /api/what-they-know?demo=1`, both still relayed read-only by `serve.py` (voice uses the live report). The demo report always carries an inverted "DEMO DATA · …" banner and "DEMO WEEK" in its title; live reports never do.
 
 Each `rule_change` adds a `[rule]` feed row and a toast, e.g. “Rule added: block device-metrics-us.amazon.com · Fire Stick · by voice”. The event is sent before DNS acknowledges the rule, so the dashboard says “added”, never “blocked”.
 
 While voice is `confirming`, the overlay shows Eddie's read-back (“Lock down the TV?”) and “SAY YES TO CONFIRM OR NO TO CANCEL”. Both clear on the next reply, on dismissal (Escape, ✕, silence) and when `expires_in_ms` runs out. Nothing is hover-only and nothing is stored in the browser.
 
-Manual check (needs the API and DNS server sharing one `eddie.db`, plus this bridge):
+Manual check (needs the API and DNS server sharing one `eddie.db`, plus this bridge). Against the Docker API, add `-H "Authorization: Bearer $EDDIE_API_TOKEN"` to the `curl` writes below, since it sees the host as remote:
 
 1. Open the dashboard on the Mac and on the iPad (kiosk / Add to Home Screen).
 2. `curl -X POST localhost:8000/rules -H 'Content-Type: application/json' -d '{"pattern":"device-metrics-us.amazon.com","action":"block","created_by":"voice"}'`: both screens show the toast and `[rule]` row, and the list shows the rule.

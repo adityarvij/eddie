@@ -149,6 +149,8 @@ class RulesAPITests(unittest.IsolatedAsyncioTestCase):
                {'pattern': '   ', 'action': 'block'},
                {'pattern': '*', 'action': 'block'},
                {'pattern': '*', 'action': 'allow', 'device_mac': '172.20.10.5'},
+               {'pattern': '*', 'action': 'spoof', 'device_mac': '172.20.10.5'},
+               {'pattern': 'a.com', 'action': 'flag'},
                {'pattern': '*.', 'action': 'block'},
                {'pattern': '*.*', 'action': 'block'},
                {'pattern': '192.168.1.10', 'action': 'block'},
@@ -165,6 +167,12 @@ class RulesAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([], (await self.http.get('/rules')).json())
         self.assertEqual(0, rules.revision(api.rules_db()))
         self.assertEqual([], self.ws.rule_changes())
+
+    async def test_spoof_rule_is_stored(self):
+        with patch.object(api, 'APPLY_TIMEOUT', 0):
+            r = await self.http.post('/rules', json={'pattern': '*.tracker.example', 'action': 'spoof'})
+        self.assertEqual((201, 'spoof'), (r.status_code, r.json()['action']))
+        self.assertEqual(['spoof'], [rule['action'] for rule in (await self.http.get('/rules')).json()])
 
     async def test_created_by_is_user_voice_or_agent(self):
         with patch.object(api, 'APPLY_TIMEOUT', 0):

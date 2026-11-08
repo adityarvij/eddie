@@ -1,7 +1,8 @@
 """Traffic feed: takes events in on /ingest and pushes them out on /ws/events.
 
 The fake generator (scripts/fake_traffic.py) and the DNS server (eddie/feed.py)
-both POST here; Codex's frontend listens on the WebSocket.
+both POST here; Codex's frontend listens on the WebSocket. A lookup of an
+encrypted DNS resolver's name also pushes a bypass_suspected event (bypass.py).
 
 /rules writes user rules to eddie.db (EDDIE_DB, the DNS server's database) and
 waits for the DNS server to load them before answering; see docs/EVENTS.md.
@@ -12,9 +13,15 @@ eddie.db and waits for DNS to load it the same way (offline.py).
 POST /mode {"away": ...} does the same for away mode (away.py), after
 ranking which devices it covers from the query log.
 
+Writes (POST, PUT, DELETE) from anywhere but loopback need EDDIE_API_TOKEN as
+a bearer token (#96). Browsers may only write or open /ws/events from this
+machine's own pages; see allowed_origin.
+
 Run: uv run uvicorn eddie.api:app --host 0.0.0.0 --port 8000
 """
 import asyncio
+import hmac
+import ipaddress
 import itertools
 import json
 import os
@@ -22,26 +29,95 @@ import sqlite3
 import time
 from collections import deque
 from typing import Literal
+from urllib.parse import urlsplit
 
-from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 
-from . import away, beacons, demo_week, devices, inferences, insights, labels, offline, rules, store
+from . import away, beacons, bypass, demo_week, devices, inferences, insights, labels, offline, rules, store
 from .events import Action, AIVerdictEvent, ModeUpdate, OfflineUpdate, QueryEvent
 
 # In memory for now; SQLite (store.py) replaces this once the DNS side lands.
 recent: deque[dict] = deque(maxlen=20000)
+# The feed keeps no more history than eddie.db does (#129).
+FEED_RETENTION_MS = int(float(os.environ.get("EDDIE_RETENTION_DAYS", store.RETENTION_DAYS)) * 86_400_000)
 totals = {"seen": 0, "blocked": 0}
 state = {"home_mode": False}
 clients: set[WebSocket] = set()
 ai_verdicts: dict[str, dict] = {}
 timing = {"beacons": beacons.Beacons(), "idle": beacons.Idle()}  # beacon_s and idle on each event (#24)
+suspicions = bypass.Suspicions()  # bypass_suspected events (#97)
+bypass_recent: deque[dict] = deque(maxlen=50)
 ids = itertools.count(1)
 db: dict[str, sqlite3.Connection | None] = {"conn": None}
 APPLY_TIMEOUT = 2.0  # seconds to wait for DNS to load a rule or offline change (it polls every 0.2 s)
 APPLY_POLL = 0.02
 
 app = FastAPI(title="Eddie traffic")
+WRITES = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+def is_loopback(host: str | None) -> bool:
+    try:
+        ip = ipaddress.ip_address(host or "")
+    except ValueError:
+        return False
+    return (getattr(ip, "ipv4_mapped", None) or ip).is_loopback
+
+
+def authorized(header: str | None) -> bool:
+    """A bearer token matching EDDIE_API_TOKEN. With no token set, nothing off loopback may write."""
+    token = os.environ.get("EDDIE_API_TOKEN", "")
+    scheme, _, value = (header or "").partition(" ")
+    return bool(token) and scheme.lower() == "bearer" and hmac.compare_digest(value.strip().encode(), token.encode())
+
+
+def allowed_origin(origin: str | None, host: str | None) -> bool:
+    """No Origin (not a browser), a loopback page, or a page on the host this request names.
+
+    The host must be an IP, localhost or .local, never a domain that could rebind to this machine.
+    """
+    if not origin:
+        return True
+    try:
+        page, ours = urlsplit(origin).hostname, urlsplit("//" + (host or "")).hostname
+    except ValueError:
+        return False
+    if page is None:  # "null": a sandboxed frame or a file
+        return False
+    if page == "localhost" or is_loopback(page):
+        return True
+    if page != ours:
+        return False
+    try:
+        ipaddress.ip_address(page)
+        return True
+    except ValueError:
+        return page.rstrip(".").endswith(".local")
+
+
+@app.middleware("http")
+async def guard_writes(request: Request, call_next):
+    if request.method in WRITES:
+        if not allowed_origin(request.headers.get("origin"), request.headers.get("host")):
+            return JSONResponse({"detail": "Writes only come from Eddie's own pages."}, 403)
+        client = request.client.host if request.client else None
+        if not is_loopback(client) and not authorized(request.headers.get("authorization")):
+            return JSONResponse({"detail": "Send Authorization: Bearer <EDDIE_API_TOKEN>."}, 401)
+    return await call_next(request)
+
+
+def feed() -> deque[dict]:
+    """The live feed, after dropping events older than the retention window.
+
+    Events arrive roughly in time order, so trimming from the oldest end is enough.
+    Called on every read and ingest, so history expires even while the network is idle.
+    """
+    cutoff = int(time.time() * 1000) - FEED_RETENTION_MS
+    while recent and recent[0]["ts"] < cutoff:
+        del recent[0]
+    return recent
 
 
 async def broadcast(msg: dict) -> None:
@@ -56,16 +132,22 @@ async def broadcast(msg: dict) -> None:
 @app.post("/ingest")
 async def ingest(body: QueryEvent | list[QueryEvent]):
     events = body if isinstance(body, list) else [body]
+    cutoff = int(time.time() * 1000) - FEED_RETENTION_MS
+    feed()
     for ev in events:
         company, category = labels.lookup(ev.domain)
         every = timing["beacons"].observe(ev.device_mac, ev.domain, ev.ts)
         idle = timing["idle"].observe(ev.device_mac, ev.ts, ev.action == "allow" and category in labels.HUMAN)
         row = {**ev.model_dump(), "id": next(ids), "company": company, "category": category,
                "beacon_s": every and round(every / 1000), "idle": idle}
-        recent.append(row)
+        if ev.ts >= cutoff:  # already past retention: still counted and broadcast, never kept
+            recent.append(row)
         totals["seen"] += 1
         totals["blocked"] += ev.action == "block"
         await broadcast(row)
+        if suspect := suspicions.observe(row):
+            bypass_recent.append(suspect)
+            await broadcast(suspect)
     await broadcast({"type": "totals", **totals})
     return {"ok": True, "count": len(events)}
 
@@ -89,29 +171,47 @@ def cached_ai_verdicts():
 @app.get("/events")
 def events(since: int = 0, device: str | None = None, limit: int = 200,
            action: Action | None = None, domain: str | None = None):
-    rows = [e for e in recent if e["ts"] > since and (device is None or e["device"] == device)
+    rows = [e for e in feed() if e["ts"] > since and (device is None or e["device"] == device)
             and (action is None or e["action"] == action) and (domain is None or e["domain"] == domain)]
     return rows[-limit:]
 
 
 @app.get("/summary")
 def summary(window: Literal["15m", "1h", "24h"] = "1h"):
+    events = list(feed())
     # text and companies cover the last hour; devices covers the requested window.
-    return {**totals, "home_mode": state["home_mode"], "text": insights.summary_text(list(recent)),
-            "companies": insights.company_counts(list(recent)), "company_window_seconds": 3600,
-            "window": window, "devices": insights.device_counts(list(recent), insights.WINDOWS_MS[window])}
+    return {**totals, "home_mode": state["home_mode"], "text": insights.summary_text(events),
+            "companies": insights.company_counts(events), "company_window_seconds": 3600,
+            "window": window, "devices": insights.device_counts(events, insights.WINDOWS_MS[window])}
+
+
+def report_limit_hours() -> int:
+    """The longest honest report is the configured on-device retention window."""
+    try:
+        days = float(os.environ.get("EDDIE_RETENTION_DAYS", store.RETENTION_DAYS))
+    except ValueError:
+        days = store.RETENTION_DAYS
+    return max(1, int(days * 24))
 
 
 @app.get("/what-they-know")
-def what_they_know(hours: int = Query(24, ge=1, le=168), demo: bool = False):
+def what_they_know(hours: int | None = Query(None, ge=1, le=8760), demo: bool = False):
     if demo:  # the seeded week, generated here and never mixed with real traffic
         facts = inferences.compute_facts(demo_week.events(int(time.time() * 1000)), 168)
         return {"demo": True, "label": demo_week.LABEL, "hours": 168, "facts": facts,
                 "text": f"{demo_week.LABEL} {inferences.spoken_text(facts, 168)}"}
-    events, source = report_events(hours)
-    facts = inferences.compute_facts(events, hours)
-    return {"demo": False, "source": source, "hours": hours, "facts": facts,
-            "text": inferences.spoken_text(facts, hours)}
+    limit = report_limit_hours()
+    requested = hours or limit
+    actual = min(requested, limit)
+    events, source = report_events(actual)
+    facts = inferences.compute_facts(events, actual)
+    quality = inferences.data_quality(events, actual)
+    limited = requested > actual
+    notice = (f"I only retain the last {inferences.period(actual)}, so I used all available data."
+              if limited else None)
+    return {"demo": False, "source": source, "requested_hours": requested, "hours": actual,
+            "limited_by_retention": limited, "notice": notice, "facts": facts, **quality,
+            "text": " ".join(filter(None, (notice, inferences.spoken_text(facts, actual, quality["enough_data"]))))}
 
 
 def report_events(hours: int) -> tuple[list[dict], str]:
@@ -132,7 +232,7 @@ def report_events(hours: int) -> tuple[list[dict], str]:
                 return events, "eddie.db"
         except sqlite3.Error:
             pass  # no queries table yet, or unreadable: the feed is all there is
-    return list(recent), "feed"
+    return list(feed()), "feed"
 
 
 @app.get("/mode")
@@ -281,12 +381,16 @@ async def label_device(key: str, body: LabelIn):
 
 @app.websocket("/ws/events")
 async def ws_events(ws: WebSocket):
+    if not allowed_origin(ws.headers.get("origin"), ws.headers.get("host")):
+        await ws.close(code=1008)  # before accept, so the handshake gets 403
+        return
     await ws.accept()
     clients.add(ws)
     await ws.send_text(json.dumps({
         "type": "snapshot",
-        "events": list(recent)[-60:],
+        "events": list(feed())[-60:],
         "ai_verdicts": list(ai_verdicts.values()),
+        "bypass": list(bypass_recent),
         "totals": totals,
         "home_mode": state["home_mode"],
     }))

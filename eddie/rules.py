@@ -29,7 +29,7 @@ COLUMNS = ("id", "scope", "device_mac", "pattern", "action", "created_by", "ts")
 
 class RuleIn(BaseModel):
     pattern: str
-    action: Literal["allow", "block"]
+    action: Literal["allow", "block", "spoof"]
     device_mac: str | None = None  # None for a rule that covers every device
     created_by: Literal["user", "voice", "agent"] = "user"
 
