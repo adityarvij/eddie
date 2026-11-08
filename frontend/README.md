@@ -109,6 +109,22 @@ The server binds only to localhost for the laptop demo. External fonts, analytic
 
 Calling Eddie opens a larger animated character with listening, thinking and speaking states. After “Hey Eddie” and after each reply, Eddie keeps listening for a follow-up without the wake phrase. If nothing is said for 4 seconds, Eddie disappears and the live feed comes back; the next request starts with “Hey Eddie” again. A preview opened with **Wake Eddie** or **Space** while the microphone is off also closes after 4 seconds. There is no typed input. Transcripts and replies are not displayed beneath Eddie; speech is the primary response.
 
+### Role visual contract (#159)
+
+The voice view contains one Eddie SVG and one voice-state overlay. `EDDIE_VISUALS` in `app.js` is the single state-to-visual map:
+
+| Acknowledged role | Accessory | Stance | Motion |
+| --- | --- | --- | --- |
+| regular | none | upright | attentive |
+| home | roof cap above the head | settled | slow breathing |
+| kid | propeller cap above the head | playful | bounce |
+| concierge | top hat above the head | formal | hat tip |
+| away | suitcase beside the body | ready | travel sway |
+
+Explicit acknowledged session state takes precedence, followed by acknowledged away, kid and home mode state. Pending changes are deliberately excluded from the map, so the current accessory stays in place until the backend acknowledges a change. Unknown, loading and disconnected state render regular Eddie. Accessories stay outside the eye and mouth region, and CSS scales the same character at laptop and iPad kiosk sizes. `prefers-reduced-motion: reduce` removes breathing, bounce, hat-tip and travel motion while leaving the accessory and stance visible.
+
+Role styling never sets voice colors: listening, ready, thinking and confirming retain the yellow edge light, and speaking retains blue for all five roles. `role_state` and `session_state` events are accepted only with `acknowledged: true`; `{pending: true}` is ignored. Mode snapshots continue to derive home, kid and away roles only from backend values.
+
 **Open logs** just below Eddie opens a live drawer of the same recent network activity shown by the main feed. Closing the drawer leaves Eddie open. Escape or the top close control dismisses Eddie. This drawer does not persist microphone audio or speech transcripts.
 
 
