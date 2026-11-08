@@ -12,6 +12,8 @@ import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import playback
+
 MAX_ITEMS = 20
 MAX_TIMER = 24 * 3600
 MAX_REMINDER_DAYS = 7
@@ -386,5 +388,4 @@ def play_alarm(sd=None):
         import sounddevice as sd
     path = os.environ.get('EDDIE_ALARM_SOUND')
     samples, rate = wav_sound(path) if path else chime()
-    sd.play(samples, rate)
-    sd.wait()
+    playback.play(sd, samples, rate)

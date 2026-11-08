@@ -21,6 +21,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT.parent / 'voice'))
 import guest
+import playback
 import timers
 import voice_agent
 from voice_agent import confirmation, forget_conversation, kid_mode_change, question_announcement, request as api_request, respond
@@ -139,8 +140,7 @@ def answer(text, reply=None, alarm=None):
                 import sounddevice as sd
                 voice = PiperVoice.load(piper_model)
                 for chunk in voice.synthesize(response):
-                    sd.play(np.frombuffer(chunk.audio_int16_bytes, dtype=np.int16), chunk.sample_rate)
-                    sd.wait()
+                    playback.play(sd, np.frombuffer(chunk.audio_int16_bytes, dtype=np.int16), chunk.sample_rate)
             elif sys.platform == 'darwin':
                 subprocess.run(['/usr/bin/say', response], check=True, timeout=45)
             elif sys.platform == 'win32':
