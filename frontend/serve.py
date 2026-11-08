@@ -92,6 +92,10 @@ def authorized(header):
     scheme, _, value = (header or '').partition(' ')
     return scheme.lower() == 'bearer' and hmac.compare_digest(value.strip().encode(), token.encode())
 
+def ollama_agent_enabled(env=None):
+    """The generative voice agent is an explicit opt-in; MiniLM is independent."""
+    return (os.environ if env is None else env).get('EDDIE_AGENT', 'off') != 'off'
+
 def lan_ip():
     """This machine's address on its default route, or None when offline. Nothing is sent."""
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -434,7 +438,9 @@ if __name__ == '__main__':
         print('Local question intents: MiniLM ONNX (offline).', flush=True)
     except Exception as error:
         print(f'Local question intents off: {error}.', flush=True)
-    if os.environ.get('EDDIE_AGENT', 'ollama') != 'off':
+    # MiniLM and the deterministic command parsers cover the supported voice path.
+    # Ollama is an explicit development opt-in because it is too slow on the Pi.
+    if ollama_agent_enabled():
         import ollama_agent
         import voice_agent
         try:
