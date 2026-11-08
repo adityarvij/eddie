@@ -8,6 +8,10 @@ First match wins:
 3. Blocklist, then, only while block_doh is on (EDDIE_BLOCK_DOH=on), the
    encrypted DNS resolver names in bypass.RESOLVERS (#97).
 4. Keyword heuristic on the domain's labels.
+   Away mode (#109, away.py): for a device it covers, until its end time, a
+   domain labelled telemetry, ads, analytics or tracking (labels.py) is
+   blocked here, and steps 5 and 6 block where they would flag a tracker
+   or a beacon. Source away_mode.
 5. Cached AI verdict: needed allows; tracker flags as a likely tracker;
    unsure flags. The AI never blocks on its own: on real traffic the local
    model called Google's static files, Apple's update servers and Safe
@@ -42,6 +46,7 @@ from dataclasses import dataclass
 from .beacons import Beacons
 from .bypass import RESOLVERS
 from .events import Action, Source
+from .labels import DOMAINS, TRACKING
 
 KEYWORDS = ("metrics", "telemetry", "analytics", "adsystem", "tracking", "beacon", "crashlytics")
 # Too short to match inside a label (uploads, blog, login), so these must be a
@@ -51,6 +56,8 @@ UNKNOWN = "unknown, waiting for classifier"
 BEACON = "looked up every {} s, likely telemetry; waiting for classifier"
 
 _WORD_SPLIT = re.compile(r"[^a-z]+")
+# Labelled tracking domains (labels.py) away mode blocks for the devices it covers.
+TELEMETRY = frozenset(d for d, (_, category) in DOMAINS.items() if category in TRACKING)
 
 
 @dataclass(frozen=True)
@@ -79,6 +86,17 @@ class Verdict:
     label: str  # tracker / needed / unsure
     confidence: float
     reason: str = ""
+
+
+@dataclass(frozen=True)
+class Away:
+    """Away mode as the DNS server last loaded it (away.py)."""
+    devices: frozenset[str] = frozenset()  # device keys covered; empty when away is off
+    until: int = 0  # end time in ms, 0 for none
+
+    def covers(self, device: str, ip: str | None, now_ms: int) -> bool:
+        return (bool(self.devices) and (device in self.devices or ip in self.devices)
+                and (not self.until or now_ms < self.until))
 
 
 def normalize(domain: str) -> str:
@@ -154,6 +172,7 @@ class Engine:
         self.allowlist: frozenset[str] = frozenset()
         self.blocklist: frozenset[str] = frozenset()
         self.verdicts: dict[str, Verdict] = {}
+        self.away = Away()
         self.beacons = Beacons()
         self.block_doh = False  # block the resolver names in bypass.RESOLVERS
 
@@ -167,12 +186,19 @@ class Engine:
     def set_verdicts(self, verdicts: dict[str, Verdict]) -> None:
         self.verdicts = {normalize(d): v for d, v in verdicts.items()}
 
+    def set_away(self, devices, until: int = 0) -> None:
+        self.away = Away(frozenset(devices), until)
+
     def load_from_store(self, conn: sqlite3.Connection) -> None:
-        """Replace rules and cached AI verdicts with what's in eddie.db."""
+        """Replace rules, cached AI verdicts and away mode with what's in eddie.db."""
         self.set_rules(Rule.from_row(r) for r in conn.execute(
             "SELECT id, scope, device_mac, pattern, action FROM rules"))
         self.set_verdicts({d: Verdict(label, confidence, reason or "") for d, label, confidence, reason
                            in conn.execute("SELECT domain, label, confidence, reason FROM ai_verdicts")})
+        on = conn.execute("SELECT value FROM engine_state WHERE key = 'away'").fetchone()
+        end = conn.execute("SELECT value FROM engine_state WHERE key = 'away_until'").fetchone()
+        devices = [r[0] for r in conn.execute("SELECT mac FROM away_devices WHERE security = 0")]
+        self.set_away(devices if on and on[0] else (), end[0] if end else 0)
 
     def evaluate(self, domain: str, device: str, ip: str | None = None, now_ms: int | None = None) -> Decision:
         domain = normalize(domain)
@@ -194,14 +220,22 @@ class Engine:
             return Decision("block", "blocklist", f"encrypted DNS resolver {entry}")
         if kw := keyword(domain):
             return Decision("block", "heuristic", f'keyword "{kw}"')
+        now_ms = int(time.time() * 1000) if now_ms is None else now_ms
+        away = self.away.covers(device, ip, now_ms)
+        if away and (entry := matches(domain, TELEMETRY)):
+            return Decision("block", "away_mode", f"away mode: {entry} telemetry")
         if verdict := self.verdicts.get(domain):
             if verdict.label == "tracker":
+                if away:
+                    return Decision("block", "away_mode", f"away mode: likely tracker: {verdict.reason}"
+                                    if verdict.reason else "away mode: likely tracker")
                 return Decision("flag", "ai", f"likely tracker: {verdict.reason}" if verdict.reason else "likely tracker")
             if verdict.label == "needed":
                 return Decision("allow", "ai", verdict.reason)
             return Decision("flag", "ai", verdict.reason)
-        now_ms = int(time.time() * 1000) if now_ms is None else now_ms
         if every := self.beacons.observe(device, domain, now_ms):
+            if away:
+                return Decision("block", "away_mode", f"away mode: looked up every {round(every / 1000)} s, likely telemetry")
             return Decision("flag", "heuristic", BEACON.format(round(every / 1000)))
         return Decision("flag", "default", UNKNOWN)
 

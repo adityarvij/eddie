@@ -10,6 +10,8 @@ waits for the DNS server to load them before answering; see docs/EVENTS.md.
 from its query log, and stores user labels (devices.py).
 /offline-mode turns the DNS server's upstream forwarding off or on through
 eddie.db and waits for DNS to load it the same way (offline.py).
+POST /mode {"away": ...} does the same for away mode (away.py), after
+ranking which devices it covers from the query log.
 
 Writes (POST, PUT, DELETE) from anywhere but loopback need EDDIE_API_TOKEN as
 a bearer token (#96). Browsers may only write or open /ws/events from this
@@ -33,7 +35,7 @@ from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocket
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 
-from . import beacons, bypass, demo_week, devices, inferences, insights, labels, offline, rules, store
+from . import away, beacons, bypass, demo_week, devices, inferences, insights, labels, offline, rules, store
 from .events import Action, AIVerdictEvent, ModeUpdate, OfflineUpdate, QueryEvent
 
 # In memory for now; SQLite (store.py) replaces this once the DNS side lands.
@@ -235,14 +237,19 @@ def report_events(hours: int) -> tuple[list[dict], str]:
 
 @app.get("/mode")
 async def get_mode():  # async: the shared connection stays on the event loop thread
-    return {"home_mode": state["home_mode"], **offline_state()}
+    return {"home_mode": state["home_mode"], **offline_state(), **away_state()}
 
 
 @app.post("/mode")
 async def set_mode(body: ModeUpdate):
-    state["home_mode"] = body.home_mode
-    await broadcast({"type": "mode", "home_mode": body.home_mode})
-    return {"home_mode": body.home_mode}
+    result = {}
+    if body.away is not None:  # first: it can fail (no eddie.db), and then nothing changes
+        result.update(await set_away(body.away, body.away_until))
+    if body.home_mode is not None:
+        state["home_mode"] = body.home_mode
+        await broadcast({"type": "mode", "home_mode": body.home_mode})
+        result["home_mode"] = body.home_mode
+    return result
 
 
 def rules_db() -> sqlite3.Connection:
@@ -289,6 +296,37 @@ async def set_offline_mode(body: OfflineUpdate):
     applied = await wait_applied(conn, rev, offline.loaded)
     await broadcast({"type": "offline_mode", "offline": body.offline, "applied": applied})
     return {"offline": body.offline, "applied": applied}
+
+
+def away_state() -> dict:
+    """away: on and not past away_until. away_applied: whether DNS has loaded the last change."""
+    if os.environ.get("EDDIE_DB", "eddie.db") == "off":
+        return {"away": False, "away_until": None, "away_applied": False, "away_devices": [], "away_exempt": []}
+    conn = rules_db()
+    on = away.active(conn, int(time.time() * 1000))
+    covered, exempt = away.stored(conn) if on else ([], [])
+    return {"away": on, "away_until": (away.until(conn) or None) if on else None,
+            "away_applied": away.loaded(conn) >= away.revision(conn), "away_devices": covered, "away_exempt": exempt}
+
+
+def away_ranking() -> tuple[list[dict], list[dict]]:
+    """away.rank on its own read-only connection, for a worker thread: a week of rows."""
+    conn = sqlite3.connect(f"file:{os.environ.get('EDDIE_DB', 'eddie.db')}?mode=ro", uri=True)
+    try:
+        return away.rank(conn, int(time.time() * 1000))
+    finally:
+        conn.close()
+
+
+async def set_away(on: bool, until_ms: int | None) -> dict:
+    conn = rules_db()
+    covered, exempt = await asyncio.to_thread(away_ranking) if on else ([], [])
+    rev = away.write(conn, on, until_ms, covered, exempt)
+    result = {"away": on, "away_until": until_ms if on else None,
+              "away_applied": await wait_applied(conn, rev, away.loaded),
+              "away_devices": covered, "away_exempt": exempt}
+    await broadcast({"type": "away_mode", **result})
+    return result
 
 
 @app.get("/rules")

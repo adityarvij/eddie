@@ -20,7 +20,8 @@ devices.DeviceMap maps each client IP to its MAC from the ARP table, read in a
 worker thread, and records the devices seen in eddie.db (#14).
 Offline mode (#26, offline.py) is loaded the same way: while it's on, nothing
 is forwarded and allowed lookups get the answer kept from the last time they
-were forwarded, or SERVFAIL.
+were forwarded, or SERVFAIL. Away mode (#109, away.py) is loaded with the
+rules: the devices it covers and its end time go into the decision engine.
 EDDIE_BLOCK_DOH=on blocks the encrypted DNS resolver names in bypass.py (#97).
 Each decision is also sent to the live feed (POST /ingest on the local API)
 by feed.FeedPublisher, off the reply path; EDDIE_FEED=off turns that off.
@@ -38,7 +39,7 @@ import time
 
 from dnslib import AAAA, QTYPE, RCODE, RR, A, DNSRecord
 
-from . import decision, devices, lists, offline, rules
+from . import away, decision, devices, lists, offline, rules
 from . import store
 from .feed import FeedPublisher, feed_from_env, query_event
 from .store import QueryLog, query_log_from_env
@@ -204,11 +205,11 @@ async def serve(host: str, port: int, upstreams: list[tuple[str, int]],
 
 
 class StoreWatcher:
-    """Reloads rules, AI verdicts and offline mode when they change.
+    """Reloads rules, AI verdicts, offline mode and away mode when they change.
 
-    After a reload it records the rules and offline revisions it loaded
-    (rules.mark_loaded, offline.mark_loaded): the API's proof that DNS is
-    enforcing a change.
+    After a reload it records the rules, offline and away revisions it loaded
+    (rules.mark_loaded, offline.mark_loaded, away.mark_loaded): the API's
+    proof that DNS is enforcing a change.
     """
 
     def __init__(self, path: str, engine: decision.Engine = decision.engine, mode: offline.Mode | None = None):
@@ -223,7 +224,8 @@ class StoreWatcher:
             "SELECT (SELECT count(*) || ':' || ifnull(max(id), 0) || ':' || ifnull(max(ts), 0) FROM rules),"
             " (SELECT count(*) || ':' || ifnull(max(ts), 0) FROM ai_verdicts),"
             " (SELECT ifnull(max(value), 0) FROM engine_state WHERE key = 'rules_rev'),"
-            " (SELECT ifnull(max(value), 0) FROM engine_state WHERE key = 'offline_rev')").fetchone()
+            " (SELECT ifnull(max(value), 0) FROM engine_state WHERE key = 'offline_rev'),"
+            " (SELECT ifnull(max(value), 0) FROM engine_state WHERE key = 'away_rev')").fetchone()
         if changed == self.seen:
             return False
         self.engine.load_from_store(self.conn)
@@ -234,6 +236,7 @@ class StoreWatcher:
         # already loaded, and the next poll records it.
         rules.mark_loaded(self.conn, changed[2])
         offline.mark_loaded(self.conn, changed[3])
+        away.mark_loaded(self.conn, changed[4])
         self.seen = changed
         return True
 
