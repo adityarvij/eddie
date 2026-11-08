@@ -54,6 +54,7 @@
 .panels{display:grid;grid-template-columns:1fr 1fr;gap:0 40px}.panels .rules{margin-top:0}
 .device-panel{color:#aaa;font-size:12px;margin:0 0 20px;min-width:0}.device-panel ul{list-style:none;margin:6px 0 0;padding:0}
 .device-panel li{color:#ddd;padding:2px 0;overflow-wrap:anywhere}.device-panel li small{display:block;color:#777;font-size:11px}
+.device-panel li.pending,.device-panel li.denied{color:#fbbf24}.device-panel li.denied{color:#f87171}.device-panel li button{margin:0 0 0 8px;font:inherit;font-size:11px}
 @media(max-width:700px){.panels{grid-template-columns:1fr}}
 /* Home mode is a house icon beside the heading: outlined off, filled on, dashed while waiting for the backend. */
 .terminal-heading{display:flex;align-items:center}

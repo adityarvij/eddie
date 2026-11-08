@@ -17,7 +17,9 @@ show "Fire Stick" without reading the database during a lookup; a new label
 reaches the feed at the next read (at most READ_EVERY).
 
 Only devices that look something up through Eddie are written to the devices
-table, never every ARP neighbour. Rows without a label are pruned with the
+table, never every ARP neighbour. Each MAC written is also checked against
+device_status (quarantine.py, #98); refresh returns the ones never seen before,
+so the DNS server can send a new_device alert. Rows without a label are pruned with the
 query log (store.prune); labels are user settings and are kept.
 """
 import json
@@ -30,7 +32,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import store
+from . import quarantine, store
 
 READ_EVERY = 30.0  # seconds between ARP reads when no new device has appeared
 TICK = 1.0  # seconds between checks for new client IPs
@@ -199,14 +201,17 @@ class DeviceMap:
         self.seen, self.new = set(), set()
         return seen, new
 
-    def refresh(self, seen: set[str], new: set[str], now_ms: int | None = None) -> None:
-        """Read ARP and the leases file, then record the devices seen. Blocking: run in a thread."""
+    def refresh(self, seen: set[str], new: set[str], now_ms: int | None = None) -> list[dict]:
+        """Read ARP and the leases file, then record the devices seen. Blocking: run in a thread.
+
+        Returns a new_device alert (docs/EVENTS.md) for each MAC seen for the first time.
+        """
         self.last_read = time.monotonic()
         macs = self.read()
         self.macs = macs
         self.tried = (self.tried | {ip for ip in new if ip not in macs}) if len(self.tried) < MAX_TRACKED else set()
         hostnames = read_leases(self.leases)
-        labels = {}
+        labels, arrived = {}, []
         if not self.db_path:
             self.recorded = set(macs.values())  # nothing to record
         else:
@@ -216,10 +221,19 @@ class DeviceMap:
                 now_ms = int(time.time() * 1000) if now_ms is None else now_ms
                 upsert(self.conn, seen, macs, hostnames, now_ms)
                 written = {macs[ip] for ip in seen if ip in macs}
+                fresh = quarantine.record_new(self.conn, written - self.recorded, now_ms)
+                if fresh:
+                    on = quarantine.wanted(self.conn)
+                    ips = {mac: ip for ip, mac in macs.items() if ip in seen}
+                    arrived = [{"type": "new_device", "ts": now_ms, "device_mac": mac,
+                                "device": display_name(mac, None, hostnames.get(mac), vendor(mac)),
+                                "ip": ips.get(mac), "vendor": vendor(mac), "hostname": hostnames.get(mac),
+                                "quarantine": on} for mac in fresh]
                 self.recorded = (self.recorded | written) if len(self.recorded) < MAX_TRACKED else written
             labels = dict(self.conn.execute("SELECT mac, label FROM devices WHERE label IS NOT NULL"))
         names = {mac: hostnames.get(mac) or (f"{v} device" if (v := vendor(mac)) else None) for mac in macs.values()}
         self.names = {k: n for k, n in names.items() if n} | labels
+        return arrived
 
     def close(self) -> None:
         if self.conn:
@@ -233,12 +247,14 @@ def _row(row) -> dict:
 def all_devices(conn: sqlite3.Connection, since_ms: int) -> list[dict]:
     """Every known device plus any key in the query log since since_ms, with lookup counts.
 
-    blocked counts lookups Eddie blocked (trackers, ads, rules); flagged ones
+    status is approved, pending (new, not decided) or denied (quarantine.py),
+    None for a device keyed by IP or not yet checked. blocked counts lookups Eddie blocked (trackers, ads, rules); flagged ones
     were forwarded while unknown. trackers counts distinct blocked domains, and
     recent_blocks holds the last RECENT_BLOCKS of them, newest first.
     Most blocked first.
     """
     devices = {r[0]: _row(r) for r in conn.execute(f"SELECT {', '.join(COLUMNS)} FROM devices")}
+    status = quarantine.statuses(conn)
     counts = {key: (n, blocked or 0, flagged or 0, last) for key, n, blocked, flagged, last in conn.execute(
         "SELECT device_mac, COUNT(*), SUM(action = 'block'), SUM(action = 'flag'), MAX(ts)"
         " FROM queries WHERE ts >= ? GROUP BY device_mac", (since_ms,))}
@@ -252,7 +268,7 @@ def all_devices(conn: sqlite3.Connection, since_ms: int) -> list[dict]:
         d = devices.get(key) or dict.fromkeys(COLUMNS) | {"mac": key}
         n, blocked, flagged, last = counts.get(key, (0, 0, 0, None))
         domains = sorted(blocks.get(key, ()), reverse=True)
-        out.append({**d, "name": display_name(key, d["label"], d["hostname"], d["vendor"]),
+        out.append({**d, "name": display_name(key, d["label"], d["hostname"], d["vendor"]), "status": status.get(key),
                     "last_seen": max(filter(None, (d["last_seen"], last)), default=None),
                     "queries": n, "blocked": blocked, "flagged": flagged, "trackers": len(domains),
                     "recent_blocks": [{"domain": dom, "ts": ts} for ts, dom in domains[:RECENT_BLOCKS]]})

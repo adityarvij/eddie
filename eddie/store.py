@@ -2,7 +2,8 @@
 
 The schema is the one in README "SQLite schema" and is created on first open,
 plus engine_state: the rules revision written and the one DNS has loaded
-(rules.py).
+(rules.py), and device_status: which MACs are approved, new or denied
+(quarantine.py, #98).
 QueryLog keeps disk off the DNS hot path: log() only drops a row on an
 in-memory queue, and one writer thread batches rows into SQLite. If the
 queue is full (disk stalled), rows are dropped and counted, never waited on.
@@ -29,6 +30,7 @@ CREATE TABLE IF NOT EXISTS queries (id INTEGER PRIMARY KEY, ts INTEGER, device_m
 CREATE TABLE IF NOT EXISTS rules (id INTEGER PRIMARY KEY, scope TEXT, device_mac TEXT, pattern TEXT, action TEXT, created_by TEXT, ts INTEGER);
 CREATE TABLE IF NOT EXISTS ai_verdicts (domain TEXT PRIMARY KEY, label TEXT, confidence REAL, reason TEXT, ts INTEGER);
 CREATE TABLE IF NOT EXISTS engine_state (key TEXT PRIMARY KEY, value INTEGER);
+CREATE TABLE IF NOT EXISTS device_status (mac TEXT PRIMARY KEY, status TEXT, first_seen INTEGER, decided_at INTEGER);
 CREATE INDEX IF NOT EXISTS q_ts ON queries(ts);
 CREATE INDEX IF NOT EXISTS q_dev ON queries(device_mac, ts);
 """
@@ -70,7 +72,9 @@ def prune(conn: sqlite3.Connection, retention_days: float, now_ms: int | None = 
 
     Verdicts go too: the list of domains the household looked up is history
     even without times. A domain seen again is simply classified again.
-    Devices the user labeled are settings, like rules, and are kept.
+    Devices the user labeled are settings, like rules, and are kept, and so
+    are approved and denied MACs; a new MAC nobody decided on is forgotten
+    with its devices row, and alerts again if it comes back.
     Returns rows deleted.
     """
     now_ms = int(time.time() * 1000) if now_ms is None else now_ms
@@ -80,6 +84,8 @@ def prune(conn: sqlite3.Connection, retention_days: float, now_ms: int | None = 
         deleted += conn.execute("DELETE FROM ai_verdicts WHERE ts < ?", (cutoff,)).rowcount
         deleted += conn.execute("DELETE FROM devices WHERE label IS NULL AND ifnull(last_seen, 0) < ?",
                                 (cutoff,)).rowcount
+        deleted += conn.execute("DELETE FROM device_status WHERE status = 'pending'"
+                                " AND mac NOT IN (SELECT mac FROM devices)").rowcount
     if deleted:
         conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")  # don't leave old pages in the WAL
     return deleted

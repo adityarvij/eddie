@@ -19,6 +19,8 @@ def upstream_answer(name, ttl=300):
     return request, reply.pack()
 
 
+QUARANTINE_OFF = {'quarantine': False, 'quarantine_applied': True}  # GET /mode also reports quarantine (#98)
+
 class CacheTests(unittest.TestCase):
     def test_answer_takes_the_request_id_and_question_and_ages_ttls(self):
         mode = offline.Mode()
@@ -130,13 +132,13 @@ class OfflineAPITests(unittest.IsolatedAsyncioTestCase):
 
     async def test_toggle_is_acknowledged_by_dns_and_shown_in_mode(self):
         await self.start_dns()
-        self.assertEqual({'home_mode': False, 'offline': False, 'offline_applied': True},
+        self.assertEqual({'home_mode': False, 'offline': False, 'offline_applied': True, **QUARANTINE_OFF},
                          (await self.http.get('/mode')).json())
 
         r = await self.http.post('/offline-mode', json={'offline': True})
         self.assertEqual({'offline': True, 'applied': True}, r.json())
         self.assertTrue(self.mode.on)
-        self.assertEqual({'home_mode': False, 'offline': True, 'offline_applied': True},
+        self.assertEqual({'home_mode': False, 'offline': True, 'offline_applied': True, **QUARANTINE_OFF},
                          (await self.http.get('/mode')).json())
         self.assertEqual(RCODE.SERVFAIL, (await self.ask('news.example')).header.rcode)
         self.assertEqual(0, self.upstream.seen)
@@ -159,7 +161,7 @@ class OfflineAPITests(unittest.IsolatedAsyncioTestCase):
             r = await self.http.post('/offline-mode', json={'offline': True})
         self.assertEqual({'offline': True, 'applied': False}, r.json())
         self.assertEqual([{'type': 'offline_mode', 'offline': True, 'applied': False}], ws.sent)
-        self.assertEqual({'home_mode': False, 'offline': True, 'offline_applied': False},
+        self.assertEqual({'home_mode': False, 'offline': True, 'offline_applied': False, **QUARANTINE_OFF},
                          (await self.http.get('/mode')).json())
 
     async def test_dns_restart_loads_the_stored_state(self):
@@ -174,7 +176,8 @@ class OfflineAPITests(unittest.IsolatedAsyncioTestCase):
     async def test_needs_the_database(self):
         with patch.dict(os.environ, {'EDDIE_DB': 'off'}):
             self.assertEqual(503, (await self.http.post('/offline-mode', json={'offline': True})).status_code)
-            self.assertEqual({'home_mode': False, 'offline': False, 'offline_applied': False},
+            self.assertEqual({'home_mode': False, 'offline': False, 'offline_applied': False,
+                              'quarantine': False, 'quarantine_applied': False},
                              (await self.http.get('/mode')).json())
         self.assertEqual(422, (await self.http.post('/offline-mode', json={'offline': 'maybe'})).status_code)
 

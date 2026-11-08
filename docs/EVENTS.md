@@ -70,6 +70,7 @@ Both are computed by the API from the events it has received, keyed by
 - `mode`: `{home_mode: bool}`
 - `offline_mode`: `{offline: bool, applied: bool}` after every `POST /offline-mode`
 - `rule_change`: a rule was stored or deleted (see Rules below)
+- `new_device`, `quarantine`, `device_status`: see New devices and quarantine below
 
 ## Home mode: `GET/POST /mode`
 
@@ -77,7 +78,8 @@ Both are computed by the API from the events it has received, keyed by
 shares the state in-process later) and, while on, blocks a device's
 non-essential traffic with `source: "home_mode"`.
 
-`GET /mode` also returns `offline` and `offline_applied` (below).
+`GET /mode` also returns `offline` and `offline_applied` (below), and
+`quarantine` and `quarantine_applied` (New devices and quarantine, below).
 
 ## Offline mode: `POST /offline-mode` (#26)
 
@@ -201,6 +203,48 @@ appear next to the MAC row.
 seen (`404` otherwise); `""` or `null` clears it. Labels are at most 40
 printable characters. Answers with the stored device and its `name`.
 
+Each device also has `status` (`approved`, `pending` or `denied`; `null` for an
+IP-keyed device), and the response has top-level `quarantine` and
+`quarantine_applied` (below).
+
+## New devices and quarantine (#98)
+
+`eddie/quarantine.py` keeps a `device_status` row per MAC. The first devices
+Eddie records (an empty table) are approved silently: they're the household
+it was installed into. After that, a MAC seen for the first time is stored as
+`pending`, and the DNS server posts an alert to `POST /devices/new` (a list,
+from the device watcher's thread, 1 s timeout, dropped if the API doesn't
+answer; the device stays pending either way). The API pushes each one as is:
+
+```json
+{"type": "new_device", "ts": 1762560840000, "device_mac": "f0:4f:7c:aa:bb:cc",
+ "device": "kindle", "ip": "172.20.10.8", "vendor": "Amazon", "hostname": "kindle", "quarantine": true}
+```
+
+`ts` is the ARP read that found it (within about a second of its first
+lookup); `device` is its name as in `/devices`; `vendor` and `hostname` are
+null when unknown. `quarantine` is whether quarantine was on when it was
+recorded: the setting, not proof that DNS is blocking it yet.
+
+`POST /quarantine {"quarantine": true}` turns quarantine on (off by default),
+with the same handshake as offline mode: `{"quarantine": true, "applied": true}`
+once DNS has written `quarantine_loaded`, `applied: false` if not within 2 s.
+Pushed as `{"type": "quarantine", "quarantine", "applied"}`. While on, a
+`pending` device gets block answers (`source: "quarantine"`) for everything
+but the essentials allowlist, before any rule.
+
+`POST /devices/{mac}/approve` and `POST /devices/{mac}/deny` store a decision
+for a recorded MAC (404 unknown, 422 for an IP key) and answer
+`{"mac", "name", "status": "approved" | "denied", "applied"}`, also pushed as
+`{"type": "device_status", ...}`. A denied device is blocked the same way
+whether quarantine is on or not; approving it lifts that.
+
+Known gaps: quarantine is DNS-only, so a device using hard-coded IPs or its
+own DNS (DoH) still gets out; router mode (#22/#23) stops that. A new device's
+lookups before the first ARP read and the DNS reload (about a second) are
+answered normally, and a device ARP never resolves is never quarantined.
+A phone with a private Wi-Fi address that rotates shows up as a new device.
+
 ## What they know: `GET /what-they-know?hours=24`
 
 `hours` is 1 to 168. Returns `{demo: false, source, hours, facts, text}`.
@@ -246,10 +290,12 @@ Relays to the traffic API (`EDDIE_API_URL`, default `http://127.0.0.1:8000`), so
 | `GET /api/what-they-know[?demo=1]` | `GET /what-they-know?hours=168` or `?demo=true` | read-only |
 | `POST /api/mode` `{home_mode: bool}` | `POST /mode` | answers with the API's echo `{home_mode}` |
 | `POST /api/offline-mode` `{offline: bool}` | `POST /offline-mode` | answers with `{offline, applied}`; `applied: false` is passed through |
+| `POST /api/quarantine` `{quarantine: bool}` | `POST /quarantine` | answers with `{quarantine, applied}` |
+| `POST /api/devices/decide` `{mac, decision: "approve" \| "deny"}` | `POST /devices/{mac}/{decision}` | answers with the API's `{mac, name, status, applied}`; anything but a MAC and approve/deny is 400 |
 
-The two POSTs forward only that one boolean (anything else is 400) and wait up to 5 s for the API.
+The mode POSTs forward only that one boolean (anything else is 400) and wait up to 5 s for the API.
 
-Control auth (#40): POSTs need a `Host` that is an IP, `localhost` or `.local`, and a same-origin `Origin` if one is sent (403 otherwise). From the Eddie computer (loopback) no token is needed. From another device, only `POST /api/voice/ask` (`{text}`), `POST /api/mode` and `POST /api/offline-mode` are allowed, with `Authorization: Bearer <pairing token>`; a missing or wrong token gets 401 `{message}`. `/api/voice/start`, `/api/voice/stop`, `/api/voice/dismiss` and `/api/events` answer 403 from other devices whatever the token.
+Control auth (#40): POSTs need a `Host` that is an IP, `localhost` or `.local`, and a same-origin `Origin` if one is sent (403 otherwise). From the Eddie computer (loopback) no token is needed. From another device, only `POST /api/voice/ask` (`{text}`), `POST /api/mode`, `POST /api/offline-mode`, `POST /api/quarantine` and `POST /api/devices/decide` are allowed, with `Authorization: Bearer <pairing token>`; a missing or wrong token gets 401 `{message}`. `/api/voice/start`, `/api/voice/stop`, `/api/voice/dismiss` and `/api/events` answer 403 from other devices whatever the token.
 
 Wake lifecycle: `wake`, `voice_state: listening`, `voice_state: thinking`, optional `transcript`, `agent_reply`, `speaking`, `speech_end`, then `voice_state: listening` again for a follow-up without the wake phrase. If no speech starts within 4 seconds of listening, the worker emits `voice_state: dismissed` and the dashboard closes Eddie and returns to the live feed; the next request needs the wake phrase. No transcript is persisted. Capture or inference failure yields `voice_status: error`.
 

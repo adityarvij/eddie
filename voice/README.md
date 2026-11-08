@@ -142,6 +142,10 @@ Because the block rule is always last, a failure never leaves the device blocked
 
 Not yet checked on hardware: a real Fire Stick or TV under lockdown, including whether the keep patterns cover each app's sign-in and playback.
 
+## New device (#98)
+
+“Allow the new device” (also “approve” or “let in”) and “deny the new device” (also “block” or “reject”) act on the newest device `GET /devices` lists as `pending`. Eddie reads it back by name and first-seen time (“Allow the new device, kindle, first seen at 2:14 AM?”) and says how many others are waiting; only a yes posts `/devices/<mac>/approve` or `/deny`. The reply comes from the backend's stored status, and says Eddie's DNS has loaded it only when the API answered `applied: true`. With no pending device, or the backend down, nothing changes. Tested in `tests/test_voice_new_device.py`; not checked with a real device joining.
+
 ## Confirmation for risky actions
 
 Risky actions (service and wildcard allows, lockdown; email once built) never run from the command that asks for them. `voice_agent.Confirmation` holds at most **one** pending action, `{kind, args, prompt, expires_at}`, and speaks the read-back prompt followed by “Say yes to confirm or no to cancel.”
@@ -157,7 +161,7 @@ Risky actions (service and wildcard allows, lockdown; email once built) never ru
 
 Replies must match the whole utterance after lowercasing and removing punctuation, so “yes, but not the TV” is unclear, not a yes. Typed asks use the same router. While an action is pending the bridge emits `voice_state: confirming` with `kind`, `prompt` and `expires_in_ms` (never the action's arguments); the dashboard shows “say yes or no” until the next reply, dismissal or expiry. No pending action, reply or transcript is persisted or logged.
 
-The registered risky actions are `allow` (#13) and `lockdown` (#17), both parsed in `route`: a typed wildcard needs the raw text's dots, and lockdown looks the device up first. `RISKY_COMMANDS` stays empty until email (#37) lands. Closing the dashboard overlay by hand does not notify the worker; the 15 second expiry still applies.
+The registered risky actions are `allow` (#13), `lockdown` (#17), and `approve` / `deny` for new devices (#98), all parsed in `route`: a typed wildcard needs the raw text's dots, and lockdown looks the device up first. `RISKY_COMMANDS` stays empty until email (#37) lands. Closing the dashboard overlay by hand does not notify the worker; the 15 second expiry still applies.
 
 
 ## Noisy-room voice and ready cue (#38)

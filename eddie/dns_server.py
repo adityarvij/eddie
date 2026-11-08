@@ -14,7 +14,9 @@ Rules and AI verdicts written to eddie.db by other processes (rules API,
 classifier) are reloaded into the decision engine within RELOAD_EVERY, and
 the rules revision loaded is written back so the rules API can acknowledge it.
 devices.DeviceMap maps each client IP to its MAC from the ARP table, read in a
-worker thread, and records the devices seen in eddie.db (#14).
+worker thread, and records the devices seen in eddie.db (#14). A MAC seen for
+the first time is sent to the API as a new_device alert, and quarantine
+(#98, quarantine.py) is reloaded like rules.
 Offline mode (#26, offline.py) is loaded the same way: while it's on, nothing
 is forwarded and allowed lookups get the answer kept from the last time they
 were forwarded, or SERVFAIL.
@@ -34,7 +36,7 @@ import time
 
 from dnslib import AAAA, QTYPE, RCODE, RR, A, DNSRecord
 
-from . import decision, devices, lists, offline, rules
+from . import decision, devices, lists, offline, quarantine, rules
 from . import store
 from .feed import FeedPublisher, feed_from_env, query_event
 from .store import QueryLog, query_log_from_env
@@ -177,11 +179,11 @@ async def serve(host: str, port: int, upstreams: list[tuple[str, int]],
 
 
 class StoreWatcher:
-    """Reloads rules, AI verdicts and offline mode when they change.
+    """Reloads rules, AI verdicts, quarantine and offline mode when they change.
 
-    After a reload it records the rules and offline revisions it loaded
-    (rules.mark_loaded, offline.mark_loaded): the API's proof that DNS is
-    enforcing a change.
+    After a reload it records the rules, quarantine and offline revisions it
+    loaded (rules.mark_loaded, quarantine.mark_loaded, offline.mark_loaded):
+    the API's proof that DNS is enforcing a change.
     """
 
     def __init__(self, path: str, engine: decision.Engine = decision.engine, mode: offline.Mode | None = None):
@@ -196,7 +198,8 @@ class StoreWatcher:
             "SELECT (SELECT count(*) || ':' || ifnull(max(id), 0) || ':' || ifnull(max(ts), 0) FROM rules),"
             " (SELECT count(*) || ':' || ifnull(max(ts), 0) FROM ai_verdicts),"
             " (SELECT ifnull(max(value), 0) FROM engine_state WHERE key = 'rules_rev'),"
-            " (SELECT ifnull(max(value), 0) FROM engine_state WHERE key = 'offline_rev')").fetchone()
+            " (SELECT ifnull(max(value), 0) FROM engine_state WHERE key = 'offline_rev'),"
+            " (SELECT ifnull(max(value), 0) FROM engine_state WHERE key = 'quarantine_rev')").fetchone()
         if changed == self.seen:
             return False
         self.engine.load_from_store(self.conn)
@@ -207,6 +210,7 @@ class StoreWatcher:
         # already loaded, and the next poll records it.
         rules.mark_loaded(self.conn, changed[2])
         offline.mark_loaded(self.conn, changed[3])
+        quarantine.mark_loaded(self.conn, changed[4])
         self.seen = changed
         return True
 
@@ -221,12 +225,18 @@ async def watch_store(watcher: StoreWatcher, every: float = RELOAD_EVERY) -> Non
         await asyncio.sleep(every)
 
 
-async def watch_devices(device_map: devices.DeviceMap, every: float = devices.TICK) -> None:
-    """Read ARP when a new client IP appears (checked every TICK) or every READ_EVERY, off the event loop."""
+async def watch_devices(device_map: devices.DeviceMap, every: float = devices.TICK,
+                        feed: FeedPublisher | None = None) -> None:
+    """Read ARP when a new client IP appears (checked every TICK) or every READ_EVERY, off the event loop.
+
+    New devices are sent to the API's new_device alert, also off the event loop.
+    """
     while True:
         if device_map.due(time.monotonic()):
             try:
-                await asyncio.to_thread(device_map.refresh, *device_map.take())
+                arrived = await asyncio.to_thread(device_map.refresh, *device_map.take())
+                if arrived and feed:
+                    await asyncio.to_thread(feed.send_new_devices, arrived)
             except (sqlite3.Error, OSError) as exc:
                 log.warning("recording devices failed (%s)", exc)
         await asyncio.sleep(every)
@@ -264,7 +274,7 @@ def main() -> None:
                  f"{query_log.path} ({query_log.retention_days:g} days)" if query_log else "off",
                  feed.url if feed else "off")
         watcher = asyncio.create_task(watch_store(StoreWatcher(query_log.path))) if query_log else None
-        device_watcher = asyncio.create_task(watch_devices(device_map))
+        device_watcher = asyncio.create_task(watch_devices(device_map, feed=feed))
         stop = asyncio.Event()
         # docker stop / systemd send SIGTERM; stop cleanly so queued rows get flushed.
         asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, stop.set)

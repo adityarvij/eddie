@@ -1,6 +1,8 @@
 """Decides allow / block / flag for one lookup (README "Decision order").
 
 First match wins:
+0. Quarantine (#98, quarantine.py): a denied device, or a new one while
+   quarantine is on, is blocked except for the allowlist, before any rule.
 1. Device rule, then the device's lockdown rule (pattern "*", #17), then global
    rule (the rules table). Under lockdown, an allowlisted domain is still
    allowed, so locking a device down can't cut it off from sign-in, updates or time.
@@ -20,8 +22,8 @@ First match wins:
 
 This runs on the DNS hot path: no model calls, no network, no disk. Everything
 it reads is in memory; the only state it writes is the bounded in-memory
-lookup timing for unknown domains (beacons.Beacons). Writers (rules API #12, list loader #8, classifier #27)
-replace whole snapshots with set_rules / set_lists / set_verdicts instead of
+lookup timing for unknown domains (beacons.Beacons). Writers (rules API #12, list loader #8, classifier #27, quarantine #98)
+replace whole snapshots with set_rules / set_lists / set_verdicts / set_quarantined instead of
 mutating them, so a lookup never sees a half-updated table.
 
 Matching:
@@ -38,6 +40,7 @@ import sqlite3
 import time
 from dataclasses import dataclass
 
+from . import quarantine
 from .beacons import Beacons
 from .events import Action, Source
 
@@ -47,6 +50,8 @@ KEYWORDS = ("metrics", "telemetry", "analytics", "adsystem", "tracking", "beacon
 WHOLE_WORDS = {"ads": "ads", "log": "log", "logs": "log"}
 UNKNOWN = "unknown, waiting for classifier"
 BEACON = "looked up every {} s, likely telemetry; waiting for classifier"
+QUARANTINE = "new device, quarantined until approved"
+DENIED = "device denied"
 
 _WORD_SPLIT = re.compile(r"[^a-z]+")
 
@@ -152,6 +157,7 @@ class Engine:
         self.allowlist: frozenset[str] = frozenset()
         self.blocklist: frozenset[str] = frozenset()
         self.verdicts: dict[str, Verdict] = {}
+        self.quarantined: dict[str, str] = {}  # device MAC -> reason its lookups are blocked
         self.beacons = Beacons()
 
     def set_rules(self, rules) -> None:
@@ -164,17 +170,27 @@ class Engine:
     def set_verdicts(self, verdicts: dict[str, Verdict]) -> None:
         self.verdicts = {normalize(d): v for d, v in verdicts.items()}
 
+    def set_quarantined(self, held: dict[str, str]) -> None:
+        self.quarantined = dict(held)
+
     def load_from_store(self, conn: sqlite3.Connection) -> None:
-        """Replace rules and cached AI verdicts with what's in eddie.db."""
+        """Replace rules, cached AI verdicts and quarantined devices with what's in eddie.db."""
         self.set_rules(Rule.from_row(r) for r in conn.execute(
             "SELECT id, scope, device_mac, pattern, action FROM rules"))
         self.set_verdicts({d: Verdict(label, confidence, reason or "") for d, label, confidence, reason
                            in conn.execute("SELECT domain, label, confidence, reason FROM ai_verdicts")})
+        status = quarantine.statuses(conn)
+        self.set_quarantined({mac: QUARANTINE if status[mac] == quarantine.PENDING else DENIED
+                              for mac in quarantine.blocked(conn)})
 
     def evaluate(self, domain: str, device: str, ip: str | None = None, now_ms: int | None = None) -> Decision:
         domain = normalize(domain)
         if not domain:
             return Decision("allow", "default", "root query")
+        if held := self.quarantined.get(device):
+            if entry := matches(domain, self.allowlist):
+                return Decision("allow", "allowlist", entry)
+            return Decision("block", "quarantine", held)
         rule = self.rules.find(domain, device, ip)
         if rule and rule.pattern == "*" and (entry := matches(domain, self.allowlist)):
             return Decision("allow", "allowlist", entry)
