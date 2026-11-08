@@ -176,7 +176,30 @@ async function loadDevices() {
 // answers, and offline and home mode say when DNS hasn't loaded the change.
 // Away mode (voice or the API) is shown only once DNS has loaded it, and drops at its end time.
 // spoofing counts the stored spoof rules (#99); the house icon turns into Pinocchio while there are any.
-const modes = {home_mode: null, home_manual: false, home_applied: null, offline: null, offline_applied: false, spoofing: 0, away: null, quarantine: null, quarantine_applied: false}, modePending = {};
+const modes = {home_mode: null, home_manual: false, home_applied: null, offline: null, offline_applied: false, spoofing: 0, away: null, kid_mode: null, session_role: null, quarantine: null, quarantine_applied: false}, modePending = {};
+const EDDIE_VISUALS = Object.freeze({
+  regular: Object.freeze({accessory: 'none', stance: 'upright', motion: 'attentive'}),
+  home: Object.freeze({accessory: 'roof', stance: 'settled', motion: 'breathe'}),
+  kid: Object.freeze({accessory: 'propeller', stance: 'playful', motion: 'bounce'}),
+  concierge: Object.freeze({accessory: 'top-hat', stance: 'formal', motion: 'hat-tip'}),
+  away: Object.freeze({accessory: 'suitcase', stance: 'ready', motion: 'travel'})
+});
+let visualConnected = true;
+function acknowledgedRole(state = modes) {
+  if (!visualConnected) return 'regular';
+  const explicit = state.session_role || state.role;
+  if (['regular', 'home', 'kid', 'concierge', 'away'].includes(explicit)) return explicit;
+  if (state.away?.on === true || state.away === true) return 'away';
+  if (state.kid_mode === true) return 'kid';
+  if (state.home_mode === true) return 'home';
+  return 'regular';
+}
+function renderEddieVisual(state = modes) {
+  const role = acknowledgedRole(state), visual = EDDIE_VISUALS[role], character = $('character');
+  character.dataset.role = role; character.dataset.accessory = visual.accessory;
+  character.dataset.stance = visual.stance; character.dataset.motion = visual.motion;
+}
+renderEddieVisual();
 function applyModes(state) {
   if (typeof state.home_mode === 'boolean') modes.home_mode = state.home_mode;
   if (typeof state.home_applied === 'boolean') { modes.home_applied = state.home_applied; modes.home_manual = state.home_manual === true; }
@@ -184,6 +207,10 @@ function applyModes(state) {
   if (typeof state.quarantine === 'boolean') { modes.quarantine = state.quarantine; modes.quarantine_applied = state.quarantine_applied === true; }
   if (typeof state.away === 'boolean') modes.away = {on: state.away, until: state.away_until || null, applied: state.away_applied === true,
     devices: state.away_devices || [], exempt: state.away_exempt || []};
+  if (typeof state.kid_mode === 'boolean') modes.kid_mode = state.kid_mode;
+  const hasRole = ['session_role', 'role', 'session'].some(key => Object.prototype.hasOwnProperty.call(state, key));
+  const role = state.session_role || state.session?.role || state.role;
+  if (hasRole && state.pending !== true && state.acknowledged !== false) modes.session_role = role === 'regular' ? null : ['home', 'kid', 'concierge', 'away'].includes(role) ? role : null;
   renderModes();
 }
 // [note, is it an alert]: away mode's state once DNS confirms it, else that DNS hasn't loaded the change.
@@ -225,9 +252,8 @@ function renderModes() {
   $('quarantine-note').classList.toggle('alert', qWaiting);
   const [home, homeAlert] = homeNote();
   $('home-note').textContent = home; $('home-note').classList.toggle('alert', homeAlert);
-  // Accessories represent acknowledged backend state only. Pending changes keep the last role,
-  // while unknown or disconnected state falls back to regular Eddie.
-  $('character').dataset.role = modes.home_mode === true ? 'home' : 'regular';
+  // Pending controls never enter modes; this renders only the last backend acknowledgement.
+  renderEddieVisual();
   const [away, alert] = awayNote();
   $('away-note').textContent = away; $('away-note').classList.toggle('alert', alert);
 }
@@ -236,7 +262,7 @@ function renderModes() {
 function renderMic() { $('mic-on').hidden = !voiceReady; $('mic').hidden = voiceReady; $('mic').textContent = `${modes.offline ? 'offline • ' : ''}start mic`; }
 async function loadModes() {
   try { const r = await fetch('/api/mode'); if (!r.ok) throw Error(); applyModes(await r.json()); }
-  catch { modes.home_mode = modes.offline = modes.away = null; renderModes(); }
+  catch { modes.home_mode = modes.offline = modes.away = modes.kid_mode = modes.session_role = null; renderModes(); }
 }
 async function setMode(key, on) {
   if (modePending[key] !== undefined) return;
@@ -302,6 +328,7 @@ function renderAcr() {
   $('acr-list').replaceChildren(...list.slice(0, 3).map(e => { const li = document.createElement('li'); li.textContent = e.reason; return li; }));
 }
 function consumeEvent(event) {
+  if (event.type === 'role_state' || event.type === 'session_state') { if (event.pending !== true && event.acknowledged === true) applyModes(event); return; }
   if (event.type === 'ai_verdict') return feedNote('ai', `${event.domain}${event.reason ? ' — ' + event.reason : ''}`, event, AI_RESULTS[event.label] || [String(event.label), 'flag']);
   if (event.type === 'mode') return applyModes(event);
   if (event.type === 'question') { question = event; return renderQuestion(); }
@@ -449,7 +476,7 @@ async function loadTrackerMap() {
 }
 $('tracker-map-open').onclick = () => showTrackerMap($('tracker-map').hidden);
 $('tracker-map-close').onclick = () => { showTrackerMap(false); $('tracker-map-open').focus(); };
-window.eddie = { pushEvent: addEvent, wake, voiceEvent, renderReport, renderSuggestions, renderTrackerMap, ask: text => control('/api/voice/ask', {text}) };
+window.eddie = { pushEvent: addEvent, wake, voiceEvent, renderReport, renderSuggestions, renderTrackerMap, visualFor: acknowledgedRole, ask: text => control('/api/voice/ask', {text}) };
 $('report-close').onclick = () => { $('report').hidden = true; };
 $('open-logs').onclick = () => toggleLogs($('assistant-logs').hidden);
 $('close-logs').onclick = () => { toggleLogs(false); $('open-logs').focus(); };
@@ -466,7 +493,7 @@ $('mic').onclick = async () => { try { const r = await control('/api/voice/start
 const stream = new EventSource('/events'); stream.onopen = () => { $('feed-status').textContent='Connected to local event bridge'; }; stream.onerror=()=>{ $('feed-status').textContent='Reconnecting to local event bridge…'; if(dialog.open) dismiss(); }; stream.onmessage=e=>{ try { const event=JSON.parse(e.data); if(event.type==='traffic_status'){ $('connection').firstChild.textContent=event.connected?'Connected':'Waiting'; $('source-label').textContent=event.connected?'LIVE TRAFFIC':'WAITING FOR TRAFFIC'; } else consumeEvent(event); } catch {} };
 // The traffic API runs on the same machine as this page (localhost on the Mac, its LAN IP from the iPad).
 const trafficUrl = new URLSearchParams(location.search).get('traffic') || `ws://${location.hostname || 'localhost'}:8000/ws/events`;
-function connectTraffic() { let ws; try { ws=new WebSocket(trafficUrl); } catch { return; } ws.onopen=()=>{ $('connection').firstChild.textContent='Connected'; $('source-label').textContent='LIVE TRAFFIC'; }; ws.onmessage=e=>{ try { const message=JSON.parse(e.data); if(message.type==='snapshot'){ total=0; blocked=0; allowedCount=0; brokerCount=0; deviceSet.clear(); acrSeen.clear(); renderAcr(); $('feed').replaceChildren(); } let events=Array.isArray(message)?message:Array.isArray(message.events)?message.events:[message]; if(message.type==='snapshot'){ events=[...events, ...(message.ai_verdicts || []), ...(message.bypass || []), ...(message.geo || []), ...(message.acr || [])].sort((a,b)=>(dateOf(a).getTime()||0)-(dateOf(b).getTime()||0)); } events.forEach(consumeEvent); if(message.type==='snapshot'){ showQuestions(message.questions); loadRules(); refreshPanels(); } const totals=message.totals || (message.type==='totals'?message:null); if(totals){ total=totals.seen; blocked=totals.blocked; $('requests').textContent=total.toLocaleString(); $('blocked').textContent=blocked.toLocaleString(); updateCounts(); } } catch {} }; ws.onclose=()=>{ $('connection').firstChild.textContent='Waiting'; $('source-label').textContent='WAITING FOR TRAFFIC'; setTimeout(connectTraffic,2500); }; ws.onerror=()=>ws.close(); }
+function connectTraffic() { let ws; try { ws=new WebSocket(trafficUrl); } catch { visualConnected=false; renderEddieVisual(); return; } ws.onopen=()=>{ visualConnected=true; renderEddieVisual(); $('connection').firstChild.textContent='Connected'; $('source-label').textContent='LIVE TRAFFIC'; }; ws.onmessage=e=>{ try { visualConnected=true; const message=JSON.parse(e.data); if(message.type==='snapshot'){ total=0; blocked=0; allowedCount=0; brokerCount=0; deviceSet.clear(); acrSeen.clear(); renderAcr(); $('feed').replaceChildren(); } let events=Array.isArray(message)?message:Array.isArray(message.events)?message.events:[message]; if(message.type==='snapshot'){ events=[...events, ...(message.ai_verdicts || []), ...(message.bypass || []), ...(message.geo || []), ...(message.acr || [])].sort((a,b)=>(dateOf(a).getTime()||0)-(dateOf(b).getTime()||0)); } events.forEach(consumeEvent); if(message.type==='snapshot'){ showQuestions(message.questions); loadRules(); refreshPanels(); } const totals=message.totals || (message.type==='totals'?message:null); if(totals){ total=totals.seen; blocked=totals.blocked; $('requests').textContent=total.toLocaleString(); $('blocked').textContent=blocked.toLocaleString(); updateCounts(); } } catch {} }; ws.onclose=()=>{ visualConnected=false; renderEddieVisual(); $('connection').firstChild.textContent='Waiting'; $('source-label').textContent='WAITING FOR TRAFFIC'; setTimeout(connectTraffic,2500); }; ws.onerror=()=>ws.close(); }
 $('home-mode').onclick = () => setMode('home_mode', !modes.home_mode);
 $('offline-mode').onclick = () => setMode('offline', !modes.offline);
 $('quarantine-mode').onclick = () => setMode('quarantine', !modes.quarantine);

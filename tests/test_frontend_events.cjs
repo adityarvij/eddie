@@ -19,6 +19,10 @@ const timers=[];
 const context={document:{getElementById:get,createElement:()=>new Element(),addEventListener(){},activeElement:{tagName:'BODY'}},window:{},location:{search:'',hostname:'localhost'},URLSearchParams,Date,console,
   setTimeout(fn,ms){timers.push({fn,ms});return timers.length;},clearTimeout(){},fetch(){},AbortController,EventSource:class{},WebSocket:class{constructor(){socket=this;}}};
 const source=fs.readFileSync('frontend/app.js','utf8');
+const styles=fs.readFileSync('frontend/style.css','utf8');
+assert.match(styles, /prefers-reduced-motion:reduce[^}]*\.character\[data-motion\]/, 'reduced motion disables role animation');
+assert.match(styles, /data-state="speaking"[^}]*--edge:45,113,255/, 'speaking remains blue for every role');
+assert.match(styles, /--edge:255,210,55/, 'listening remains yellow for every role');
 // getElementById returns the first match, so a repeated id makes one element overwrite another.
 const pageIds=[...fs.readFileSync('frontend/index.html','utf8').matchAll(/\sid="([^"]+)"/g)].map(m=>m[1]);
 assert.deepEqual(pageIds.filter((id,i)=>pageIds.indexOf(id)!==i),[],'every id in index.html is unique');
@@ -241,6 +245,21 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   assert.equal(get('home-mode').disabled, true);
   await answer('/api/mode', 200, {home_mode:false, offline:false, offline_applied:true});
   assert.equal(get('character').dataset.role, 'regular', 'regular Eddie has no roof');
+  const visualContract = {
+    regular: ['none', 'upright', 'attentive'], home: ['roof', 'settled', 'breathe'],
+    kid: ['propeller', 'playful', 'bounce'], concierge: ['top-hat', 'formal', 'hat-tip'],
+    away: ['suitcase', 'ready', 'travel']
+  };
+  for (const [role, expected] of Object.entries(visualContract)) {
+    socket.onmessage({data:JSON.stringify({type:'session_state', role, acknowledged:true})});
+    assert.deepEqual([get('character').dataset.accessory, get('character').dataset.stance, get('character').dataset.motion], expected, `${role} uses the shared visual contract`);
+  }
+  socket.onmessage({data:JSON.stringify({type:'session_state', role:'kid', acknowledged:true})});
+  socket.onmessage({data:JSON.stringify({type:'session_state', role:'concierge', acknowledged:true, pending:true})});
+  assert.equal(get('character').dataset.role, 'kid', 'a pending session change keeps the acknowledged accessory');
+  socket.onmessage({data:JSON.stringify({type:'session_state', role:'mystery', acknowledged:true})});
+  assert.equal(get('character').dataset.role, 'regular', 'an unknown acknowledged role falls back to regular Eddie');
+  socket.onmessage({data:JSON.stringify({type:'session_state', role:'regular', acknowledged:true})});
   assert.equal(get('home-mode').attrs['aria-label'], 'home mode: off');
   assert.equal(get('home-mode').disabled, false);
   // A stored spoof rule (#99) turns the house into Pinocchio; the button still toggles home mode.
@@ -334,6 +353,7 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   socket.onmessage({data:JSON.stringify(away)});
   assert.equal(get('away-note').textContent, 'away mode on not yet applied by DNS');
   socket.onmessage({data:JSON.stringify({...away, away_applied:true})});
+  assert.equal(get('character').dataset.role, 'away', 'acknowledged away mode uses Away Eddie');
   assert.equal(get('away-note').textContent, 'away mode: on · cutting telemetry from TV, Laptop · Porch cam stays up');
   const until = Date.now() + 3600000;
   socket.onmessage({data:JSON.stringify({...away, away_applied:true, away_until:until, away_exempt:[]})});
@@ -342,6 +362,9 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   assert.equal(get('away-note').textContent, '', 'past its end time it is off');
   socket.onmessage({data:JSON.stringify({type:'away_mode', away:false, away_until:null, away_applied:true, away_devices:[], away_exempt:[]})});
   assert.equal(get('away-note').textContent, '');
+  socket.onclose();
+  assert.equal(get('character').dataset.role, 'regular', 'a disconnected stream falls back to regular Eddie');
+  socket.onopen();
 
   // No backend: the toggles say unavailable and can't be pressed.
   timers.filter(t => t.ms === 30000).at(-1).fn();
