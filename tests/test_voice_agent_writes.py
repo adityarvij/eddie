@@ -129,7 +129,7 @@ class Writes(unittest.TestCase):
     def test_two_writes_in_one_turn_change_nothing(self):
         self.model({'tool_calls': [call('set_mode', home_mode=False),
                                    call('lockdown_device', device='TV', keep=['netflix'])]})
-        self.assertEqual(voice_agent.respond("I'm away this weekend"), ollama_agent.ONE_WRITE)
+        self.assertEqual(voice_agent.respond('turn off home mode and lock down the tv'), ollama_agent.ONE_WRITE)
         self.assertIsNone(voice_agent.confirmation.status())
         self.assertFalse(self.wrote())
 
@@ -181,7 +181,7 @@ class Writes(unittest.TestCase):
         self.model(TimeoutError('timed out'))
         self.assertEqual(voice_agent.respond('lock down the tv to netflix'),
                          "I haven't changed anything. I can block or allow a domain, allow a service like Netflix, "
-                         "lock down a device, undo my last rule, or turn home mode on or off; email isn't "
+                         "lock down a device, undo my last rule, or turn home or away mode on or off; email isn't "
                          "connected yet.")
         self.model(TimeoutError('timed out'))
         self.assertEqual(voice_agent.respond('block everything on the tv'), voice_agent.NOT_RESOLVED)

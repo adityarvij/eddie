@@ -7,6 +7,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime, timedelta
 from pathlib import Path
 
 
@@ -525,6 +526,102 @@ def undo_command():
     return f"Undone. I removed the {what}, and Eddie's DNS has loaded the change."
 
 
+LEAD = r'(?:(?:ok|okay|eddie|hey eddie|please) )*(?:(?:can|could|would|will) you (?:please )?)?'
+DAYS = ('monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday')
+NUMBERS = {'a': 1, 'an': 1, 'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
+           'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10}
+AWAY_MAX_DAYS = 30  # POST /mode refuses an end time further ahead
+AWAY_ON = re.compile(
+    LEAD + r'(?:(?:turn|switch) on away mode|(?:turn|switch) away mode on|enable away mode|start away mode|'
+    r'(?:i am|im|we are|were) (?:leaving|going away|heading out|going out of town|out of town|away))'
+    r'(?: (?P<when>for the weekend|this weekend|for (?P<n>a|an|one|two|three|four|five|six|seven|eight|nine|ten|'
+    r'[1-9][0-9]{0,2}) (?P<unit>hours?|days?|nights?)|until (?P<day>tomorrow|' + '|'.join(DAYS) + r')))?(?: please)?')
+AWAY_OFF = re.compile(
+    LEAD + r'(?:(?:turn|switch) off away mode|(?:turn|switch) away mode off|disable away mode|stop away mode|'
+    r'end away mode|(?:i am|im|we are|were) (?:back|home|back home)(?: now)?)(?: please)?')
+AWAY_TOO_LONG = f"I can only set away mode for up to {AWAY_MAX_DAYS} days. Nothing changed."
+
+
+def away_end(match, now=None):
+    """(end time in ms or None, spoken " until ...") for AWAY_ON's optional time phrase.
+
+    A day means the end of that day; "the weekend" the end of the coming Sunday.
+    """
+    if not match['when']:
+        return None, ''
+    now = now or datetime.now()
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    if match['n']:
+        n = NUMBERS.get(match['n']) or int(match['n'])
+        end = now + (timedelta(hours=n) if match['unit'].startswith('hour') else timedelta(days=n))
+        return int(end.timestamp() * 1000), f" until {end:%A %-I:%M %p}"
+    if match['day'] == 'tomorrow':
+        days, name = 1, 'tomorrow'
+    elif match['day']:
+        days, name = (DAYS.index(match['day']) - now.weekday()) % 7 or 7, match['day'].capitalize()
+    else:
+        days, name = (6 - now.weekday()) % 7, 'Sunday'
+    return int((midnight + timedelta(days=days + 1)).timestamp() * 1000), f' until the end of {name}'
+
+
+def away_command(text, now=None):
+    """RISKY_COMMANDS parser: Confirmation.request args to turn away mode on or off,
+    a spoken refusal for an end time too far ahead, else None."""
+    if AWAY_OFF.fullmatch(text):
+        return 'away', {'on': False}, 'Turn off away mode?'
+    match = AWAY_ON.fullmatch(text)
+    if not match:
+        return None
+    now = now or datetime.now()
+    until, when = away_end(match, now)
+    if until is not None and until > (now + timedelta(days=AWAY_MAX_DAYS)).timestamp() * 1000:
+        return AWAY_TOO_LONG
+    prompt = (f"Turn on away mode{when}? I'll cut telemetry from the devices whose traffic shows when "
+              "someone's home. Cameras, doorbells and alarms stay up.")
+    return 'away', {'on': True, 'until': until, 'when': when}, prompt
+
+
+# A display name that's only a MAC, IPv4 or IPv6 address (devices.display_name's last resort).
+ADDRESS = re.compile(r'(?:ip:)?(?:[0-9a-f]{2}(?::[0-9a-f]{2}){5}|\d{1,3}(?:\.\d{1,3}){3}|[0-9a-f]*:[0-9a-f:]*)')
+
+
+def some(devices, most=3):
+    """Device names to speak: labels and vendor names, unlabelled addresses only counted."""
+    names = [d['name'] for d in devices if not ADDRESS.fullmatch(str(d['name']).lower())]
+    unnamed = len(devices) - len(names)
+    if unnamed:
+        names.append(f"{unnamed} unnamed device{'s' if unnamed > 1 else ''}" if names else
+                     f"{unnamed} device{'s' if unnamed > 1 else ''} without a name")
+    return join(names) if len(names) <= most else f"{', '.join(names[:most])} and {len(names) - most} more"
+
+
+def set_away_mode(on, until=None, when=''):
+    """RISKY_ACTIONS['away']: POST /mode and speak only what the backend acknowledged.
+
+    On means DNS loaded it; never that a device's traffic was seen blocked.
+    """
+    body = {'away': on}
+    if until is not None:
+        body['away_until'] = until
+    result = request('/mode', body, timeout=RULE_TIMEOUT)
+    if result.get('away') is not on or result.get('away_until') != until:
+        raise ValueError('Away mode was not acknowledged')
+    applied = result.get('away_applied') is True
+    if not on:
+        if not applied:
+            return "I turned away mode off, but Eddie's DNS hasn't loaded the change yet, so it may still block for a moment."
+        return "Away mode is off, and Eddie's DNS has loaded the change."
+    if not applied:
+        return f"I saved away mode{when}, but Eddie's DNS hasn't loaded it yet, so nothing is blocked yet."
+    covered = result.get('away_devices') or []
+    exempt = result.get('away_exempt') or []
+    if not covered:
+        return (f"Away mode is on{when}, but I haven't seen a device whose traffic shows someone's home this week, "
+                "so it isn't blocking anything.")
+    kept = f" {some(exempt)} {'stays' if len(exempt) == 1 else 'stay'} up." if exempt else ''
+    return f"Away mode is on{when}. Eddie's DNS has loaded it and is cutting telemetry from {some(covered)}.{kept}"
+
+
 def forget_conversation():
     """Drop the remembered domain when the conversation or microphone session ends."""
     context['domain'] = None
@@ -541,8 +638,8 @@ NO = {'no', 'nope', 'no thanks', 'cancel', 'cancel it', 'stop', 'dont', 'never m
 # block and home_mode are only requested by the local model's write tools
 # (ollama_agent.py); spoken "block x.com" and "turn on home mode" run directly.
 RISKY_ACTIONS = {'allow': allow_patterns, 'lockdown': lockdown_device, 'block': block_action,
-                 'home_mode': home_mode_action}
-RISKY_COMMANDS = []
+                 'home_mode': home_mode_action, 'away': set_away_mode}
+RISKY_COMMANDS = [away_command]
 
 
 class Confirmation:
@@ -660,7 +757,7 @@ def route(text):
     for parse in RISKY_COMMANDS:
         command = parse(text)
         if command:
-            return confirmation.request(*command)
+            return command if isinstance(command, str) else confirmation.request(*command)
     pending_reply = confirmation.reply(text)
     if pending_reply is not None:
         return pending_reply
@@ -694,7 +791,7 @@ def route(text):
             return NOT_RESOLVED
         if allow:
             return ALLOW_UNRESOLVED
-        return "I haven't changed anything. I can block or allow a domain, allow a service like Netflix, lock down a device, undo my last rule, or turn home mode on or off; email isn't connected yet."
+        return "I haven't changed anything. I can block or allow a domain, allow a service like Netflix, lock down a device, undo my last rule, or turn home or away mode on or off; email isn't connected yet."
     if re.search(r'\bwhat (?:do|does|can|could) (?:\w+|my \w+|the \w+) (?:know|tell|guess|figure out|learn) about (?:me|us|my house|my home|our house)\b', text):
         try:
             report = what_they_know(report_hours(raw))
