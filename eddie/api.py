@@ -33,7 +33,7 @@ from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocket
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 
-from . import beacons, bypass, demo_week, devices, inferences, insights, labels, offline, rules, store
+from . import beacons, bypass, demo_week, devices, inferences, insights, labels, occupancy, offline, rules, store
 from .events import Action, AIVerdictEvent, ModeUpdate, OfflineUpdate, QueryEvent
 
 # In memory for now; SQLite (store.py) replaces this once the DNS side lands.
@@ -210,6 +210,24 @@ def what_they_know(hours: int | None = Query(None, ge=1, le=8760), demo: bool = 
     return {"demo": False, "source": source, "requested_hours": requested, "hours": actual,
             "limited_by_retention": limited, "notice": notice, "facts": facts, **quality,
             "text": " ".join(filter(None, (notice, inferences.spoken_text(facts, actual, quality["enough_data"]))))}
+
+
+@app.get("/burglars-eye")
+def burglars_eye(hours: int | None = Query(None, ge=1, le=8760), demo: bool = False):
+    """When could someone tell the house was empty (#34); see occupancy.py. A week unless asked."""
+    if demo:
+        report = occupancy.report(demo_week.events(int(time.time() * 1000)), 168)
+        return {"demo": True, "label": demo_week.LABEL, **report, "text": f"{demo_week.LABEL} {report['text']}"}
+    requested = hours or occupancy.WEEK
+    actual = min(requested, report_limit_hours())
+    events, source = report_events(actual)
+    report = occupancy.report(events, actual)
+    limited = requested > actual
+    notice = (f"I only retain the last {inferences.period(actual)}, so I used all available data."
+              if limited else None)
+    return {"demo": False, "source": source, **report, "requested_hours": requested,
+            "limited_by_retention": limited, "notice": notice,
+            "text": " ".join(filter(None, (notice, report["text"])))}
 
 
 def report_events(hours: int) -> tuple[list[dict], str]:

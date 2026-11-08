@@ -81,6 +81,36 @@ def what_they_know(hours=None):
     return request(f'/what-they-know?hours={hours}')
 
 
+BURGLARS_EYE_TOOL = {
+    'type': 'function',
+    'function': {
+        'name': 'burglars_eye',
+        'description': ('When could someone tell the house was empty, from recent traffic, with devices ranked '
+                        'by occupancy leak score. Security devices are flagged never_block.'),
+        'parameters': {
+            'type': 'object',
+            'properties': {'hours': {'type': 'integer', 'minimum': 1, 'maximum': 8760,
+                                     'description': 'Requested lookback in hours. Omit for a week.'}},
+            'additionalProperties': False,
+        },
+    },
+}
+
+
+def burglars_eye(hours=None):
+    """Backend-computed occupancy report only; the reply text comes from /burglars-eye."""
+    if hours is None:
+        return request('/burglars-eye')
+    if type(hours) is not int or not 1 <= hours <= 8760:
+        raise ValueError('hours must be an integer from 1 to 8760')
+    return request(f'/burglars-eye?hours={hours}')
+
+
+EMPTY_HOUSE = re.compile(
+    r'\b(?:burglars?|(?:house|home|place)(?: (?:was|is|looks?|looked|looking|seems?|seemed|been|be|sits?|sat))* empty'
+    r'|(?:nobody|no one|noone)(?:s| is| was)? (?:home|in|around))\b')
+
+
 # A domain as POST /rules accepts it (no wildcard), and a domain inside a spoken reply.
 DOMAIN = re.compile(r'[a-z0-9_-]+(?:\.[a-z0-9_-]+)+')
 SPOKEN_DOMAIN = re.compile(r'\b[a-z0-9_-]+(?:\.[a-z0-9_-]+)*\.[a-z]{2,}\b')
@@ -677,6 +707,11 @@ def route(text):
             if reply:
                 return " ".join(filter(None, (report.get('notice'), reply)))
         return str(report['text'])
+    if EMPTY_HOUSE.search(text):
+        try:
+            return str(burglars_eye(report_hours(raw))['text'])
+        except Exception:
+            return "I can't reach Eddie’s traffic backend, so I can't say when the house looked empty right now."
     if text in ('hello', 'hi', 'hey', 'hey eddie'):
         return "Hey, I'm Eddie. Ask me what's been going on, tell me to block a domain, or to turn home mode on or off."
     if ask_model is not None:
