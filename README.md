@@ -56,7 +56,7 @@ Dashboard at http://localhost:5173, API at http://localhost:8000. The traffic AP
 - **Device baselines** — learn what each device normally talks to; alert on anything new
 - **Idle snitching detector** — flags devices phoning home when nobody is using them
 - **Fake data mode** — feed dummy responses to endpoints that break when blocked (implemented, #99: rule `action: spoof` plus `eddie/spoof_server.py`; plain HTTP only)
-- **Geo alerts** — "Your doorbell started talking to a server in another country"
+- **Geo alerts** — "Your doorbell started talking to a server in another country" (implemented, #102: `eddie/geoip.py` in the DNS server, offline DB-IP country database fetched once by `scripts/provision_geoip.py`; approximate by nature)
 - **Plain-English goals** — "The TV can talk to Netflix and nothing else" becomes rules automatically
 
 ### Reporting
@@ -197,6 +197,8 @@ Hand this section and the ones below to a coding agent (Claude Code etc.). Targe
 ### Running the DNS server
 
 `eddie/dns_server.py` implements steps 1, 3 and 4 above (UDP, and TCP for answers too big for UDP) and the `queries` half of step 5: every lookup writes one row to `eddie.db` through `eddie/store.py`. Each lookup is also sent to the live feed (`POST /ingest`, then `/ws/events`) by `eddie/feed.py`, off the reply path: about 25 ms from lookup to dashboard on the development Mac. Start the API without fake traffic (`./scripts/run_all.sh --no-fake`) so the screen shows only real lookups. Step 2 is `eddie/devices.py` (#14): the client IP maps to a MAC from the ARP table, so `queries.device_mac` and the feed's `device_mac` hold the MAC, and the feed's `device` is the device's label, DHCP hostname or vendor ("Amazon device"). A client ARP can't resolve stays `ip:<IP>` with the IP as its name. Devices that look something up are recorded in the `devices` table; `GET /devices` names and counts them. `eddie/decision.py` implements the full decision order below. At startup the DNS server loads every `blocklists/*.txt` file (StevenBlack hosts, the Perflyst smart-TV and Fire TV lists, and Eddie's own `eddie-extra.txt`: about 78,000 domains in 0.3 s) and the essentials in `allowlist.txt` (`eddie/lists.py`). Rules come from the `/rules` API (`eddie/rules.py`).
+
+Geo alerts (#102) need the offline country database, fetched once while online: `uv run python scripts/provision_geoip.py` (`--verify` checks it offline). Without it the DNS server logs "geo alerts off" and runs as before; `EDDIE_GEOIP=off` turns them off on purpose.
 
 Spoof rules (#99) need two more things on the Pi: `EDDIE_SPOOF_IP=<Pi's LAN IPv4>` for the DNS server, and the stub server on port 80 (`sudo .venv/bin/python -m eddie.spoof_server`; development: `EDDIE_SPOOF_PORT=8080 uv run python -m eddie.spoof_server`). Nothing listens on 443, so HTTPS uploads to a spoofed name just fail.
 

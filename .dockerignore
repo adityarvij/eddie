@@ -7,3 +7,4 @@ blocklists
 .DS_Store
 eddie.db
 eddie.db-*
+eddie/data/geoip

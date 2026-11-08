@@ -64,6 +64,14 @@ assert.equal(tag(get('feed').children.at(-1)).className,'tag tag-bypass');
 assert.equal(get('notice').textContent,bypassReason);
 assert.equal(get('requests').textContent,'4','bypass suspicions are not DNS requests');
 
+// Geo alerts (#102): a [new country?] row and a toast with the caveat the API sent; not a DNS request.
+const geoReason='Doorbell started talking to a server in Russia (example.com, 5.6.7.8). Until now its servers were in the United States. IP location is approximate.';
+socket.onmessage({data:JSON.stringify({type:'geo_alert',ts:Date.now(),device_mac:'f0:4f:7c:11:22:34',device:'Doorbell',domain:'example.com',ip:'5.6.7.8',country:'RU',country_name:'Russia',previous:['US'],approximate:true,reason:geoReason})});
+assert.equal(tag(get('feed').children.at(-1)).parent.textContent,`[new country?] ${geoReason}`);
+assert.equal(tag(get('feed').children.at(-1)).className,'tag tag-geo');
+assert.equal(get('notice').textContent,geoReason);
+assert.equal(get('requests').textContent,'4','geo alerts are not DNS requests');
+
 // ACR (#104): an [acr blocked] row, a toast and the card, all with the API's reason; not a DNS request.
 const acrReason="TV was checking in with Samsung's content recognition (ACR) server log-ingestion.samsungacr.com every 15 seconds. ACR is how TVs report what's on screen. Blocked.";
 assert.equal(get('acr').hidden,true,'no card before any detection');

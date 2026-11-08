@@ -31,6 +31,9 @@ The same port also takes DNS over TCP (RFC 7766), where devices retry an
 answer too big for UDP: the same decision and logging, forwarded upstream
 over TCP. A UDP reply that won't fit the client's buffer (an offline answer
 first fetched over TCP) is sent truncated, so the device retries over TCP.
+Geo alerts (#102, geoip.py): each forwarded answer is queued for a worker
+thread that looks its addresses up in the pinned offline country database and
+sends a geo_alert when a device starts using a new country; EDDIE_GEOIP=off.
 
 Run (port 53):            sudo .venv/bin/python -m eddie.dns_server
 Development (no sudo):    EDDIE_DNS_PORT=8053 uv run python -m eddie.dns_server
@@ -46,7 +49,7 @@ import time
 
 from dnslib import AAAA, QTYPE, RCODE, RR, A, DNSRecord
 
-from . import away, decision, devices, lists, offline, quarantine, rules
+from . import away, decision, devices, geoip, lists, offline, quarantine, rules
 from . import store
 from .feed import FeedPublisher, feed_from_env, query_event
 from .store import QueryLog, query_log_from_env
@@ -62,6 +65,7 @@ UDP_MAX = 512  # largest UDP reply for a client that doesn't say otherwise with 
 log = logging.getLogger("eddie.dns")
 offline_mode = offline.Mode()
 spoof = {"ip": None}  # Eddie's LAN IPv4 for spoof answers (EDDIE_SPOOF_IP); None blocks instead
+geo = {"watch": None}  # geoip.GeoWatch for geo alerts (#102); None looks nothing up
 
 
 def upstreams_from_env() -> list[tuple[str, int]]:
@@ -208,12 +212,13 @@ async def resolve(packet: bytes, client_ip: str, upstreams: list[tuple[str, int]
     device = device_map.key(client_ip) if device_map else client_ip  # MAC once ARP knows it
     verdict = decision.evaluate(domain, device, client_ip, arrived)
     qtype = QTYPE.get(request.q.qtype, str(request.q.qtype))
+    mac = device if device != client_ip else None
+    name = device_map.name(device) if device_map else None
     if query_log:
         query_log.log(domain, device, qtype, verdict.action, verdict.source, verdict.reason, ts=arrived)
     if feed:
         feed.publish(query_event(arrived, client_ip, domain, qtype, verdict.action, verdict.source, verdict.reason,
-                                 mac=device if device != client_ip else None,
-                                 name=device_map.name(device) if device_map else None))
+                                 mac=mac, name=name))
     if verdict.action == "spoof":
         return (spoof_reply(request, spoof["ip"]) if spoof["ip"] else block_reply(request)).pack()
     if verdict.action == "block":
@@ -229,6 +234,8 @@ async def resolve(packet: bytes, client_ip: str, upstreams: list[tuple[str, int]
         return reply.pack()
     if not offline_mode.on:
         offline_mode.put(request, answer)
+        if geo["watch"]:  # a queue put; the lookup happens in geoip's worker thread
+            geo["watch"].observe(arrived, mac or f"ip:{client_ip}", name or client_ip, domain, answer)
     if not tcp and len(answer) > udp_limit(request):
         return truncated_reply(request).pack()
     return answer
@@ -406,6 +413,8 @@ def main() -> None:
         raise SystemExit(f"EDDIE_API_URL refused: {exc}. Set EDDIE_FEED=off to run without the live feed.")
     query_log = query_log_from_env()
     device_map = devices.DeviceMap(query_log.path if query_log else None, leases=devices.leases_from_env())
+    # Alerts go to the API like the feed, so without the feed there's nobody to tell.
+    geo["watch"] = geoip.geo_from_env(feed.send_geo_alerts) if feed else None
 
     async def run():
         try:
@@ -415,10 +424,11 @@ def main() -> None:
             raise SystemExit(f"Port {port} needs root: run with sudo, or set EDDIE_DNS_PORT=8053 for development.")
         except OSError as exc:
             raise SystemExit(f"Can't listen on {host}:{port} ({exc}). On a Mac, turn off Internet Sharing, which holds port 53.")
-        log.info("listening on %s:%s (UDP and TCP), upstream %s, query log %s, live feed %s, spoof %s",
+        log.info("listening on %s:%s (UDP and TCP), upstream %s, query log %s, live feed %s, spoof %s, geo alerts %s",
                  host, port, ", ".join(f"{h}:{p}" for h, p in upstreams),
                  f"{query_log.path} ({query_log.retention_days:g} days)" if query_log else "off",
-                 feed.url if feed else "off", spoof["ip"] or "off (spoof rules block)")
+                 feed.url if feed else "off", spoof["ip"] or "off (spoof rules block)",
+                 f"loading {geo['watch'].path}" if geo["watch"] else "off")
         watcher = asyncio.create_task(watch_store(StoreWatcher(query_log.path))) if query_log else None
         device_watcher = asyncio.create_task(watch_devices(device_map, feed=feed))
         stop = asyncio.Event()
@@ -440,6 +450,8 @@ def main() -> None:
     finally:
         if query_log:
             query_log.close()
+        if geo["watch"]:
+            geo["watch"].close()
         if feed:
             feed.close()
         device_map.close()

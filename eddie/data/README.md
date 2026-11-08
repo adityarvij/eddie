@@ -19,3 +19,11 @@ It supplements the hand-written domain labels; ownership alone does not imply tr
 A company is included when its registry website belongs to a Tracker Radar entity (90 matched), and only that entity's domains DuckDuckGo lists as trackers are kept (61 domains, 43 companies), so a registered broker's own storefront, such as gm.com, is never highlighted. Registered brokers that run ad exchanges (OpenX, Magnite, Index Exchange, PubMatic, TripleLift, Sovrn, Sharethrough, Yieldmo, 33Across, Kargo; hand-named in the script) are marked `ad exchange`. The Tracker Radar parts carry the same CC BY-NC-SA 4.0 license as above.
 
 Known gaps: exchanges run by companies that are not registered brokers (Google's doubleclick.net, Microsoft's adnxs.com) are not included; brokers whose website Tracker Radar doesn't know, or whose tracking domains it files under another entity (Index Exchange's casalemedia.com), are missed. Rebuild explicitly during setup; Eddie never fetches it at runtime.
+
+# GeoIP country database
+
+`geoip.json` pins DB-IP's IP to Country Lite CSV (November 2026: URL, size and SHA-256) for geo alerts (#102). The file itself isn't committed: `scripts/provision_geoip.py` downloads it to `eddie/data/geoip/` (git- and docker-ignored) and the DNS server refuses it unless its hash matches the pin. License: CC BY 4.0, [IP Geolocation by DB-IP](https://db-ip.com). DB-IP only keeps recent monthly files online; to update, change `url`, `size` and `sha256` together and run the script again. Locations are approximate (CDNs, anycast, cloud regions).
+
+# Country names
+
+`countries.json` maps ISO 3166 alpha-2 codes to English names for alerts and speech. Generated 2026-11-07 from tzdata's `iso3166.tab` (public domain), with "&" spelled "and", "St" spelled "Saint", and a few names changed to how they're said aloud ("the United States", "the United Kingdom", "South Korea").

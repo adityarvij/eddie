@@ -39,6 +39,22 @@ class NewDeviceEvent(BaseModel):
     quarantine: bool  # whether quarantine was on when it was recorded, not proof of enforcement
 
 
+class GeoAlertEvent(BaseModel):
+    """A device's DNS answers pointed to a country it hadn't used (#102), from the DNS server's geoip worker."""
+    model_config = ConfigDict(extra="forbid")
+    type: Literal["geo_alert"] = "geo_alert"
+    ts: int = Field(ge=0)
+    device_mac: str = Field(min_length=1, max_length=64)
+    device: str = Field(min_length=1, max_length=64)
+    domain: str = Field(min_length=1, max_length=253)
+    ip: str = Field(min_length=2, max_length=45)
+    country: str = Field(pattern=r"^[A-Z]{2}$")
+    country_name: str = Field(min_length=1, max_length=64)
+    previous: list[str] = Field(max_length=300)
+    approximate: Literal[True] = True  # IP geolocation is never exact (CDNs, cloud regions)
+    reason: str = Field(min_length=1, max_length=500)
+
+
 class QuarantineUpdate(BaseModel):
     quarantine: bool
 
