@@ -10,6 +10,8 @@ import urllib.request
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import timers
+
 
 def request(path, body=None, timeout=3, method=None):
     base = os.environ.get('EDDIE_API_URL', 'http://127.0.0.1:8000').rstrip('/')
@@ -809,6 +811,8 @@ ask_model = None
 # Optional local model that writes "what they know" inferences from the backend's
 # facts: callable(facts) -> text, or None to keep the backend's template.
 phrase_inferences = None
+# Timers and reminders (#122). In memory here; frontend/serve.py swaps in the file-backed store and rings them.
+timer_store = timers.Timers()
 TIME_NUMBERS = {'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5, 'six': 6, 'seven': 7,
                 'eight': 8, 'nine': 9, 'ten': 10, 'eleven': 11, 'twelve': 12, 'fourteen': 14,
                 'thirty': 30}
@@ -868,6 +872,9 @@ def route(text):
         return pending_reply
     if not text:
         return "Didn't catch that. Try again."
+    reply = timers.handle(timer_store, raw)
+    if reply is not None:
+        return reply
     # Match the entire request so negations, questions and additional actions
     # cannot accidentally activate a privacy setting.
     on = re.fullmatch(r'(?:please )?(?:(?:turn|switch) on home mode|(?:turn|switch) home mode on|enable home mode|(?:i want|id like) home mode (?:on|enabled)|(?:can|could|would) you (?:turn on|enable) home mode)(?: please)?', text)
