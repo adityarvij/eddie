@@ -1,0 +1,15 @@
+[Unit]
+Description=Eddie traffic API (port 8000)
+PartOf=eddie.target
+After=network-online.target
+
+[Service]
+User=@USER@
+WorkingDirectory=@REPO@
+EnvironmentFile=@ENV@
+ExecStart=@REPO@/.venv/bin/python -m uvicorn eddie.api:app --host 0.0.0.0 --port 8000
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=eddie.target

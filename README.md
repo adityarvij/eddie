@@ -126,9 +126,9 @@ Rehearse Sunday morning and record a backup video.
 | Device | Job |
 |---|---|
 | iPhone | Personal Hotspot over Wi-Fi: the network everything joins (venue Wi-Fi may block devices from seeing each other). Keep it plugged in. |
-| Raspberry Pi 5 (CanaKit) | Eddie's box: DNS server, decision engine, SQLite, dashboard web server |
-| MacBook Pro (M1, 16GB) | Eddie's brain: Ollama model and the voice loop |
-| USB speakerphone | Plugs into the Mac for "Hey Eddie" |
+| Raspberry Pi 5 (CanaKit) | Eddie's box, running everything (#18): DNS server, decision engine, SQLite, traffic API, dashboard, Ollama and the voice loop |
+| MacBook Pro (M1, 16GB) | Development, and the fallback if the Pi fights you |
+| USB speakerphone | Plugs into the Pi for "Hey Eddie" |
 | Fire TV Stick + borrowed HDMI monitor | The device Eddie catches (demo only, not part of the product) |
 | iPad | Eddie's face: dashboard in Safari, propped next to the Pi (not on its fan) |
 
@@ -142,14 +142,44 @@ Rehearse Sunday morning and record a backup video.
 
 1. Power the Pi; `ssh <user>@eddie.local` from the Mac.
 2. Get the Pi's IP with `hostname -I` (usually `172.20.10.x` on an iPhone hotspot).
-3. Clone the repo onto the Pi; start Eddie (`sudo .venv/bin/python -m eddie.dns_server`, see "Running the DNS server").
+3. Clone the repo onto the Pi and set it up as in "Running on the Raspberry Pi" below; start Eddie with `sudo systemctl start eddie.target` (or `./scripts/run_pi.sh` in the foreground).
 4. Check from the Mac: `dig @<Pi IP> google.com`.
 5. Fire Stick: Settings → Network → forget and reconnect → Advanced → DNS 1 = Pi's IP. Watch lookups scroll.
-6. iPad: open `http://<Pi IP>:8000`, Add to Home Screen.
-7. Mac: `OLLAMA_HOST=0.0.0.0 ollama serve` so the Pi can reach the model.
+6. iPad: open the `http://<Pi IP>:5173/#pair=…` link `install_pi.sh` printed, then Add to Home Screen.
+7. Start the microphone from the dashboard on the Pi's own screen (`http://localhost:5173`). The iPad can ask by typing but can't switch the mic on (#40).
 8. Record real Fire Stick traffic around 5 to 6 PM as a replay backup.
 
-**Fallback:** if the Pi fights you, run the DNS server and dashboard on the Mac and point the Fire Stick and iPad at the Mac's IP. Nothing else changes.
+**Fallback:** if the Pi fights you, run everything on the Mac: `EDDIE_BIND=0.0.0.0 EDDIE_DASHBOARD_HOST=0.0.0.0 ./scripts/run_all.sh --no-fake`, and in another shell with the same `EDDIE_API_TOKEN` exported, `uv run python -m eddie.dns_server` (Internet Sharing off). Point the Fire Stick's DNS and the iPad at the Mac's IP. A halfway option keeps DNS on the Pi and uses the Mac's faster model: run `OLLAMA_HOST=0.0.0.0 ollama serve` on the Mac, then `sudo ./scripts/install_pi.sh --ollama http://<Mac IP>:11434` on the Pi and restart. Neither has been rehearsed on the hardware yet.
+
+### Running on the Raspberry Pi (#18)
+
+Everything runs on the Pi as systemd services, without Docker. Do this once, as your own user on the Pi, from the cloned repo:
+
+```bash
+uv sync --locked                          # DNS, API, classifier, dashboard
+curl -fsSL https://ollama.com/install.sh | sh && ollama pull llama3.2:3b   # Ollama's own service, localhost only
+sudo ./scripts/install_pi.sh              # writes /etc/eddie/eddie.env and the eddie-* units, enables them on boot
+sudo systemctl start eddie.target
+```
+
+For voice, also set up `.venv-frontend` and the models as in [voice/README.md](voice/README.md) (`libportaudio2`, `voice/requirements.txt`, `scripts/provision_voice.py`), then rerun `install_pi.sh`. The dashboard service then runs `scripts/run_voice.sh` instead of the dashboard alone. Without voice, the dashboard, typed asks and the model still work, but there's no microphone or spoken reply.
+
+| Unit | Runs | Port |
+|---|---|---|
+| `eddie-api` | `uvicorn eddie.api:app` | 8000 |
+| `eddie-dns` | `python -m eddie.dns_server`, as your user with only `CAP_NET_BIND_SERVICE` | 53 |
+| `eddie-classifier` | `python -m eddie.classifier` against Ollama (`EDDIE_OLLAMA_URL`, default the Pi's own) | none |
+| `eddie-dashboard` | `scripts/run_voice.sh`, or `frontend/serve.py` without the voice environment | 5173 |
+
+`eddie.target` groups them: `sudo systemctl start|stop|restart eddie.target`, with logs from `journalctl -u 'eddie-*' -f`. `/etc/eddie/eddie.env` (root-only, `0600`) holds a fixed `EDDIE_API_TOKEN` and `EDDIE_DASHBOARD_TOKEN`, so the iPad's pairing link survives reboots. Add any other `EDDIE_*` setting there, such as `EDDIE_DB` for the encrypted volume, `EDDIE_CLASSIFIER_MODEL` or `EDDIE_AGENT_MODEL`. Rerunning `install_pi.sh` keeps the tokens. `./scripts/run_pi.sh` starts the same processes in the foreground with a fresh token, for debugging; Ctrl-C stops them all.
+
+Everything runs from the cloned repo as your user, so `eddie.db` lives there unless `EDDIE_DB` says otherwise. Nothing else on Raspberry Pi OS uses port 53 by default; if `eddie-dns` fails with "Can't listen", check `sudo ss -lunp 'sport = :53'`.
+
+**Updating:** develop and merge on the Mac as usual (CI runs the tests on x86 and ARM64). Then on the Pi run `git pull && uv sync --locked && sudo systemctl restart eddie.target`. The restart takes a few seconds, and devices get no DNS answers during it, so don't deploy mid-demo. Ollama is a separate service and keeps its model loaded.
+
+**Model speed:** the Pi 5 runs the model on its CPU. Expect typed answers and AI verdicts to be several times slower than on the M1 (not yet measured). DNS doesn't wait on the model, so lookups aren't affected. A smaller model (`EDDIE_AGENT_MODEL` / `EDDIE_CLASSIFIER_MODEL`, such as `llama3.2:1b`) trades accuracy for speed.
+
+**Not yet checked on the hardware:** booting the units, binding port 53 through the capability, ARP device names, the speakerphone through the `audio` group, model speed and memory with voice running alongside, and the Mac fallback.
 
 Keep boxes and receipts so anything unused can be returned.
 
@@ -160,10 +190,10 @@ Hand this section and the ones below to a coding agent (Claude Code etc.). Targe
 ### Runtime topology
 
 1. Every device joins the iPhone Personal Hotspot over Wi-Fi.
-2. The Raspberry Pi runs `eddie-dns` on port 53 (needs sudo), plus the decision engine, SQLite and FastAPI with the dashboard on port 8000. Fallback: the Mac runs these instead (tested: dnslib binds fine on macOS when Internet Sharing is off).
-3. The Mac runs Ollama (`OLLAMA_HOST=0.0.0.0 ollama serve`) and the voice loop with the USB speakerphone. The Pi calls the model at `http://<Mac IP>:11434`.
+2. The Raspberry Pi runs everything (#18): `eddie-dns` on port 53, the decision engine, SQLite, FastAPI on port 8000, the dashboard on port 5173, Ollama on `127.0.0.1:11434`, and the voice loop with the USB speakerphone. Fallback: the Mac runs these instead (tested: dnslib binds fine on macOS when Internet Sharing is off).
+3. Optional: the Pi uses the Mac's Ollama (`EDDIE_OLLAMA_URL=http://<Mac IP>:11434`) for faster answers.
 4. Devices to protect have DNS set manually to the Pi's IP (Fire Stick: Settings → Network → Advanced → DNS 1). No hotspot or DNS takeover needed.
-5. The iPad shows the dashboard at `http://<Pi IP>:8000`.
+5. The iPad shows the dashboard at `http://<Pi IP>:5173`, which reads the live feed from port 8000.
 6. Upstream resolver for allowed queries: `1.1.1.1` or `9.9.9.9`.
 7. Known limit: apps with hardcoded or encrypted DNS can skip Eddie. A production Eddie fixes this by being the router or sitting between modem and router.
 
@@ -173,7 +203,7 @@ Hand this section and the ones below to a coding agent (Claude Code etc.). Targe
 |---|---|---|
 | eddie-dns | Python, dnslib, asyncio | Answers every DNS query from devices pointed at Eddie; calls the decision engine; forwards or sinkholes; emits events |
 | decision | Python | Ordered rules: user rules → allowlist → blocklist + keyword heuristics → cache → AI classifier → default allow + flag |
-| classifier | Ollama HTTP API on the Mac (port 11434), Llama 3.2 3B or Qwen 2.5 3B | Labels unknown domains tracker / needed / unsure with a reason and confidence; runs async so DNS never waits on it |
+| classifier | Ollama HTTP API on the Pi (port 11434), Llama 3.2 3B or Qwen 2.5 3B | Labels unknown domains tracker / needed / unsure with a reason and confidence; runs async so DNS never waits on it |
 | devices | Python, reads the Pi's ARP table (`ip neigh`) | Maps client IP → MAC → friendly name ("Fire Stick") via hostname, MAC vendor prefix (OUI) and user labels |
 | store | SQLite (`eddie.db`) | Queries log, decisions, rules, devices, AI verdict cache, traffic counts |
 | traffic | Python, Linux raw socket (optional, off by default) | Counts bytes and packets per device, remote IP, port and protocol from packet headers on the LAN interface, so upload volume, hard-coded IPs and long streams show up. Only useful when Eddie is the router (#22) |
@@ -210,7 +240,7 @@ Spoof rules (#99) need two more things on the Pi: `EDDIE_SPOOF_IP=<Pi's LAN IPv4
 uv run python -m eddie.classifier   # needs Ollama running and the same EDDIE_DB as the DNS server
 ```
 
-Settings: `EDDIE_OLLAMA_URL` (default `http://127.0.0.1:11434`; must be `localhost` or a loopback or private IP literal, so on the Pi use `http://<Mac IP>:11434`), `EDDIE_CLASSIFIER_MODEL` (default `llama3.2:3b`). With `EDDIE_DB=off` there's no queue, and the classifier refuses to start.
+Settings: `EDDIE_OLLAMA_URL` (default `http://127.0.0.1:11434`; must be `localhost` or a loopback or private IP literal, so a Pi using the Mac's model sets `http://<Mac IP>:11434`), `EDDIE_CLASSIFIER_MODEL` (default `llama3.2:3b`). With `EDDIE_DB=off` there's no queue, and the classifier refuses to start.
 
 ```bash
 uv run python -m eddie.dns_server                      # Mac: 0.0.0.0:53 binds without sudo on recent macOS
@@ -327,7 +357,8 @@ eddie/
     config.py          interfaces, ports, upstream, model name
   blocklists/ allowlist.txt
   dashboard/ index.html app.js style.css
-  scripts/ setup_mac.sh run_all.sh fake_traffic.py
+  scripts/ setup_mac.sh run_all.sh run_pi.sh install_pi.sh fake_traffic.py
+  deploy/systemd/ eddie.target eddie-{api,dns,classifier,dashboard}.service (templates for install_pi.sh)
   tests/
 ```
 
