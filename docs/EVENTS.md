@@ -616,6 +616,23 @@ full_range, enough, empty_times, devices, text}`, computed in
 `?demo=true` ignores `hours` and runs the same code on the demo week, with
 `demo: true`, `label`, and `text` starting with `label`.
 
+## Privacy settings coach: `GET /suggestions` (#112)
+
+Guidance only; nothing is written. Reads the devices table and the last week
+of the query log (`eddie/coach.py`) and returns `{devices, guides, text}`:
+
+- `devices`: `{key, name, kind, guide}` for each recognised device, by kind
+  then name. `kind` is `fire_tv` or `ring`. `guide` is `{name, where, spoken,
+  steps: [{setting, do, why}], note, sources: [{title, url}]}`.
+- `guides`: the device types Eddie has a guide for (`["Fire TV", "Ring"]`).
+- `text`: one sentence per kind ("For Fire Stick and Bedroom TV, on the TV
+  open Settings, …"), ending "I haven't changed any of these myself. The steps
+  and sources are under suggestions on the dashboard." With nothing
+  recognised, it names the guides Eddie has.
+
+503 `Device log unavailable.` when `EDDIE_DB` is `off`, missing or unreadable.
+The dashboard bridge relays it read-only as `GET /api/suggestions`.
+
 ## Local voice bridge (port 5173)
 
 The dashboard bridge SSE endpoint `/events` emits `voice_status` with `status` (`off`, `starting`, `ready`, `error`), optional `engine` (`vosk` prototype or `openwakeword`) and `message`. `GET /api/voice/status` returns the latest status. Start/stop POST endpoints operate the local microphone. These are separate from the traffic API on port 8000.
