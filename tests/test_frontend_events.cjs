@@ -19,6 +19,16 @@ const timers=[];
 const context={document:{getElementById:get,createElement:()=>new Element(),addEventListener(){},activeElement:{tagName:'BODY'}},window:{},location:{search:'',hostname:'localhost'},URLSearchParams,Date,console,
   setTimeout(fn,ms){timers.push({fn,ms});return timers.length;},clearTimeout(){},fetch(){},AbortController,EventSource:class{},WebSocket:class{constructor(){socket=this;}}};
 const source=fs.readFileSync('frontend/app.js','utf8');
+// Kid Eddie (#161): one accent on a white-outlined star, a bounce that only translates, static under reduced motion.
+const styles=fs.readFileSync('frontend/style.css','utf8'), page=fs.readFileSync('frontend/index.html','utf8');
+assert.match(page, /<g class="body">(?:(?!<\/svg>).)*class="role-accessory kid-cap"/, 'the cap rides on the body so it stays on the head');
+assert.match(styles, /\.character \.role-accessory\{[^}]*stroke:#fff/, 'the star keeps a white outline in monochrome');
+assert.equal((styles.match(/\.kid-[a-z]+\{[^}]*fill:#[0-9a-f]{6}/g) || []).length, 1, 'the cap uses one accent colour');
+for (const name of ['kid-bounce', 'kid-talk']) {
+  const frames = styles.match(new RegExp(`@keyframes ${name}\\{(.*?)\\}\\}`))[1];
+  assert.doesNotMatch(frames, /scale/, `${name} moves Eddie without squashing the mouth`);
+}
+assert.match(styles, /prefers-reduced-motion:reduce\)\{[^{]*\.character\[data-role="kid"\][^{]*\{animation:none!important/, 'reduced motion keeps Kid Eddie static');
 // getElementById returns the first match, so a repeated id makes one element overwrite another.
 const pageIds=[...fs.readFileSync('frontend/index.html','utf8').matchAll(/\sid="([^"]+)"/g)].map(m=>m[1]);
 assert.deepEqual(pageIds.filter((id,i)=>pageIds.indexOf(id)!==i),[],'every id in index.html is unique');
@@ -180,6 +190,7 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   context.renderRules([{id:3, pattern:'*', action:'block', device_mac:'172.20.10.9', device:'172.20.10.9', created_by:'voice'}]);
   assert.equal(get('kid-mode').textContent, 'kid mode: on');
   assert.equal(get('kid-mode').attrs['aria-pressed'], 'true');
+  assert.equal(get('character').dataset.role, 'kid', 'stored rules covering every child device give Eddie the star cap');
   rows = get('device-list').children;
   assert.equal(rows[2].children[2].textContent, '172.20.10.9 · locked down · 1 tracker blocked');
 
@@ -210,6 +221,7 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
     {mac:'f0:4f:7c:11:22:33', ip:'172.20.10.5', label:'Fire Stick', kid:true, trackers:0, recent_domains:[]}]});
   assert.equal(get('kid-mode').textContent, 'kid mode: on for 1 of 2');
   assert.equal(get('kid-mode').attrs['aria-pressed'], 'false');
+  assert.equal(get('character').dataset.role, 'regular', 'kid mode on for only some devices is not Kid Eddie');
 
   // The kid mode button asks first, then shows the bridge's own words, never its own claim.
   let asked = '';
@@ -220,6 +232,7 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   context.confirm = () => true;
   get('kid-mode').onclick();
   assert.equal(get('kid-mode').textContent, 'kid mode: turning on…');
+  assert.equal(get('character').dataset.role, 'regular', 'pending kid mode does not add the cap');
   assert.deepEqual(JSON.parse(calls.find(c => c.path === '/api/kid-mode').init.body), {on:true});
   await answer('/api/kid-mode', 200, {message:"I saved the lockdown rules for Fire Stick, but Eddie's DNS hasn't loaded them yet, so nothing is blocked yet."});
   assert.equal(get('notice').textContent, "I saved the lockdown rules for Fire Stick, but Eddie's DNS hasn't loaded them yet, so nothing is blocked yet.");
@@ -291,6 +304,21 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   assert.equal(get('home-mode').attrs['aria-busy'], 'false');
   assert.equal(get('home-note').textContent, 'home mode: blocking camera uploads · turned on by hand');
   assert.equal(get('character').dataset.role, 'home', 'acknowledged and applied Home Mode adds the roof');
+  // Kid mode wins over home mode, and losing either source of kid state falls back to the next role.
+  const tablet = {mac:'172.20.10.9', ip:'172.20.10.9', label:'Kids tablet', kid:true, trackers:0, recent_domains:[]};
+  const lockdown = [{id:3, pattern:'*', action:'block', device_mac:'172.20.10.9', created_by:'voice'}];
+  context.renderDevices([tablet]); context.renderRules(lockdown);
+  assert.equal(get('character').dataset.role, 'kid', 'Kid Eddie while home mode is also on');
+  context.loadRules(); await answer('/api/rules', 502, {message:'Rules unavailable.'});
+  assert.equal(get('character').dataset.role, 'home', 'unknown rules drop the cap');
+  context.loadRules(); await answer('/api/rules', 200, lockdown);
+  assert.equal(get('character').dataset.role, 'kid');
+  context.loadDevices(); await answer('/api/devices', 502, {message:'Devices unavailable.'});
+  assert.equal(get('character').dataset.role, 'home', 'unknown devices drop the cap');
+  context.renderDevices([tablet]); assert.equal(get('character').dataset.role, 'kid');
+  context.renderRules([]);
+  assert.equal(get('character').dataset.role, 'home', 'turning kid mode off removes the cap');
+  context.renderDevices([]);
 
   // A failed change keeps the last acknowledged state and says so.
   get('home-mode').onclick();

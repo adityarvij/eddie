@@ -59,7 +59,7 @@ function feedNote(kind, text, event, result) {
 }
 const ruleLine = rule => `${rule.action} ${rule.pattern} · ${rule.device || 'all devices'} · by ${rule.created_by}`;
 function renderRules(list) {
-  $('rules-count').textContent = list.length;
+  $('rules-count').textContent = list.length; rulesKnown = true;
   modes.spoofing = list.filter(rule => rule.action === 'spoof').length; renderModes();
   lockedMacs = new Set(list.filter(rule => rule.pattern === '*' && rule.action === 'block' && rule.device_mac).map(rule => rule.device_mac)); if (deviceList.length) renderDevices(deviceList);
   const items = list.slice(0, 5).map(rule => { const li = document.createElement('li'); li.textContent = ruleLine(rule); return li; });
@@ -68,14 +68,14 @@ function renderRules(list) {
 }
 async function loadRules() {
   try { const r = await fetch('/api/rules'); if (!r.ok) throw Error(); renderRules(await r.json()); }
-  catch { $('rules-count').textContent = 'unavailable'; $('rules-list').replaceChildren(); modes.spoofing = 0; renderModes(); }
+  catch { $('rules-count').textContent = 'unavailable'; $('rules-list').replaceChildren(); modes.spoofing = 0; rulesKnown = false; renderModes(); }
 }
 // Devices (#35, #119): the "devices" link bottom right opens one row per device: its name, editable,
 // "---" until someone adds one; child or adult; then its IP, maker and what it looked up lately, so people
 // can tell which is which. A row lights up while its device looks something up.
 // New (pending) and denied devices (#98) come first, with approve / deny buttons that ask before acting.
 const STATUS_TEXT = { pending: 'new', denied: 'denied' };
-let deviceList = [], lockedMacs = new Set(), editingName = false, kidPending = null;
+let deviceList = [], lockedMacs = new Set(), editingName = false, kidPending = null, devicesKnown = false, rulesKnown = false;
 const deviceLabel = d => d.label || `--- (${d.ip || d.mac})`;
 const listNames = list => list.map(deviceLabel).join(', ');
 function deviceRow(d) {
@@ -103,7 +103,7 @@ function deviceRow(d) {
   return li;
 }
 function renderDevices(list) {
-  deviceList = list; $('device-count').textContent = list.length; renderKidMode();
+  deviceList = list; devicesKnown = true; $('device-count').textContent = list.length; renderKidMode();
   if (editingName) return;  // don't wipe a name being typed; it re-renders once the name is saved
   list = [...list.filter(d => STATUS_TEXT[d.status]), ...list.filter(d => !STATUS_TEXT[d.status])];
   $('device-list').replaceChildren(...list.map(deviceRow));
@@ -142,6 +142,7 @@ function renderKidMode() {
     : `kid mode: ${!kids.length ? 'off' : on ? 'on' : locked.length ? `on for ${locked.length} of ${kids.length}` : 'off'}`;
   button.disabled = kidPending !== null || !kids.length; button.setAttribute('aria-pressed', String(on)); button.setAttribute('aria-busy', String(kidPending !== null));
   $('kid-note').textContent = !kids.length ? "set a device to child to use kid mode" : `children's devices: ${listNames(kids)}`;
+  renderRole();
 }
 async function toggleKidMode() {
   const kids = deviceList.filter(d => d.kid), locked = kids.filter(d => lockedMacs.has(d.mac)), on = locked.length < kids.length;
@@ -170,7 +171,7 @@ async function decideDevice(d, decision) {
 }
 async function loadDevices() {
   try { const r = await fetch('/api/devices'); if (!r.ok) throw Error(); const data = await r.json(); renderDevices(data.devices || []); applyModes(data); }
-  catch { $('device-count').textContent = 'unavailable'; if (!editingName) $('device-list').replaceChildren(); }
+  catch { $('device-count').textContent = 'unavailable'; devicesKnown = false; renderRole(); if (!editingName) $('device-list').replaceChildren(); }
 }
 // Mode toggles show only state the backend acknowledged: a click shows "turning on…" until the API
 // answers, and offline and home mode say when DNS hasn't loaded the change.
@@ -225,11 +226,17 @@ function renderModes() {
   $('quarantine-note').classList.toggle('alert', qWaiting);
   const [home, homeAlert] = homeNote();
   $('home-note').textContent = home; $('home-note').classList.toggle('alert', homeAlert);
-  // Accessories represent acknowledged backend state only. Pending changes keep the last role,
-  // while unknown or disconnected state falls back to regular Eddie.
-  $('character').dataset.role = modes.home_mode === true ? 'home' : 'regular';
+  renderRole();
   const [away, alert] = awayNote();
   $('away-note').textContent = away; $('away-note').classList.toggle('alert', alert);
+}
+// Accessories represent acknowledged backend state only. Pending changes keep the last role,
+// while unknown or disconnected state falls back to regular Eddie. Kid mode is on, as on its switch,
+// when stored rules lock down every child's device; it wins over home mode.
+function renderRole() {
+  const kids = deviceList.filter(d => d.kid);
+  const kid = devicesKnown && rulesKnown && kids.length > 0 && kids.every(d => lockedMacs.has(d.mac));
+  $('character').dataset.role = kid ? 'kid' : modes.home_mode === true ? 'home' : 'regular';
 }
 // While the mic is on, the heading shows the mic icon and the footer button is gone: it's turned off
 // by saying "stop recording". While off, the button reads "start mic", prefixed "offline •" once offline mode is confirmed on.
