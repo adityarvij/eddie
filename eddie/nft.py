@@ -2,6 +2,8 @@
 
 On Linux with nftables, home mode adds non-security camera IPs to the `homeblock` set
 to drop active packets mid-stream. Turning home mode off flushes the set.
+The table lives only in the kernel, so a reboot wipes it: `ensure_table` rebuilds it when the
+API starts and before home mode adds anything.
 On non-Linux platforms or systems without nftables, functions cleanly no-op.
 """
 import logging
@@ -23,15 +25,15 @@ def is_available() -> bool:
     return bool(shutil.which("nft"))
 
 
-def _run_nft(args: list[str]) -> bool:
-    """Run an nft command via sudo or direct if root. Returns True on success."""
+def _run_nft(args: list[str], script: str | None = None) -> bool:
+    """Run an nft command via sudo or direct if root, `script` on stdin. Returns True on success."""
     if not is_available():
         return False
     is_root = getattr(os, "geteuid", lambda: -1)() == 0
     cmd = ["nft"] if is_root else ["sudo", "-n", "nft"]
     cmd.extend(args)
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=2)
+        proc = subprocess.run(cmd, input=script, capture_output=True, text=True, timeout=2)
         if proc.returncode != 0:
             log.warning("nft failed (%s): %s", " ".join(cmd), proc.stderr.strip())
             return False
@@ -39,6 +41,35 @@ def _run_nft(args: list[str]) -> bool:
     except Exception as exc:
         log.warning("nft execution error (%s): %s", " ".join(cmd), exc)
         return False
+
+
+def table_script(nat_iface: str | None = None) -> str:
+    """One nft transaction that creates the table if missing and resets its rules, keeping the set.
+
+    `add` leaves an existing table, set or chain alone; flushing the chains first means running it
+    again never doubles a rule. With `nat_iface`, traffic forwarded back out the interface it came
+    in on (a device using the Pi as its router on the same Wi-Fi) is masqueraded, so the upstream
+    router answers the Pi; without it, that router drops the replies.
+    """
+    nat_iface = os.environ.get("EDDIE_NAT_IFACE", "wlan0") if nat_iface is None else nat_iface
+    lines = [
+        f"add table {TABLE}",
+        f"add set {TABLE} {SET} {{ type ipv4_addr; }}",
+        f"add chain {TABLE} forward_filter {{ type filter hook forward priority 0; }}",
+        f"add chain {TABLE} postrouting {{ type nat hook postrouting priority srcnat; }}",
+        f"flush chain {TABLE} forward_filter",
+        f"flush chain {TABLE} postrouting",
+        f"add rule {TABLE} forward_filter ip saddr @{SET} drop",
+        f"add rule {TABLE} forward_filter ip daddr @{SET} drop",
+    ]
+    if nat_iface:
+        lines.append(f'add rule {TABLE} postrouting iifname "{nat_iface}" oifname "{nat_iface}" masquerade')
+    return "\n".join(lines) + "\n"
+
+
+def ensure_table() -> bool:
+    """Create Eddie's table, block set, forward filter and NAT if a reboot wiped them."""
+    return _run_nft(["-f", "-"], table_script())
 
 
 def get_camera_ips(conn: sqlite3.Connection | None = None) -> set[str]:
@@ -118,6 +149,7 @@ def apply_home_mode(on: bool, conn: sqlite3.Connection | None = None) -> bool:
     if not on:
         return _run_nft(["flush", "set", "inet", "eddie", "homeblock"])
 
+    ensure_table()
     ips = get_camera_ips(conn)
     if not ips:
         log.info("home mode nftables: no non-security camera IPs found to block")
