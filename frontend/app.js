@@ -304,7 +304,7 @@ function renderReport(report) {
   const demo = report.demo === true;
   $('report-title').textContent = demo ? `what they know · DEMO WEEK` : `what they know · last ${report.hours}h${report.source === 'eddie.db' ? ' · from eddie.db' : ''}`;
   $('report-demo').textContent = demo ? `DEMO DATA · ${report.label}` : ''; $('report-demo').hidden = !demo;
-  const items = (report.facts || []).map(f => { const li = document.createElement('li'); li.textContent = `${f.fact} — ${f.evidence} (confidence ${Math.round(f.confidence * 100)}%)`; return li; });
+  const items = (report.facts || []).map(f => { const li = document.createElement('li'); li.textContent = `${f.category ? `${f.category}${f.sensitive ? ' · sensitive' : ''}: ` : ''}${f.fact} — ${f.evidence} (confidence ${Math.round(f.confidence * 100)}%)`; return li; });
   if (!items.length) { const li = document.createElement('li'); li.textContent = 'Not enough traffic yet to say what anyone could guess.'; items.push(li); }
   $('report-facts').replaceChildren(...items); $('report').hidden = false;
 }

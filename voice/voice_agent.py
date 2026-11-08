@@ -116,7 +116,7 @@ EMPTY_HOUSE = re.compile(
 DOMAIN = re.compile(r'[a-z0-9_-]+(?:\.[a-z0-9_-]+)+')
 SPOKEN_DOMAIN = re.compile(r'\b[a-z0-9_-]+(?:\.[a-z0-9_-]+)*\.[a-z]{2,}\b')
 # eddie/labels.py TRACKING; copied so the voice worker doesn't import the backend.
-TRACKING = {'telemetry', 'ads', 'analytics', 'tracking'}
+TRACKING = {'telemetry', 'ads', 'analytics', 'tracking', 'id-sync'}
 IT_WINDOW_MS = 15 * 60 * 1000  # "it" never reaches back further than this in /events
 RULE_TIMEOUT = 5  # POST /rules waits up to 2 s for the DNS engine before answering
 IT_WORDS = r'it|that|this|that one|this one|that domain|this domain|that tracker|this tracker'

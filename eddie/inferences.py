@@ -6,7 +6,11 @@ from the event log; nothing here is invented. Each fact is
 
 Built: company exposure, active hours, after-midnight sessions, idle
 telemetry, beacons (a domain looked up on a timer), longest quiet stretch, and sessions (same category, gaps under
-10 minutes) by weekday. Not built yet: camera/doorbell occupancy signals.
+10 minutes) by weekday, plus (#134) one fact per labelled topic (kids, health,
+money, work, beliefs, voice assistants, ad ID syncing ...), which tracking
+company sees the most devices, and how many devices are active. Every fact
+names one of the README's ten CATEGORIES; Health, Beliefs and Kids are marked
+sensitive. Not built yet: camera/doorbell occupancy signals, mic watch.
 The local-model phrasing and its number check live in voice/ollama_agent.py
 (phrase); spoken_text is the template used when the model is off or fails.
 
@@ -20,6 +24,7 @@ from bisect import bisect_right
 from collections import Counter, defaultdict
 from datetime import datetime
 
+from .acr import endpoint as acr_endpoint
 from .beacons import Beacons
 from .insights import plural
 from .labels import HUMAN, TRACKING, lookup
@@ -29,6 +34,31 @@ IDLE_MS = 5 * 60 * 1000  # no human traffic for this long = nobody is using the 
 LATE_HOURS = range(0, 5)  # midnight to 5 AM local
 SESSION_GAP_MS = 10 * 60 * 1000  # same category, gaps under this = one session
 WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+
+# README "Beyond break-ins": every fact belongs to exactly one of these.
+CATEGORIES = ("Safety", "Health", "Kids", "Money", "Household", "Work", "Beliefs",
+              "What's on screen", "Listening", "Identity linking")
+SENSITIVE = {"Health", "Beliefs", "Kids"}
+# labels.py category -> (report category, what someone could guess). Only lookups, never
+# what was read or said: "assistant" is a connection, not proof any audio was sent.
+TOPICS = {
+    "kids": ("Kids", "A child probably uses a device here"),
+    "music": ("Household", "Someone here streams music"),
+    "camera": ("Safety", "A camera here reports to its cloud"),
+    "doorbell": ("Safety", "A video doorbell here reports to its cloud"),
+    "alarm": ("Safety", "An alarm system here reports to its cloud"),
+    "thermostat": ("Safety", "A smart thermostat here reports to its cloud"),
+    "health": ("Health", "Someone here uses health, pharmacy or telehealth services"),
+    "finance": ("Money", "Someone here banks, pays or borrows online"),
+    "shopping": ("Money", "Someone here shops online"),
+    "work": ("Work", "Someone here uses work tools from home"),
+    "jobs": ("Work", "Someone here may be looking for a job"),
+    "news": ("Beliefs", "Which news this house reads is visible"),
+    "religion": ("Beliefs", "Someone here visits religious sites"),
+    "politics": ("Beliefs", "Someone here visits political sites"),
+    "assistant": ("Listening", "A voice assistant here is connected to its cloud"),
+    "id-sync": ("Identity linking", "Ad companies are syncing IDs for this house"),
+}
 
 
 def period(hours: int) -> str:
@@ -129,6 +159,7 @@ def weekday_facts(human_sessions: list[dict]) -> list[dict]:
             f"{top_min} of {total} {category} minutes in {plural(len(group), 'session')} "
             f"were on {WEEKDAYS[top]}, across {plural(days, 'day')} with {category}",
             min(0.7, 0.3 + 0.05 * days),
+            "Household",
         ))
         weekend = [m for day, m in day_minutes.items() if day.weekday() >= 5]
         weekday = [m for day, m in day_minutes.items() if day.weekday() < 5]
@@ -141,12 +172,71 @@ def weekday_facts(human_sessions: list[dict]) -> list[dict]:
                     f"{weekend_avg} minutes a weekend day ({plural(len(weekend), 'day')}) vs "
                     f"{weekday_avg} a weekday ({plural(len(weekday), 'day')})",
                     min(0.7, 0.3 + 0.05 * days),
+                    "Household",
                 ))
     return facts
 
 
-def fact(text: str, evidence: str, confidence: float) -> dict:
-    return {"fact": text, "evidence": evidence, "confidence": round(confidence, 2)}
+def fact(text: str, evidence: str, confidence: float, category: str) -> dict:
+    if category not in CATEGORIES:
+        raise ValueError(f"unknown category {category!r}")
+    return {"fact": text, "evidence": evidence, "confidence": round(confidence, 2),
+            "category": category, "sensitive": category in SENSITIVE}
+
+
+def names(counter: Counter, limit: int = 3) -> str:
+    """The most common keys: "a", "a and b", "a, b, c and 2 others"."""
+    top = [k for k, _ in counter.most_common(limit)]
+    if rest := len(counter) - len(top):
+        return f"{', '.join(top)} and {plural(rest, 'other')}"
+    return top[0] if len(top) == 1 else f"{', '.join(top[:-1])} and {top[-1]}"
+
+
+def topic_facts(window: list[dict]) -> list[dict]:
+    """One fact per labelled topic (TOPICS) seen in the window, in TOPICS order."""
+    facts = []
+    for topic, (category, text) in TOPICS.items():
+        rows = [e for e in window if e["category"] == topic]
+        if not rows:
+            continue
+        days = len({datetime.fromtimestamp(e["ts"] / 1000).date() for e in rows})
+        facts.append(fact(
+            text,
+            f"{plural(len(rows), 'lookup')} to {names(Counter(e['company'] for e in rows))} "
+            f"from {names(Counter(e['device'] for e in rows))} on {plural(days, 'day')}",
+            0.7 if days > 1 else 0.5,
+            category,
+        ))
+    return facts
+
+
+def household_facts(window: list[dict], tracking: list[dict], hours: int) -> list[dict]:
+    """How many devices are active, and which tracking company sees the most of them.
+
+    Device names are a floor: unlabeled devices without a vendor share one name.
+    """
+    devices = {e["device"] for e in window}
+    if len(devices) < 2:
+        return []
+    facts = [fact(
+        f"At least {len(devices)} devices are in use in this house",
+        f"{len(devices)} differently named devices made lookups in {hours}h",
+        0.6,
+        "Household",
+    )]
+    seen = defaultdict(set)
+    for e in tracking:
+        seen[e["company"]].add(e["device"])
+    if seen:
+        company, by = max(sorted(seen.items()), key=lambda kv: len(kv[1]))
+        if len(by) >= 2:
+            facts.append(fact(
+                f"{company} can link {len(by)} of your {len(devices)} devices",
+                f"tracking lookups to {company} from {names(Counter(sorted(by)))}",
+                0.7,
+                "Identity linking",
+            ))
+    return facts
 
 
 def compute_facts(events: list[dict], hours: int = 24, now_ms: int | None = None) -> list[dict]:
@@ -165,6 +255,7 @@ def compute_facts(events: list[dict], hours: int = 24, now_ms: int | None = None
             f"{company} gets the most tracking data from this house",
             f"{plural(n, 'tracking request')} to {company} in {hours}h, {blocked} blocked",
             0.9,
+            "Identity linking",
         ))
 
     human = [e for e in window if e["category"] in HUMAN]
@@ -174,6 +265,7 @@ def compute_facts(events: list[dict], hours: int = 24, now_ms: int | None = None
             "Someone was using a screen between these times",
             f"streaming traffic from {clock(human[0]['ts'], hours > 24)} to {clock(human[-1]['ts'], hours > 24)}",
             0.7,
+            "Household",
         ))
         late = [s for s in human_sessions if datetime.fromtimestamp(s["start"] / 1000).hour in LATE_HOURS]
         if late:
@@ -182,6 +274,7 @@ def compute_facts(events: list[dict], hours: int = 24, now_ms: int | None = None
                 f"{plural(len(late), 'streaming session')} started between midnight and 5 AM, "
                 f"{plural(sum(s['requests'] for s in late), 'request')} in all",
                 0.6,
+                "Health",  # a sleep schedule
             ))
         gaps = [(b["ts"] - a["ts"], a["ts"]) for a, b in zip(human, human[1:])]
         if gaps:
@@ -191,6 +284,7 @@ def compute_facts(events: list[dict], hours: int = 24, now_ms: int | None = None
                     "The house may have been empty or asleep for a stretch",
                     f"no streaming for {gap // HOUR_MS}h starting {clock(start, hours > 24)}",
                     0.5,
+                    "Safety",
                 ))
 
     # Tracking while nobody is watching: the device reports on its own.
@@ -208,10 +302,13 @@ def compute_facts(events: list[dict], hours: int = 24, now_ms: int | None = None
             f"The {device} reports home even when nobody is using it",
             f"{plural(n, 'tracking request')} with no streaming in the 5 minutes before",
             0.8,
+            "Safety",  # its quiet times are the house's quiet times
         ))
     if beacon := beacon_fact(window, hours):
         facts.append(beacon)
     facts.extend(weekday_facts(human_sessions))
+    facts.extend(topic_facts(window))
+    facts.extend(household_facts(window, tracking, hours))
     return facts
 
 
@@ -233,6 +330,7 @@ def beacon_fact(window: list[dict], hours: int) -> dict | None:
         f"The {device} checks in with {domain} on a timer",
         f"{plural(n, 'lookup')} about every {gap} in {hours}h",
         0.7,
+        "What's on screen" if acr_endpoint(domain) else "Safety",
     )
 
 
