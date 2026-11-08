@@ -6,7 +6,7 @@ home when Eddie saw it in the last PRESENT_MS: its devices row's last_seen
 private address that stays the same for each network, so that per-network
 MAC is the key to mark, not the hardware one.
 
-The wanted state lives in engine_state: home (on or off), home_manual (1
+The wanted state lives in engine_state: home_mode (on or off), home_manual (1
 while a dashboard or voice change overrides presence) and a home_rev counter
 bumped on every write. The DNS server's StoreWatcher loads it into the
 decision engine and records the revision it loaded as home_loaded, the same
@@ -17,14 +17,12 @@ Presence (the API's watch_presence) turns home mode on when the first marked
 phone is home and off when the last one leaves. A manual change wins and
 holds until POST /mode {"home_auto": true} hands control back to presence.
 
-While on, the decision engine blocks CAMERA_DOMAINS and their subdomains with
-source home_mode. Rules and the allowlist still come first.
+While on, the decision engine blocks decision.CAMERA_DOMAINS and their
+subdomains with source home_mode (#43). Rules and the allowlist still come first.
 """
 import sqlite3
 
 PRESENT_MS = 10 * 60_000  # a phone seen this recently is home
-# Indoor cameras' upload domains. Ring's exact upload hosts aren't confirmed, so the whole of ring.com.
-CAMERA_DOMAINS = frozenset({"ring.com"})
 
 
 def _state(conn: sqlite3.Connection, key: str) -> int:
@@ -34,7 +32,7 @@ def _state(conn: sqlite3.Connection, key: str) -> int:
 
 def wanted(conn: sqlite3.Connection) -> bool:
     """The home mode state last written."""
-    return bool(_state(conn, "home"))
+    return bool(_state(conn, "home_mode"))
 
 
 def manual(conn: sqlite3.Connection) -> bool:
@@ -61,7 +59,7 @@ def write(conn: sqlite3.Connection, on: bool, is_manual: bool) -> int:
     with conn:
         rev = revision(conn) + 1
         conn.executemany("INSERT OR REPLACE INTO engine_state VALUES (?, ?)",
-                         [("home", int(on)), ("home_manual", int(is_manual)), ("home_rev", rev)])
+                         [("home_mode", int(on)), ("home_manual", int(is_manual)), ("home_rev", rev)])
     return rev
 
 

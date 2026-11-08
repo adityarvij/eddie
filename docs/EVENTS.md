@@ -221,11 +221,13 @@ next lookup starts learning again.
 
 ## Home mode: `GET/POST /mode` (#20)
 
-While home mode is on, the decision engine blocks indoor camera upload
-domains (`home.CAMERA_DOMAINS`: `ring.com` and its subdomains, since Ring's
-exact upload hosts aren't confirmed) on every device with `source:
-"home_mode"` and reason `home mode: ring.com camera upload`. Rules and the
-allowlist still come first; nothing else changes.
+While home mode is on, the decision engine blocks camera upload domains
+(`decision.CAMERA_DOMAINS`, #43: `ring.com`, `arlo.com`, `fakecamera.example`,
+`camera.local`, `a.rtmp.youtube.com`, `b.rtmp.youtube.com` and
+`upload.youtube.com`, each with its subdomains) on every device with
+`source: "home_mode"` and reason `home mode: <domain> camera upload
+blocked`. Ring's exact upload hosts aren't confirmed, so all of `ring.com`.
+Rules and the allowlist still come first; nothing else changes.
 
 It turns on and off by itself from household phone presence. Mark a phone
 with `PUT /devices/{mac} {"phone": true}` (below), using the address it has
@@ -242,7 +244,7 @@ then). `home_auto` can't go with `home_mode`, and `false` is 422. With
 `EDDIE_DB=off` there's no presence check, `home_mode` is a flag in memory,
 `home_applied` is always `false` and `home_auto` is 503.
 
-Each change is stored in `engine_state` (`home`, `home_manual`, `home_rev`)
+Each change is stored in `engine_state` (`home_mode`, `home_manual`, `home_rev`)
 and acknowledged like rules: the DNS server's StoreWatcher records
 `home_loaded`, and the answer (and the `mode` event, sent after the wait)
 carries `home_applied: true` only once it has. `POST /mode` with home fields

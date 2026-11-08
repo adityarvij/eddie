@@ -30,8 +30,8 @@ class EngineTests(unittest.TestCase):
     def test_home_mode_blocks_camera_uploads_only(self):
         engine = decision.Engine()
         self.assertEqual('flag', engine.evaluate(CAMERA, LAPTOP).action)
-        engine.home = True
-        self.assertEqual(decision.Decision('block', 'home_mode', 'home mode: ring.com camera upload'),
+        engine.set_home_mode(True)
+        self.assertEqual(decision.Decision('block', 'home_mode', 'home mode: ring.com camera upload blocked'),
                          engine.evaluate(CAMERA, LAPTOP))
         self.assertEqual('block', engine.evaluate('ring.com', LAPTOP).action)
         self.assertNotEqual('home_mode', engine.evaluate('netflix.com', LAPTOP).source)
@@ -39,7 +39,7 @@ class EngineTests(unittest.TestCase):
 
     def test_rules_and_the_allowlist_still_come_first(self):
         engine = decision.Engine()
-        engine.home = True
+        engine.set_home_mode(True)
         engine.set_rules([decision.Rule(1, '*.ring.com', 'allow', LAPTOP)])
         self.assertEqual('allow', engine.evaluate(CAMERA, LAPTOP).action)
         engine.set_rules([])

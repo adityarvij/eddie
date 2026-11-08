@@ -42,7 +42,7 @@ The `*` rule is only accepted for one device and only as a block (`rules.RuleIn`
 
 ### Home mode presence (#20)
 
-`eddie/home.py` holds home mode in `engine_state`: `home` (on or off), `home_manual` and `home_rev`. The decision engine loads `home` with the rules and, while it's on, blocks `home.CAMERA_DOMAINS` after rules and the allowlist (source `home_mode`). The API's `watch_presence` task (started by its lifespan when `EDDIE_DB` is on) calls `check_presence` every 15 s. State rules:
+`eddie/home.py` holds home mode in `engine_state`: `home_mode` (on or off), `home_manual` and `home_rev`. The decision engine loads `home_mode` with the rules and, while it's on, blocks `decision.CAMERA_DOMAINS` (#43) after rules and the allowlist (source `home_mode`). The API's `watch_presence` task (started by its lifespan when `EDDIE_DB` is on) calls `check_presence` every 15 s. State rules:
 
 - Automatic (`home_manual` 0): home mode is on exactly while at least one device marked `phone` was seen in the last 10 minutes. A change is written, waited on until DNS loads it, then sent as a `mode` event with `reason: presence` and `home_applied`.
 - Manual (`home_manual` 1): `POST /mode {"home_mode": ...}` (the dashboard toggle, voice) sets the state and `home_manual`. Presence checks change nothing while it holds, so a phone joining during a manual off does not turn it back on, and a manual on stays on after everyone leaves.
