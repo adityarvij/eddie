@@ -5,3 +5,4 @@ faster-whisper>=1.1,<2
 piper-tts>=1.3,<2
 vosk==0.3.44
 webrtcvad-wheels>=2.0.14,<3
+tokenizers>=0.15,<1

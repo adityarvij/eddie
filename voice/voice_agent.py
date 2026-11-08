@@ -173,6 +173,7 @@ UNDO = re.compile(
     r'(?:(?:can|could|would|will) you (?:please )?)?undo'
     r'(?: (?:it|that|this|that one|the last one|the last rule|the last change|that rule|that change|'
     r'that block|that allow|what you just did))?(?: (?:please|for me|now))*')
+QUESTION = re.compile(r'(?:(?:hey|ok|okay|so|and|eddie) )*(?:what|whats|which|why|how|hows|did|has|have|is|was|were|are|show|tell|give|any|anything|who)\b')
 NOTHING_TO_UNDO = "There's nothing for me to undo."
 
 
@@ -1028,6 +1029,8 @@ confirmation = Confirmation()
 # reply, or None when the model is unavailable. Its changes only reach
 # confirmation.request, never the backend. Set by frontend/serve.py (ollama_agent).
 ask_model = None
+# Set by frontend/serve.py when the local intent model (#179) loads: raw text -> reply or None.
+understand = None
 # Optional local model that writes "what they know" inferences from the backend's
 # facts: callable(facts) -> text, or None to keep the backend's template.
 phrase_inferences = None
@@ -1143,6 +1146,11 @@ def route(text):
     # A change the commands above can't parse ("lock down the TV to Netflix") goes to the
     # local model, whose write tools only reach confirmation; without it, nothing changes.
     if block or allow or re.search(r'\b(block|allow|lock|undo|email|send|mode)\b', text):
+        # A question that mentions blocking ("what did you block?") is answered, not treated as a command.
+        if understand is not None and not block and not allow and QUESTION.match(text):
+            reply = understand(raw)
+            if reply is not None:
+                return reply
         reply = ask_model(raw) if ask_model is not None else None
         if reply is not None:
             return reply
@@ -1175,6 +1183,10 @@ def route(text):
             return "I can't read Eddie's device list right now, so I can't suggest privacy settings."
     if text in ('hello', 'hi', 'hey', 'hey eddie'):
         return "Hey, I'm Eddie. Ask me what's been going on, tell me to block a domain, or to turn home mode on or off."
+    if understand is not None:
+        reply = understand(raw)
+        if reply is not None:
+            return reply
     if ask_model is not None:
         reply = ask_model(raw)
         if reply is not None:

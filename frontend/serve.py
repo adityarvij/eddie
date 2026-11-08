@@ -435,6 +435,13 @@ if __name__ == '__main__':
             print(f'Local agent: {agent.model} at {agent.url} (keyword router if it is unavailable).', flush=True)
         except ValueError as error:
             print(f'Local agent off: EDDIE_OLLAMA_URL refused: {error}.', flush=True)
+    try:
+        import intents
+        started = time.monotonic()
+        voice_agent.understand = intents.Intents()
+        print(f'Intent model loaded in {time.monotonic() - started:.1f} s.', flush=True)
+    except Exception as error:  # no voice environment or models: the keyword router still answers
+        print(f'Intent model off: {error}', flush=True)
     timers_file = os.environ.get('EDDIE_TIMERS_FILE', str(ROOT.parent / 'voice' / 'timers.json'))
     voice_agent.timer_store = timers.Timers(None if timers_file == 'off' else timers_file)
     if voice_agent.timer_store.load_error:

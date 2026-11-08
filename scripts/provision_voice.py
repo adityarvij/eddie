@@ -23,7 +23,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / 'voice' / 'assets.json'
 CHUNK = 1 << 20
-PACKAGES = ['numpy', 'sounddevice', 'onnxruntime', 'faster_whisper', 'openwakeword', 'vosk', 'piper', 'webrtcvad']
+PACKAGES = ['numpy', 'sounddevice', 'onnxruntime', 'tokenizers', 'faster_whisper', 'openwakeword', 'vosk', 'piper', 'webrtcvad']
 
 
 class AssetError(Exception):
