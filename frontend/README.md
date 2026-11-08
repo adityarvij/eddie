@@ -109,6 +109,8 @@ The server binds only to localhost for the laptop demo. External fonts, analytic
 
 Calling Eddie opens a larger animated character with listening, thinking and speaking states. After “Hey Eddie” and after each reply, Eddie keeps listening for a follow-up without the wake phrase. If nothing is said for 4 seconds, Eddie disappears and the live feed comes back; the next request starts with “Hey Eddie” again. A preview opened with **Wake Eddie** or **Space** while the microphone is off also closes after 4 seconds. There is no typed input. Transcripts and replies are not displayed beneath Eddie; speech is the primary response.
 
+On the dashboard, the same character sits at a smaller size to the right of the live logs (or at the lower right on narrow screens). Calling Eddie moves that one DOM element into the focused voice view; dismissing him returns it to the dashboard. Browsers with the View Transitions API animate the shared character between those positions over 700 ms with a smooth ease-out curve. Other browsers switch views normally, and reduced-motion preferences skip the transition. The main dashboard reserves space for Eddie at laptop and iPad-kiosk widths so he does not cover log text.
+
 ### Role visual contract (#159)
 
 The voice view contains one Eddie SVG and one voice-state overlay. `EDDIE_VISUALS` in `app.js` is the single state-to-visual map:

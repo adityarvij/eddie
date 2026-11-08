@@ -20,6 +20,10 @@ const context={document:{getElementById:get,createElement:()=>new Element(),addE
   setTimeout(fn,ms){timers.push({fn,ms});return timers.length;},clearTimeout(){},fetch(){},AbortController,EventSource:class{},WebSocket:class{constructor(){socket=this;}}};
 const source=fs.readFileSync('frontend/app.js','utf8');
 const styles=fs.readFileSync('frontend/style.css','utf8');
+assert.match(source, /dashboardEddieSlot\.append\(\$\('character'\)\)/, 'the same Eddie returns to the dashboard');
+assert.doesNotMatch(source, /cloneNode\([^)]*\).*character/, 'the dashboard does not duplicate Eddie');
+assert.match(styles, /view-transition-name:eddie-character/, 'Eddie has a shared-element transition into voice view');
+assert.match(styles, /@media\(min-width:900px\)\{main\{padding-right:290px\}\}/, 'laptop logs reserve room for dashboard Eddie');
 assert.match(styles, /prefers-reduced-motion:reduce[^}]*\.character\[data-motion\]/, 'reduced motion disables role animation');
 assert.match(styles, /data-state="speaking"[^}]*--edge:45,113,255/, 'speaking remains blue for every role');
 assert.match(styles, /--edge:255,210,55/, 'listening remains yellow for every role');
