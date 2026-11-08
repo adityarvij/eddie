@@ -89,3 +89,6 @@ footer #open-devices{color:#fff}footer #open-devices span{margin:0}
 .broker-counter{color:#facc15}.event.broker{background:rgba(250,204,21,.08)}.tag-broker{color:#facc15}
 /* Privacy settings coach (#112): one block per recognised device, inside the report panel style. */
 .suggestions .suggestion{margin:12px 0 0;color:#ddd}.suggestions .suggestion p{margin:4px 0}.suggestion-head{color:#fff;font-weight:700}.suggestions a{color:#ddd;overflow-wrap:anywhere}
+/* Mic indicator (#128): first icon in the heading row, shown only while the mic stream is open. */
+.mic-on{width:44px;height:44px;margin:-12px 0 -12px -4px;padding:12px;color:#fff}.mic-on[hidden]{display:none}
+.mic-on svg{width:20px;height:20px;display:block;fill:none;stroke:currentColor;stroke-width:1.5}.mic-on rect{fill:currentColor}

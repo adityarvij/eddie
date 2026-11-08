@@ -8,7 +8,7 @@ python3.11 -m venv .venv-frontend
 .venv-frontend/bin/python frontend/serve.py
 ```
 
-Open http://localhost:5173. Press **Space** to preview the character. The footer has one button, **start mic** / **stop mic** (one or the other, never both), prefixed “offline •” while offline mode is confirmed on. Escape dismisses him. Mouth animation follows the duration of macOS local speech output. No browser speech-recognition service is used.
+Open http://localhost:5173. Press **Space** to preview the character. While the mic is off the footer shows **start mic**, prefixed “offline •” while offline mode is confirmed on. While it's on, that button is gone and a mic icon shows first in the heading row, before the house; say “stop recording” to turn it off (#128). Escape dismisses him. Mouth animation follows the duration of macOS local speech output. No browser speech-recognition service is used.
 
 ### Viewing from the iPad
 

@@ -252,11 +252,25 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   assert.equal(get('home-mode').attrs['data-spoofing'], 'false');
   assert.equal(get('home-mode').attrs['aria-label'], 'home mode: off');
   assert.equal(get('offline-mode').textContent, 'offline mode: off');
+  // Mic indicator (#128): the heading's mic icon shows only while the stream is open, and the footer
+  // button only offers to start it; stopping is by voice.
   assert.equal(get('mic').textContent, 'start mic');
+  assert.equal(get('mic').hidden, false);
+  assert.equal(get('mic-on').hidden, true);
+  socket.onmessage({data:JSON.stringify({type:'voice_status',status:'starting'})});
+  assert.equal(get('mic-on').hidden, true, 'models still loading: the stream is not open yet');
   socket.onmessage({data:JSON.stringify({type:'voice_status',status:'ready',engine:'vosk'})});
-  assert.equal(get('mic').textContent, 'stop mic');
-  socket.onmessage({data:JSON.stringify({type:'voice_status',status:'off'})});
-  assert.equal(get('mic').textContent, 'start mic');
+  assert.equal(get('mic-on').hidden, false);
+  assert.equal(get('mic').hidden, true, 'no stop button while the mic is on');
+  get('mic').onclick();
+  assert.equal(calls.filter(c => c.path === '/api/voice/stop').length, 0, 'the footer never stops the mic');
+  for (const status of ['off', 'error']) {
+    socket.onmessage({data:JSON.stringify({type:'voice_status',status:'ready',engine:'vosk'})});
+    socket.onmessage({data:JSON.stringify({type:'voice_status',status})});
+    assert.equal(get('mic-on').hidden, true, status);
+    assert.equal(get('mic').hidden, false, status);
+    assert.equal(get('mic').textContent, 'start mic');
+  }
 
   // A click shows pending, not the new state, until the bridge answers with the API's echo.
   get('home-mode').onclick();

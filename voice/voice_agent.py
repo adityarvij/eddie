@@ -1027,6 +1027,29 @@ ask_model = None
 phrase_inferences = None
 # Timers and reminders (#122). In memory here; frontend/serve.py swaps in the file-backed store and rings them.
 timer_store = timers.Timers()
+# Turns the microphone off (#128): callable() -> True if it was on. Set by frontend/serve.py;
+# None when there's no microphone to stop (tests, typed-only use).
+microphone_off = None
+STOP_MIC = re.compile(
+    LEAD + r'(?:stop (?:recording|listening)|stop the (?:mic|microphone)|(?:turn|switch|shut) (?:off|down) the (?:mic|microphone)'
+    r'|(?:turn|switch|shut) the (?:mic|microphone) (?:off|down)|(?:mic|microphone) off)(?: please| eddie)?')
+STOP_MIC_TOOL = {
+    'type': 'function',
+    'function': {
+        'name': 'stop_microphone',
+        'description': 'Turn the microphone off when the user asks Eddie to stop recording or listening.',
+        'parameters': {'type': 'object', 'properties': {}, 'additionalProperties': False},
+    },
+}
+
+
+def stop_microphone():
+    """The router's and the local model's stop_microphone. Takes no yes: turning the mic off only shares less."""
+    if microphone_off is None or not microphone_off():
+        return 'The microphone is already off.'
+    return "Okay, I'm turning the microphone off. Start it again from the dashboard."
+
+
 TIME_NUMBERS = {'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5, 'six': 6, 'seven': 7,
                 'eight': 8, 'nine': 9, 'ten': 10, 'eleven': 11, 'twelve': 12, 'fourteen': 14,
                 'thirty': 30}
@@ -1064,6 +1087,8 @@ def route(text):
     raw = text.strip()
     text = re.sub(r'[^a-z0-9\s]', '', text.lower()).strip()
     text = re.sub(r'\s+', ' ', text)
+    if STOP_MIC.fullmatch(text):
+        return stop_microphone()
     # A new risky command replaces any pending one; otherwise a pending action
     # consumes the reply, including missed speech.
     new_device = NEW_DEVICE.fullmatch(words(raw))

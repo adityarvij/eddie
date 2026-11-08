@@ -17,6 +17,7 @@ class ConversationTests(unittest.TestCase):
         texts: what each transcription returns (default always "give me a summary").
         on_reply(dismissed): runs as Eddie answers, e.g. to click the close button mid-reply."""
         stopped, dismissed = threading.Event(), threading.Event()
+        self.stopped = stopped
         events, replies = [], []
         texts = iter(texts) if texts is not None else None
         def answer(text):
@@ -105,3 +106,12 @@ class ConversationTests(unittest.TestCase):
         self.assertEqual(replies, [])
         self.assertEqual(self.states(events), ['listening', 'dismissed'])
         self.assertEqual(detector.predict.call_count, 5)  # waiting for the wake phrase again
+
+    def test_stop_recording_closes_the_mic_after_the_reply(self):
+        silence = np.zeros(1280, dtype=np.int16)
+        speech = np.full(1280, 2000, dtype=np.int16)
+        stop = lambda dismissed: self.stopped.set()
+        events, replies, _ = self.exercise([silence]*2 + [speech] + [silence]*10 + [speech] + [silence]*10,
+                                           texts=['stop recording'], on_reply=stop)
+        self.assertEqual(replies, ['stop recording'])  # nothing after it is heard
+        self.assertEqual(self.states(events), ['listening', 'thinking'])  # no "listening" again

@@ -157,6 +157,14 @@ def ring_timers():
             answer(text, reply=str, alarm=title)
         time.sleep(1)
 
+def microphone_off():
+    """Stop the microphone (the voice "stop recording"); True if it was on. The thread ends after the reply."""
+    was_on = voice_thread is not None and voice_thread.is_alive() and not stopped.is_set()
+    stopped.set()
+    return was_on
+
+voice_agent.microphone_off = microphone_off
+
 def microphone():
     try:
         def publish(event):
