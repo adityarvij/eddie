@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 # spoof (#99): answered with Eddie's own IP so the stub server (spoof_server.py) replies.
 Action = Literal["allow", "block", "flag", "spoof"]
-Source = Literal["rule", "allowlist", "blocklist", "heuristic", "ai", "home_mode", "away_mode", "default"]
+Source = Literal["rule", "allowlist", "blocklist", "heuristic", "ai", "home_mode", "away_mode", "quarantine", "default"]
 
 
 class QueryEvent(BaseModel):
@@ -24,6 +24,23 @@ class QueryEvent(BaseModel):
     @classmethod
     def normalize_domain(cls, v: str) -> str:
         return v.strip().lower().rstrip(".")
+
+
+class NewDeviceEvent(BaseModel):
+    """A MAC Eddie saw for the first time (#98), from the DNS server's device map."""
+    model_config = ConfigDict(extra="forbid")
+    type: Literal["new_device"] = "new_device"
+    ts: int = Field(ge=0)
+    device_mac: str = Field(pattern=r"^[0-9a-f]{2}(:[0-9a-f]{2}){5}$")
+    device: str = Field(min_length=1, max_length=64)
+    ip: str | None = Field(default=None, max_length=64)
+    vendor: str | None = Field(default=None, max_length=64)
+    hostname: str | None = Field(default=None, max_length=63)
+    quarantine: bool  # whether quarantine was on when it was recorded, not proof of enforcement
+
+
+class QuarantineUpdate(BaseModel):
+    quarantine: bool
 
 
 MAX_AWAY_MS = 30 * 86_400_000  # away mode's end time is at most 30 days ahead
