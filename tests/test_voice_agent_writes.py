@@ -104,8 +104,8 @@ class Writes(unittest.TestCase):
         self.assertEqual(voice_agent.respond("I'm home for the weekend"),
                          'Turn home mode on? Say yes to confirm or no to cancel.')
         self.assertEqual(self.backend.modes, [])
-        self.assertEqual(voice_agent.respond('yes'), "Home mode is saved as on. Eddie's DNS doesn't report back "
-                                                     "on home mode, so I can't say it's being enforced.")
+        self.assertEqual(voice_agent.respond('yes'), "Home mode is saved as on, but Eddie's DNS hasn't confirmed it, "
+                                                     "so I can't say it's being enforced.")
         self.assertEqual(self.backend.modes, [{'home_mode': True}])
 
     # Invalid

@@ -118,6 +118,8 @@ DOMAINS = {
 TRACKING = {"telemetry", "ads", "analytics", "tracking", "id-sync"}
 HUMAN = {"streaming"}  # traffic that means a person is using the device
 SECURITY = {"camera", "doorbell", "alarm"}  # devices protecting the house; Eddie advises never blocking them
+# Never kept raw past a day (#111): category -> the group store.forget counts it under.
+SENSITIVE = {"health": "health", "kids": "kids", "news": "beliefs", "religion": "beliefs", "politics": "beliefs"}
 
 
 def registrable_domain(domain: str) -> str:
@@ -149,6 +151,16 @@ def lookup(domain: str) -> tuple[str, str]:
                 company = owner
                 break
     return company or registrable_domain(domain), category
+
+
+def id_sync(domain: str) -> str | None:
+    """The ad-ID sync domain (a DOMAINS key) this lookup belongs to, else None."""
+    parts = domain.strip().lower().rstrip('.').split('.')
+    for i in range(len(parts)):
+        suffix = '.'.join(parts[i:])
+        if suffix in DOMAINS:
+            return suffix if DOMAINS[suffix][1] == 'id-sync' else None
+    return None
 
 
 def broker(domain: str) -> dict | None:

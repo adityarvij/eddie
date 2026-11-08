@@ -240,9 +240,10 @@ class AwayAPITests(unittest.IsolatedAsyncioTestCase):
         state = (await self.http.get('/mode')).json()
         self.assertEqual((False, None, []), (state['away'], state['away_until'], state['away_devices']))
 
-    async def test_home_mode_requests_are_unchanged(self):
-        r = await self.http.post('/mode', json={'home_mode': True})
-        self.assertEqual({'home_mode': True}, r.json())
+    async def test_home_mode_requests_leave_away_alone(self):
+        with patch.object(api, 'APPLY_TIMEOUT', 0.1):
+            r = await self.http.post('/mode', json={'home_mode': True})
+        self.assertEqual({'home_mode': True, 'home_manual': True, 'home_applied': False}, r.json())
         self.assertEqual([], self.away_events())
         self.assertTrue(api.state['home_mode'])
 

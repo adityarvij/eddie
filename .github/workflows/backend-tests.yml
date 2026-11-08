@@ -7,9 +7,11 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       matrix:
+        # The Pi 5 is ARM64; Raspberry Pi OS Bookworm ships Python 3.11 and Trixie 3.13 (#18).
+        os: [ubuntu-latest, ubuntu-24.04-arm]
         python-version: ["3.11", "3.13"]
     steps:
       - uses: actions/checkout@v4
@@ -19,3 +21,9 @@ jobs:
       - run: uv sync --locked
       # Voice tests need the mic/model stack from voice/requirements.txt, so they stay local.
       - run: uv run python -m unittest -v $(ls tests/test_*.py | grep -v '/test_voice_')
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: shellcheck scripts/*.sh

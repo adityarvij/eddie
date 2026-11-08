@@ -1,0 +1,8 @@
+# Starts every enabled Eddie service: sudo systemctl start eddie.target (#18).
+[Unit]
+Description=Eddie privacy guard
+Wants=network-online.target
+After=network-online.target
+
+[Install]
+WantedBy=multi-user.target

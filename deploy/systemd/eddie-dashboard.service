@@ -1,0 +1,20 @@
+[Unit]
+Description=Eddie dashboard and voice (port 5173)
+PartOf=eddie.target
+After=network-online.target sound.target eddie-api.service ollama.service
+Wants=ollama.service
+
+[Service]
+User=@USER@
+# The voice loop needs the speakerphone; the audio group can open it without a desktop session.
+SupplementaryGroups=audio
+WorkingDirectory=@REPO@
+Environment=EDDIE_DASHBOARD_HOST=0.0.0.0
+EnvironmentFile=@ENV@
+# install_pi.sh picks scripts/run_voice.sh when the voice environment exists, else the dashboard alone.
+ExecStart=@DASHBOARD@
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=eddie.target

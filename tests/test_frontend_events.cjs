@@ -10,7 +10,7 @@ class Element {
   remove(){this.parent.children=this.parent.children.filter(node=>node!==this);}
   querySelector(){return null;} cloneNode(){return new Element();}
   replaceChildren(...nodes){this.children=[];this.append(...nodes);}
-  addEventListener(){} setAttribute(k,v){this.attrs[k]=v;} focus(){}
+  addEventListener(){} setAttribute(k,v){this.attrs[k]=v;} removeAttribute(k){delete this.attrs[k];} focus(){}
 }
 const ids=new Map();
 const get=id=>{if(!ids.has(id))ids.set(id,new Element());return ids.get(id);};
@@ -283,11 +283,11 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   const sent = calls.find(c => c.path === '/api/mode' && c.init);
   assert.equal(sent.init.method, 'POST');
   assert.deepEqual(JSON.parse(sent.init.body), {home_mode:true});
-  await answer('/api/mode', 200, {home_mode:true});
+  await answer('/api/mode', 200, {home_mode:true, home_manual:true, home_applied:true});
   assert.equal(get('home-mode').attrs['aria-label'], 'home mode: on');
   assert.equal(get('home-mode').attrs['aria-pressed'], 'true');
   assert.equal(get('home-mode').attrs['aria-busy'], 'false');
-  assert.equal(get('home-note').textContent, 'home mode is a backend flag; DNS does not enforce it yet');
+  assert.equal(get('home-note').textContent, 'home mode: blocking camera uploads · turned on by hand');
 
   // A failed change keeps the last acknowledged state and says so.
   get('home-mode').onclick();
@@ -305,13 +305,20 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   assert.equal(get('offline-mode').textContent, 'offline mode: on');
   assert.equal(get('mic').textContent, 'offline • start mic');
   assert.equal(get('offline-note').textContent, 'offline mode on not yet applied by DNS');
-  assert.equal(get('home-note').textContent, 'home mode is a backend flag; DNS does not enforce it yet', 'both notes show at once');
+  assert.equal(get('home-note').textContent, 'home mode: blocking camera uploads · turned on by hand', 'both notes show at once');
 
   // Backend broadcasts (another screen, or voice) update the toggles.
   socket.onmessage({data:JSON.stringify({type:'offline_mode', offline:true, applied:true})});
   assert.equal(get('offline-note').textContent, '');
-  socket.onmessage({data:JSON.stringify({type:'mode', home_mode:false})});
+  socket.onmessage({data:JSON.stringify({type:'mode', home_mode:false, home_manual:true, home_applied:true, reason:'manual'})});
   assert.equal(get('home-mode').attrs['aria-label'], 'home mode: off');
+  assert.equal(get('home-note').textContent, 'home mode: off by hand, phones ignored');
+  // Phone presence (#20): shown as on only once DNS has loaded it.
+  socket.onmessage({data:JSON.stringify({type:'mode', home_mode:true, home_manual:false, home_applied:false, reason:'presence'})});
+  assert.equal(get('home-note').textContent, 'home mode on not yet applied by DNS');
+  socket.onmessage({data:JSON.stringify({type:'mode', home_mode:true, home_manual:false, home_applied:true, reason:'presence'})});
+  assert.equal(get('home-note').textContent, 'home mode: blocking camera uploads · a household phone is home');
+  socket.onmessage({data:JSON.stringify({type:'mode', home_mode:false, home_manual:false, home_applied:true, reason:'presence'})});
   assert.equal(get('home-note').textContent, '');
   assert.equal(get('requests').textContent, '0', 'mode events are not DNS requests (the snapshot reset the count)');
 
@@ -362,4 +369,38 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   socket.onmessage({data:JSON.stringify({type:'question_resolved', id:3, answer:'ignore', by:'voice', applied:null})});
   assert.equal(get('question-actions').hidden, true);
   console.log('Frontend question card checks passed');
+
+  // Tracker map (#107): companies down, devices across, ad-ID sync rows red with a block button.
+  get('tracker-map-open').onclick();
+  assert.equal(get('tracker-map').hidden, false);
+  await answer('/api/tracker-map', 200, {window:'24h', device_count:3, devices:['Phone','TV','Tablet'], text:'Google sees 2 of your 3 devices.', companies:[
+    {company:'Google', device_count:2, requests:3, blocked:1, devices:[{device:'TV',requests:2},{device:'Phone',requests:1}], id_sync:[]},
+    {company:'LiveRamp', device_count:1, requests:1, blocked:0, devices:[{device:'TV',requests:1}], id_sync:[{domain:'rlcdn.com',requests:1,blocked:0,devices:['TV'],rule_id:null}]}]});
+  assert.equal(get('tracker-map-text').textContent, 'Google sees 2 of your 3 devices.');
+  const [thead, tbody] = get('tracker-map-grid').children;
+  assert.deepEqual(thead.children[0].children.map(c => c.textContent), ['company','Phone','TV','Tablet']);
+  assert.deepEqual(tbody.children[0].children.map(c => c.textContent), ['Google · 2/3','■','■','·']);
+  assert.notEqual(tbody.children[0].className, 'sync');
+  assert.equal(tbody.children[1].className, 'sync', 'an ad-ID sync company is marked for the red style');
+  let sync = get('tracker-map-sync').children[0];
+  assert.match(sync.children[0].textContent, /^\[id sync\] LiveRamp · rlcdn\.com · 1 device, 1 lookup, 0 blocked$/);
+  const blockButton = sync.children[1];
+  assert.equal(blockButton.textContent, 'block rlcdn.com');
+  blockButton.onclick();
+  assert.equal(blockButton.disabled, true);
+  assert.equal(JSON.parse(calls.find(c => c.path === '/api/tracker-map/block').init.body).domain, 'rlcdn.com');
+  await answer('/api/tracker-map/block', 200, {pattern:'*.rlcdn.com', existing:false, applied:false});
+  assert.match(get('notice').textContent, /hasn't confirmed/, 'a stored rule is not claimed as enforced');
+  await answer('/api/tracker-map', 200, {device_count:1, devices:['TV'], text:'LiveRamp sees 1 of your 1 device.', companies:[
+    {company:'LiveRamp', device_count:1, devices:[{device:'TV',requests:1}], id_sync:[{domain:'rlcdn.com',requests:1,blocked:0,devices:['TV'],rule_id:4}]}]});
+  sync = get('tracker-map-sync').children[0];
+  assert.equal(sync.children[1].textContent, 'rule in place');
+  assert.equal(sync.children[1].disabled, true);
+  sync.children[1].disabled = false; sync.children[1].onclick();
+  await answer('/api/tracker-map/block', 502, {message:'The traffic API did not confirm the block.'});
+  assert.match(get('notice').textContent, /^Couldn't block rlcdn\.com: The traffic API/);
+  assert.equal(sync.children[1].disabled, false);
+  get('tracker-map-close').onclick();
+  assert.equal(get('tracker-map').hidden, true);
+  console.log('Frontend tracker map checks passed');
 })().catch(error => { console.error(error); process.exit(1); });

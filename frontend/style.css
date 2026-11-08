@@ -92,3 +92,13 @@ footer #open-devices{color:#fff}footer #open-devices span{margin:0}
 /* Mic indicator (#128): first icon in the heading row, shown only while the mic stream is open. */
 .mic-on{width:44px;height:44px;margin:-12px 0 -12px -4px;padding:12px;color:#fff}.mic-on[hidden]{display:none}
 .mic-on svg{width:20px;height:20px;display:block;fill:none;stroke:currentColor;stroke-width:1.5}.mic-on rect{fill:currentColor}
+/* Tracker map (#107): companies down, devices across; red marks ad-ID syncing. Scrolls sideways on the iPad. */
+.tracker-map-text{color:#fff;font-weight:700;margin:8px 0}
+.map-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.map-grid{border-collapse:collapse;white-space:nowrap}
+.map-grid th,.map-grid td{border:1px solid #333;padding:4px 10px;text-align:center;font-weight:400}
+.map-grid thead th{color:#aaa}.map-grid tbody th{text-align:left;position:sticky;left:0;background:#000;color:#fff}
+.map-grid td.seen{color:#fff}.map-grid td.unseen{color:#444}
+.map-grid tr.sync th,.map-grid tr.sync td.seen{color:#ff3b30}
+.map-sync{list-style:none;padding:0;margin:10px 0}.map-sync li{display:flex;flex-wrap:wrap;align-items:center;gap:4px 12px;margin:6px 0;color:#ff3b30}
+.map-sync .toggle{border-color:#ff3b30;color:#ff3b30}.map-sync .toggle:disabled{border-color:#666;color:#888}

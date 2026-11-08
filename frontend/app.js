@@ -173,12 +173,13 @@ async function loadDevices() {
   catch { $('device-count').textContent = 'unavailable'; if (!editingName) $('device-list').replaceChildren(); }
 }
 // Mode toggles show only state the backend acknowledged: a click shows "turning on…" until the API
-// answers, and offline mode says when DNS hasn't loaded the change. Home mode is a backend flag only.
+// answers, and offline and home mode say when DNS hasn't loaded the change.
 // Away mode (voice or the API) is shown only once DNS has loaded it, and drops at its end time.
 // spoofing counts the stored spoof rules (#99); the house icon turns into Pinocchio while there are any.
-const modes = {home_mode: null, offline: null, offline_applied: false, spoofing: 0, away: null, quarantine: null, quarantine_applied: false}, modePending = {};
+const modes = {home_mode: null, home_manual: false, home_applied: null, offline: null, offline_applied: false, spoofing: 0, away: null, quarantine: null, quarantine_applied: false}, modePending = {};
 function applyModes(state) {
   if (typeof state.home_mode === 'boolean') modes.home_mode = state.home_mode;
+  if (typeof state.home_applied === 'boolean') { modes.home_applied = state.home_applied; modes.home_manual = state.home_manual === true; }
   if (typeof state.offline === 'boolean') { modes.offline = state.offline; modes.offline_applied = state.offline_applied === true; }
   if (typeof state.quarantine === 'boolean') { modes.quarantine = state.quarantine; modes.quarantine_applied = state.quarantine_applied === true; }
   if (typeof state.away === 'boolean') modes.away = {on: state.away, until: state.away_until || null, applied: state.away_applied === true,
@@ -195,6 +196,13 @@ function awayNote(away = modes.away) {
   const cut = away.devices.length ? `cutting telemetry from ${names(away.devices)}` : 'no device seen showing someone home, nothing blocked';
   const kept = away.exempt.length ? ` · ${names(away.exempt)} stay${away.exempt.length === 1 ? 's' : ''} up` : '';
   return [`away mode: on${until} · ${cut}${kept}`, false];
+}
+// [note, is it an alert]: home mode (#20) once DNS confirms it, and whether phones or a manual change set it.
+function homeNote() {
+  if (modes.home_mode === null || modes.home_applied === null) return ['', false];
+  if (!modes.home_applied) return [`home mode ${modes.home_mode ? 'on' : 'off'} not yet applied by DNS`, true];
+  if (modes.home_mode) return [`home mode: blocking camera uploads · ${modes.home_manual ? 'turned on by hand' : 'a household phone is home'}`, false];
+  return [modes.home_manual ? 'home mode: off by hand, phones ignored' : '', false];
 }
 function renderModes() {
   for (const [id, label, key] of [['home-mode', 'home mode', 'home_mode'], ['offline-mode', 'offline mode', 'offline'], ['quarantine-mode', 'quarantine new devices', 'quarantine']]) {
@@ -215,7 +223,8 @@ function renderModes() {
   $('quarantine-note').textContent = qWaiting ? 'quarantine change not yet applied by DNS'
     : 'DNS-only: a device using hard-coded IPs or its own DNS still gets out; router mode (#22/#23) stops that';
   $('quarantine-note').classList.toggle('alert', qWaiting);
-  $('home-note').textContent = modes.home_mode ? 'home mode is a backend flag; DNS does not enforce it yet' : '';
+  const [home, homeAlert] = homeNote();
+  $('home-note').textContent = home; $('home-note').classList.toggle('alert', homeAlert);
   const [away, alert] = awayNote();
   $('away-note').textContent = away; $('away-note').classList.toggle('alert', alert);
 }
@@ -291,7 +300,7 @@ function renderAcr() {
 }
 function consumeEvent(event) {
   if (event.type === 'ai_verdict') return feedNote('ai', `${event.domain}${event.reason ? ' — ' + event.reason : ''}`, event, AI_RESULTS[event.label] || [String(event.label), 'flag']);
-  if (event.type === 'mode') return applyModes({home_mode: event.home_mode});
+  if (event.type === 'mode') return applyModes(event);
   if (event.type === 'question') { question = event; return renderQuestion(); }
   if (event.type === 'question_resolved') { if (question?.id === event.id) { question = null; renderQuestion(); } return; }
   if (event.type === 'offline_mode') return applyModes({offline: event.offline, offline_applied: event.applied});
@@ -397,7 +406,47 @@ async function loadSuggestions() {
 }
 $('suggestions-open').onclick = () => showSuggestions($('suggestions').hidden);
 $('suggestions-close').onclick = () => { showSuggestions(false); $('suggestions-open').focus(); };
-window.eddie = { pushEvent: addEvent, wake, voiceEvent, renderReport, renderSuggestions, ask: text => control('/api/voice/ask', {text}) };
+// Cross-device tracker map (#107): which tracking companies each device looked up, from GET /api/tracker-map.
+function showTrackerMap(open) { $('tracker-map').hidden = !open; $('tracker-map-open').setAttribute('aria-expanded', String(open)); if (open) loadTrackerMap(); }
+function el(tag, text, className) { const e = document.createElement(tag); if (text !== undefined) e.textContent = text; if (className) e.className = className; return e; }
+function renderTrackerMap(data) {
+  const companies = data.companies || [], devices = data.devices || [];
+  $('tracker-map-text').textContent = data.text || '';
+  const head = el('tr'); head.append(el('th', 'company'), ...devices.map(d => el('th', d)));
+  const thead = el('thead'); thead.append(head);
+  const tbody = el('tbody');
+  for (const c of companies) {
+    const seen = new Map((c.devices || []).map(d => [d.device, d.requests]));
+    const tr = el('tr', undefined, c.id_sync && c.id_sync.length ? 'sync' : '');
+    tr.append(el('th', `${c.company} · ${c.device_count}/${devices.length}`));
+    for (const d of devices) { const n = seen.get(d); const td = el('td', n ? '■' : '·', n ? 'seen' : 'unseen'); td.setAttribute('title', n ? `${d}: ${n} lookups` : `${d}: none`); tr.append(td); }
+    tbody.append(tr);
+  }
+  $('tracker-map-grid').replaceChildren(...(companies.length ? [thead, tbody] : []));
+  const syncs = companies.flatMap(c => (c.id_sync || []).map(s => ({...s, company: c.company})));
+  $('tracker-map-sync').replaceChildren(...syncs.map(s => {
+    const li = el('li'); const n = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
+    li.append(el('span', `[id sync] ${s.company} · ${s.domain} · ${n(s.devices.length, 'device')}, ${n(s.requests, 'lookup')}, ${s.blocked} blocked`));
+    const b = el('button', s.rule_id ? 'rule in place' : `block ${s.domain}`, 'toggle'); b.disabled = Boolean(s.rule_id);
+    b.onclick = () => blockSync(s.domain, b); li.append(b); return li;
+  }));
+}
+async function blockSync(domain, button) {
+  button.disabled = true; button.setAttribute('aria-busy', 'true');
+  try {
+    const r = await control('/api/tracker-map/block', {domain}); const data = await r.json(); if (!r.ok) throw Error(data.message || data.detail);
+    notice(data.existing ? `A rule already blocks ${data.pattern}.` : data.applied ? `Blocked ${data.pattern} on every device. DNS confirmed.` : `Saved a block on ${data.pattern}, but DNS hasn't confirmed it yet.`);
+    loadTrackerMap();
+  } catch (e) { button.disabled = false; notice(`Couldn't block ${domain}${e.message ? `: ${e.message}` : ''}`); }
+  finally { button.removeAttribute('aria-busy'); }
+}
+async function loadTrackerMap() {
+  try { const r = await fetch('/api/tracker-map'); const data = await r.json(); if (!r.ok) throw Error(data.message || data.detail); renderTrackerMap(data); }
+  catch (e) { $('tracker-map-text').textContent = `unavailable${e.message ? `: ${e.message}` : ''}`; $('tracker-map-grid').replaceChildren(); $('tracker-map-sync').replaceChildren(); }
+}
+$('tracker-map-open').onclick = () => showTrackerMap($('tracker-map').hidden);
+$('tracker-map-close').onclick = () => { showTrackerMap(false); $('tracker-map-open').focus(); };
+window.eddie = { pushEvent: addEvent, wake, voiceEvent, renderReport, renderSuggestions, renderTrackerMap, ask: text => control('/api/voice/ask', {text}) };
 $('report-close').onclick = () => { $('report').hidden = true; };
 $('open-logs').onclick = () => toggleLogs($('assistant-logs').hidden);
 $('close-logs').onclick = () => { toggleLogs(false); $('open-logs').focus(); };

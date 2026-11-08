@@ -20,11 +20,16 @@ quarantine.py) and wait for DNS to load it like rules.
 eddie.db and waits for DNS to load it the same way (offline.py).
 POST /mode {"away": ...} does the same for away mode (away.py), after
 ranking which devices it covers from the query log.
+POST /mode {"home_mode": ...} does it for home mode (home.py, #20) as a manual
+change that holds until {"home_auto": true}; until then watch_presence turns
+home mode on and off as marked household phones come and go.
 Each new block rule is watched for signs it broke a device and deleted
 through DELETE /rules if it looks like it did (#101, rollback.py).
 /ingest also runs each event through the device's baseline in eddie.db and
 pushes new_domain and baseline_state events (baselines.py); /baselines and
 /devices/{key}/baseline read and reset them.
+/tracker-map says which tracking companies each device looked up (#107), and
+/tracker-map/block blocks one of their ad-ID sync domains through /rules.
 
 Writes (POST, PUT, DELETE) from anywhere but loopback need EDDIE_API_TOKEN as
 a bearer token (#96). Browsers may only write or open /ws/events from this
@@ -33,6 +38,7 @@ machine's own pages; see allowed_origin.
 Run: uv run uvicorn eddie.api:app --host 0.0.0.0 --port 8000
 """
 import asyncio
+import contextlib
 import hmac
 import ipaddress
 import itertools
@@ -49,15 +55,18 @@ from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocket
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, StrictBool, field_validator
 
-from . import acr, away, coach, baselines, beacons, bypass, decision, demo_week, devices, inferences, insights, labels, occupancy, offline, quarantine, questions, rollback, rules, store
+from . import acr, away, coach, baselines, beacons, bypass, decision, demo_week, devices, home, inferences, insights, labels, occupancy, offline, quarantine, questions, rollback, rules, store
 from .events import Action, AIVerdictEvent, GeoAlertEvent, ModeUpdate, NewDeviceEvent, OfflineUpdate, QuarantineUpdate, QueryEvent
 
 # In memory for now; SQLite (store.py) replaces this once the DNS side lands.
 recent: deque[dict] = deque(maxlen=20000)
 # The feed keeps no more history than eddie.db does (#129).
 FEED_RETENTION_MS = int(float(os.environ.get("EDDIE_RETENTION_DAYS", store.RETENTION_DAYS)) * 86_400_000)
+FORGET_MS = int(store.FORGET_HOURS * 3_600_000)  # and no sensitive lookup past a day, like eddie.db (#111)
+FORGET_EVERY_MS = 60_000  # at most one sensitive sweep of the feed a minute
 totals = {"seen": 0, "blocked": 0}
-state = {"home_mode": False}
+forget_state = {"swept": 0}  # when feed() last dropped day-old sensitive events
+state = {"home_mode": False}  # home mode as last read or written; eddie.db holds it (home.py) unless EDDIE_DB is off
 clients: set[WebSocket] = set()
 ai_verdicts: dict[str, dict] = {}
 asking = questions.Questions()  # ask before blocking (#79)
@@ -75,8 +84,23 @@ log = logging.getLogger("eddie.api")
 db: dict[str, sqlite3.Connection | None] = {"conn": None}
 APPLY_TIMEOUT = 2.0  # seconds to wait for DNS to load a rule or offline change (it polls every 0.2 s)
 APPLY_POLL = 0.02
+PRESENCE_EVERY = 15.0  # seconds between household phone presence checks (#20)
 
-app = FastAPI(title="Eddie traffic")
+
+@contextlib.asynccontextmanager
+async def lifespan(_app: FastAPI):
+    if os.environ.get("EDDIE_DB", "eddie.db") == "off":
+        yield
+        return
+    home_state()
+    task = asyncio.create_task(watch_presence())
+    try:
+        yield
+    finally:
+        task.cancel()
+
+
+app = FastAPI(title="Eddie traffic", lifespan=lifespan)
 WRITES = {"POST", "PUT", "PATCH", "DELETE"}
 
 
@@ -135,10 +159,19 @@ def feed() -> deque[dict]:
 
     Events arrive roughly in time order, so trimming from the oldest end is enough.
     Called on every read and ingest, so history expires even while the network is idle.
+    Sensitive events (labels.SENSITIVE) older than a day are dropped from the
+    middle too, in a sweep that runs at most once a minute.
     """
-    cutoff = int(time.time() * 1000) - FEED_RETENTION_MS
+    now = int(time.time() * 1000)
+    cutoff = now - FEED_RETENTION_MS
     while recent and recent[0]["ts"] < cutoff:
         del recent[0]
+    if now - forget_state["swept"] >= FORGET_EVERY_MS:
+        forget_state["swept"] = now
+        kept = [e for e in recent if e["ts"] >= now - FORGET_MS or e.get("category") not in labels.SENSITIVE]
+        if len(kept) < len(recent):
+            recent.clear()
+            recent.extend(kept)
     return recent
 
 
@@ -155,6 +188,7 @@ async def broadcast(msg: dict) -> None:
 async def ingest(body: QueryEvent | list[QueryEvent]):
     events = body if isinstance(body, list) else [body]
     cutoff = int(time.time() * 1000) - FEED_RETENTION_MS
+    cutoff_sensitive = int(time.time() * 1000) - FORGET_MS
     feed()
     for ev in events:
         company, category = labels.lookup(ev.domain)
@@ -163,7 +197,8 @@ async def ingest(body: QueryEvent | list[QueryEvent]):
         seller = labels.broker(ev.domain)
         row = {**ev.model_dump(), "id": next(ids), "company": company, "category": category,
                "broker": seller and seller["kind"], "beacon_s": every and round(every / 1000), "idle": idle}
-        if ev.ts >= cutoff:  # already past retention: still counted and broadcast, never kept
+        forgotten = category in labels.SENSITIVE and ev.ts < cutoff_sensitive
+        if ev.ts >= cutoff and not forgotten:  # already past retention: still counted and broadcast, never kept
             recent.append(row)
         totals["seen"] += 1
         totals["blocked"] += ev.action == "block"
@@ -290,6 +325,45 @@ def summary(window: Literal["15m", "1h", "24h"] = "1h"):
             "brokers": insights.broker_counts(events, insights.WINDOWS_MS[window])}
 
 
+class SyncBlockIn(BaseModel):
+    domain: str  # an ad-ID sync domain from GET /tracker-map
+
+
+def sync_rule(conn: sqlite3.Connection, domain: str) -> dict | None:
+    """The every-device block rule already covering an ad-ID sync domain, if any."""
+    return next((r for r in rules.all_rules(conn) if r["action"] == "block" and r["device_mac"] is None
+                 and r["pattern"] in (domain, f"*.{domain}")), None)
+
+
+@app.get("/tracker-map")
+async def tracker_map(window: Literal["1h", "24h"] = "24h"):
+    """Which companies see which devices (#107). Each id_sync entry says whether a block rule
+    covers it; a rule is stored intent, not proof DNS is enforcing it."""
+    result = insights.tracker_map(list(feed()), insights.WINDOWS_MS[window])
+    try:
+        conn = rules_db()
+    except HTTPException:
+        conn = None  # EDDIE_DB=off: the map still shows, with no rule state
+    for row in result["companies"]:
+        for sync in row["id_sync"]:
+            rule = conn and sync_rule(conn, sync["domain"])
+            sync["rule_id"] = rule["id"] if rule else None
+    return {"window": window, **result}
+
+
+@app.post("/tracker-map/block")
+async def block_id_sync(body: SyncBlockIn):
+    """Block an ad-ID sync domain and its subdomains on every device, through POST /rules."""
+    domain = body.domain.strip().lower().rstrip(".")
+    if labels.id_sync(domain) != domain:
+        raise HTTPException(422, "Only ad-ID sync domains from the tracker map can be blocked here.")
+    conn = rules_db()
+    if existing := sync_rule(conn, domain):
+        return {**named(conn, existing), "existing": True, "applied": None}
+    return {**await add_rule(rules.RuleIn(pattern=f"*.{domain}", action="block", created_by="dashboard")),
+            "existing": False}
+
+
 def report_limit_hours() -> int:
     """The longest honest report is the configured on-device retention window."""
     try:
@@ -360,7 +434,7 @@ def report_events(hours: int) -> tuple[list[dict], str]:
 
 @app.get("/mode")
 async def get_mode():  # async: the shared connection stays on the event loop thread
-    return {"home_mode": state["home_mode"], **offline_state(), **away_state(), **quarantine_state()}
+    return {**home_state(), **offline_state(), **away_state(), **quarantine_state()}
 
 
 @app.post("/mode")
@@ -369,22 +443,57 @@ async def set_mode(body: ModeUpdate):
     if body.away is not None:  # first: it can fail (no eddie.db), and then nothing changes
         result.update(await set_away(body.away, body.away_until))
     if body.home_mode is not None:
-        state["home_mode"] = body.home_mode
-        if db["conn"] is not None or os.environ.get("EDDIE_DB") != "off":
-            conn = rules_db()
-            conn.execute(
-                "INSERT INTO engine_state (key, value) VALUES ('home_mode', ?) "
-                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                (int(body.home_mode),),
-            )
-            conn.execute(
-                "INSERT INTO engine_state (key, value) VALUES ('home_rev', 1) "
-                "ON CONFLICT(key) DO UPDATE SET value = value + 1"
-            )
-            conn.commit()
-        await broadcast({"type": "mode", "home_mode": body.home_mode})
-        result["home_mode"] = body.home_mode
+        result.update(await set_home(body.home_mode, True, "manual"))
+    if body.home_auto:
+        conn = rules_db()
+        result.update(await set_home(bool(home.phones_home(conn, int(time.time() * 1000))), False, "presence"))
     return result
+
+
+def home_state() -> dict:
+    """home_mode: the state last asked for. home_manual: whether it overrides presence. home_applied: whether DNS has loaded it."""
+    if os.environ.get("EDDIE_DB", "eddie.db") == "off":
+        return {"home_mode": state["home_mode"], "home_manual": False, "home_applied": False}
+    conn = rules_db()
+    state["home_mode"] = home.wanted(conn)
+    return {"home_mode": state["home_mode"], "home_manual": home.manual(conn),
+            "home_applied": home.loaded(conn) >= home.revision(conn)}
+
+
+async def set_home(on: bool, manual: bool, reason: str) -> dict:
+    """Store home mode, wait for DNS to load it, then send the mode event with whether it did."""
+    if os.environ.get("EDDIE_DB", "eddie.db") == "off":  # nothing can enforce it: a flag in memory
+        state["home_mode"] = on
+        result = {"home_mode": on, "home_manual": manual, "home_applied": False}
+    else:
+        conn = rules_db()
+        rev = home.write(conn, on, manual)
+        state["home_mode"] = on
+        result = {"home_mode": on, "home_manual": manual, "home_applied": await wait_applied(conn, rev, home.loaded)}
+    await broadcast({"type": "mode", **result, "reason": reason})
+    return result
+
+
+async def check_presence(now_ms: int | None = None) -> dict | None:
+    """Turn home mode on when a marked phone is home and off when none is, unless a manual change holds.
+
+    Returns set_home's result, or None if nothing changed. No await before the write,
+    so a manual change can't land between the check and it.
+    """
+    conn = rules_db()
+    on = bool(home.phones_home(conn, int(time.time() * 1000) if now_ms is None else now_ms))
+    if home.manual(conn) or on == home.wanted(conn):
+        return None
+    return await set_home(on, False, "presence")
+
+
+async def watch_presence(every: float = PRESENCE_EVERY) -> None:
+    while True:
+        try:
+            await check_presence()
+        except (sqlite3.Error, HTTPException) as exc:
+            log.warning("home mode presence check failed (%s)", getattr(exc, "detail", exc))
+        await asyncio.sleep(every)
 
 
 def rules_db() -> sqlite3.Connection:
@@ -534,7 +643,7 @@ async def roll_back(found: rollback.Rollback) -> None:
 class DeviceIn(BaseModel):
     label: str | None = None  # None or "" clears it
     kid: StrictBool | None = None  # a child's device, for kid mode (#119)
-    security: StrictBool | None = None  # a security/outdoor device, exempt from home mode (#46)
+    phone: StrictBool | None = None  # a household phone, for home mode's presence check (#20)
 
     @field_validator("label")
     @classmethod
@@ -621,12 +730,11 @@ async def update_device(key: str, body: DeviceIn):
     if not rules.DEVICE.fullmatch(key):
         raise HTTPException(422, "Expected a MAC address or client IP.")
     changes = body.model_dump(include=body.model_fields_set)
-    if changes.get("kid") is None:
-        changes.pop("kid", None)
-    if changes.get("security") is None:
-        changes.pop("security", None)
+    for flag in ("kid", "phone"):
+        if changes.get(flag) is None:
+            changes.pop(flag, None)
     if not changes:
-        raise HTTPException(422, "Expected a label, kid, security, or combination.")
+        raise HTTPException(422, "Expected a label, kid or phone.")
     row = devices.update(rules_db(), key, changes)
     if row is None:
         raise HTTPException(404, f"Eddie hasn't seen a device {key}.")
