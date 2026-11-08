@@ -458,9 +458,11 @@ def list_rules():
         target = 'everything' if rule['pattern'] == '*' else rule['pattern']
         where = f" on {rule['device']}" if rule.get('device') else ''
         return f"{rule['action']} {target}{where}"
-    said = [phrase(rule) for rule in rules[:LIST_MAX]]
-    if len(rules) > LIST_MAX:
-        said.append(f"{len(rules) - LIST_MAX} more on the dashboard")
+    # Two rules can say the same thing (one from the dashboard, one by voice): read each once.
+    distinct = list(dict.fromkeys(phrase(rule) for rule in rules))
+    said = distinct[:LIST_MAX]
+    if len(distinct) > LIST_MAX:
+        said.append(f"{len(distinct) - LIST_MAX} more on the dashboard")
     return f"You have {len(rules)} rule{'' if len(rules) == 1 else 's'}: {join(said)}."
 
 
@@ -476,7 +478,8 @@ def list_devices():
             for d in busiest[:LIST_MAX]]
     if len(devices) > LIST_MAX:
         said.append(f"{len(devices) - LIST_MAX} more on the dashboard")
-    return f"I've seen {len(devices)} device{'' if len(devices) == 1 else 's'} today. {'; '.join(said)}."
+    listed = '; '.join(said)
+    return f"I've seen {len(devices)} device{'' if len(devices) == 1 else 's'} today. {listed[:1].upper()}{listed[1:]}."
 
 
 def keep_text(keep):
