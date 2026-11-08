@@ -1,0 +1,4 @@
+{
+  "_comment": "Kid mode's keep list (#119): the services.json keys a child's device can still reach while kid mode is on, plus Eddie's essentials (sign-in, updates, time). Edit this list to change what kid mode allows; every key must be in services.json. Read when the voice worker or dashboard bridge starts.",
+  "keep": ["youtube_kids", "pbs_kids"]
+}

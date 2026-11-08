@@ -51,11 +51,23 @@
 .toggle[aria-busy="true"]{border-style:dashed;color:#aaa;background:#000}
 .toggle:disabled{cursor:default}button.toggle:hover{text-decoration:none}
 .modes-note{color:#777;overflow-wrap:anywhere}.alert{color:#ff3b30}
-.panels{display:grid;grid-template-columns:1fr 1fr;gap:0 40px}.panels .rules{margin-top:0}
-.device-panel{color:#aaa;font-size:12px;margin:0 0 20px;min-width:0}.device-panel ul{list-style:none;margin:6px 0 0;padding:0}
-.device-panel li{color:#ddd;padding:2px 0;overflow-wrap:anywhere}.device-panel li small{display:block;color:#777;font-size:11px}
-.device-panel li.pending,.device-panel li.denied{color:#fbbf24}.device-panel li.denied{color:#f87171}.device-panel li button{margin:0 0 0 8px;font:inherit;font-size:11px}
-@media(max-width:700px){.panels{grid-template-columns:1fr}}
+.panels .rules{margin-top:0}
+/* Devices (#35, #119): the link bottom right opens one row per device. A name nobody added shows as ---. */
+footer #open-devices{color:#fff}footer #open-devices span{margin:0}
+.devices-sheet{position:fixed;right:42px;bottom:64px;width:min(600px,calc(100vw - 32px));max-height:72dvh;overflow:auto;background:#000;border:1px solid #333;padding:14px 18px;z-index:4;font-size:12px;color:#aaa;box-shadow:0 16px 60px #000b}
+.devices-sheet[hidden]{display:none}.devices-head{display:flex;justify-content:space-between;align-items:center}.devices-head button{background:none;border:0;color:#ddd;font:inherit}
+#kid-mode:disabled{color:#777;border-color:#555}.devices-modes{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;margin:10px 0 4px}.devices-hint{margin:6px 0 4px;color:#777}
+.devices-sheet ul{list-style:none;margin:0;padding:0}
+.device-row{display:grid;grid-template-columns:1fr auto;align-items:center;gap:2px 12px;padding:10px 0;border-top:1px solid #222;transition:background .6s ease}
+.device-row.seen{background:#ffffff1f;transition:none}
+.device-row small{grid-column:1/-1;display:block;color:#777;font-size:11px;overflow-wrap:anywhere}
+.device-row input{width:100%;min-height:32px;padding:0;border:0;border-bottom:1px dashed #444;background:none;color:#fff;font:14px 'Courier New',monospace}
+.device-row input::placeholder{color:#777}.device-row input:focus{border-bottom-color:#fff;outline:none}
+.device-row .kid-toggle{min-height:32px;min-width:64px;padding:0 10px;border:1px solid #666;background:#000;color:#ddd;font:inherit}
+.device-row .kid-toggle[aria-pressed="true"]{background:#fff;color:#000;border-color:#fff}button.kid-toggle:hover{text-decoration:none;border-color:#fff}
+.device-row .decide{grid-column:1/-1;display:flex;gap:8px;align-items:center}.device-row .decide button{font:inherit;font-size:11px}
+.device-row.pending .decide{color:#fbbf24}.device-row.denied .decide{color:#f87171}
+@media(max-width:650px){.devices-sheet{right:16px;bottom:96px;max-height:66dvh}}
 /* Ask before blocking (#79): the AI only flags, so the person decides. */
 .question{border:1px solid #fff;padding:12px 16px;margin:-6px 0 20px;font-size:12px;color:#aaa}.question[hidden]{display:none}
 .question ul{list-style:none;margin:6px 0 10px;padding:0}.question li{color:#ddd;overflow-wrap:anywhere}.question li small{color:#777}

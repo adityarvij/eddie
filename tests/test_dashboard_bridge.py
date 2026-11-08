@@ -205,6 +205,63 @@ class ModeControls(unittest.TestCase):
                          self.post('/api/offline-mode', {'offline': True}, down))
 
 
+
+class DeviceControls(unittest.TestCase):
+    """POST /api/devices/update names a device or marks it a child's; /api/kid-mode runs kid mode (#119)."""
+
+    def setUp(self):
+        self.server = ThreadingHTTPServer(('127.0.0.1', 0), serve.Handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.sent = []
+        self.answer = lambda path, body: {'mac': path.rsplit('/', 1)[1], **body}
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+    def post(self, path, body):
+        def record(api_path, payload=None, timeout=3, method=None):
+            self.sent.append((method, api_path, payload))
+            return self.answer(api_path, payload)
+        request = urllib.request.Request(f'http://127.0.0.1:{self.server.server_address[1]}{path}',
+                                         data=json.dumps(body).encode(), method='POST')
+        with patch.object(serve, 'api_request', record):
+            try:
+                with urllib.request.urlopen(request, timeout=3) as r:
+                    return r.status, json.load(r)
+            except urllib.error.HTTPError as error:
+                return error.code, json.loads(error.read())
+
+    def test_label_and_kid_are_forwarded_as_a_put(self):
+        self.assertEqual(200, self.post('/api/devices/update', {'mac': 'aa:bb:cc:dd:ee:01', 'label': 'Tablet'})[0])
+        self.assertEqual(200, self.post('/api/devices/update', {'mac': '172.20.10.9', 'kid': True})[0])
+        self.assertEqual([('PUT', '/devices/aa:bb:cc:dd:ee:01', {'label': 'Tablet'}),
+                          ('PUT', '/devices/172.20.10.9', {'kid': True})], self.sent)
+
+    def test_bad_bodies_reach_nothing(self):
+        for body in ({'mac': 'aa:bb:cc:dd:ee:01'}, {'mac': '../rules', 'label': 'x'}, {'label': 'x'},
+                     {'mac': 'aa:bb:cc:dd:ee:01', 'kid': 'yes'}, {'mac': 'aa:bb:cc:dd:ee:01', 'label': 3}):
+            self.assertEqual(400, self.post('/api/devices/update', body)[0], body)
+        self.assertEqual([], self.sent)
+
+    def test_api_refusals_are_explained(self):
+        def refuse(code):
+            def answer(path, body):
+                raise urllib.error.HTTPError(path, code, 'no', {}, None)
+            return answer
+        self.answer = refuse(422)
+        self.assertEqual(422, self.post('/api/devices/update', {'mac': 'aa:bb:cc:dd:ee:01', 'label': 'x' * 41})[0])
+        self.answer = refuse(404)
+        self.assertEqual(404, self.post('/api/devices/update', {'mac': 'aa:bb:cc:dd:ee:01', 'label': 'TV'})[0])
+
+    def test_kid_mode_answers_with_what_the_api_acknowledged(self):
+        with patch.object(serve, 'kid_mode_change', lambda on: f'kid mode {on}'):
+            self.assertEqual((200, {'message': 'kid mode True'}), self.post('/api/kid-mode', {'on': True}))
+            self.assertEqual(400, self.post('/api/kid-mode', {'on': 'yes'})[0])
+
+    def test_a_paired_device_may_use_them(self):
+        self.assertLessEqual({'/api/devices/update', '/api/kid-mode'}, serve.PAIRED_CONTROLS)
+
 class Dismiss(unittest.TestCase):
     """The close button ends the worker's conversation, not just the overlay."""
 

@@ -20,7 +20,8 @@ Only devices that look something up through Eddie are written to the devices
 table, never every ARP neighbour. Each MAC written is also checked against
 device_status (quarantine.py, #98); refresh returns the ones never seen before,
 so the DNS server can send a new_device alert. Rows without a label are pruned with the
-query log (store.prune); labels are user settings and are kept.
+query log (store.prune); labels are user settings and are kept, and so is the
+kid flag (#119), which marks a child's device for kid mode.
 """
 import json
 import logging
@@ -40,7 +41,8 @@ MAX_TRACKED = 4096  # client IPs held between reads; more are ignored until the 
 LEASES = "/var/lib/misc/dnsmasq.leases"
 MAX_LABEL = 40
 RECENT_BLOCKS = 3  # blocked domains listed per device by GET /devices
-COLUMNS = ("mac", "ip", "hostname", "vendor", "label", "first_seen", "last_seen")
+RECENT_DOMAINS = 3  # domains looked up, listed per device so people can tell which one it is
+COLUMNS = ("mac", "ip", "hostname", "vendor", "label", "first_seen", "last_seen", "kid")
 
 log = logging.getLogger("eddie.devices")
 _VENDORS = {prefix: name for name, prefixes in
@@ -250,7 +252,9 @@ def all_devices(conn: sqlite3.Connection, since_ms: int) -> list[dict]:
     status is approved, pending (new, not decided) or denied (quarantine.py),
     None for a device keyed by IP or not yet checked. blocked counts lookups Eddie blocked (trackers, ads, rules); flagged ones
     were forwarded while unknown. trackers counts distinct blocked domains, and
-    recent_blocks holds the last RECENT_BLOCKS of them, newest first.
+    recent_blocks holds the last RECENT_BLOCKS of them, newest first, and
+    recent_domains the last RECENT_DOMAINS domains it looked up whatever the
+    answer. kid is True for a device marked as a child's (#119).
     Most blocked first.
     """
     devices = {r[0]: _row(r) for r in conn.execute(f"SELECT {', '.join(COLUMNS)} FROM devices")}
@@ -259,24 +263,30 @@ def all_devices(conn: sqlite3.Connection, since_ms: int) -> list[dict]:
         "SELECT device_mac, COUNT(*), SUM(action = 'block'), SUM(action = 'flag'), MAX(ts)"
         " FROM queries WHERE ts >= ? GROUP BY device_mac", (since_ms,))}
     blocks: dict[str, list[tuple[int, str]]] = {}
-    for key, domain, last in conn.execute(
-            "SELECT device_mac, domain, MAX(ts) FROM queries WHERE ts >= ? AND action = 'block'"
-            " GROUP BY device_mac, domain", (since_ms,)):
-        blocks.setdefault(key, []).append((last, domain))
+    looked: dict[str, list[tuple[int, str]]] = {}
+    for key, domain, last, last_block in conn.execute(
+            "SELECT device_mac, domain, MAX(ts), MAX(CASE WHEN action = 'block' THEN ts END) FROM queries"
+            " WHERE ts >= ? GROUP BY device_mac, domain", (since_ms,)):
+        looked.setdefault(key, []).append((last, domain))
+        if last_block is not None:
+            blocks.setdefault(key, []).append((last_block, domain))
     out = []
     for key in devices.keys() | counts.keys():
         d = devices.get(key) or dict.fromkeys(COLUMNS) | {"mac": key}
         n, blocked, flagged, last = counts.get(key, (0, 0, 0, None))
         domains = sorted(blocks.get(key, ()), reverse=True)
+        recent = sorted(looked.get(key, ()), reverse=True)[:RECENT_DOMAINS]
         out.append({**d, "name": display_name(key, d["label"], d["hostname"], d["vendor"]), "status": status.get(key),
+                    "kid": bool(d["kid"]), "recent_domains": [dom for _, dom in recent],
                     "last_seen": max(filter(None, (d["last_seen"], last)), default=None),
                     "queries": n, "blocked": blocked, "flagged": flagged, "trackers": len(domains),
                     "recent_blocks": [{"domain": dom, "ts": ts} for ts, dom in domains[:RECENT_BLOCKS]]})
     return sorted(out, key=lambda d: (-d["blocked"], -d["queries"], d["mac"]))
 
 
-def set_label(conn: sqlite3.Connection, key: str, label: str | None) -> dict | None:
-    """Label (or with None, unlabel) a known device. None if Eddie has never seen it."""
+def update(conn: sqlite3.Connection, key: str, changes: dict) -> dict | None:
+    """Set a known device's label (None unlabels it) and/or kid flag. None if Eddie has never seen it."""
+    label, kid = changes.get("label"), int(bool(changes.get("kid")))
     with conn:
         known = (conn.execute("SELECT 1 FROM devices WHERE mac = ?", (key,)).fetchone()
                  or conn.execute("SELECT 1 FROM queries WHERE device_mac = ? LIMIT 1", (key,)).fetchone())
@@ -284,7 +294,8 @@ def set_label(conn: sqlite3.Connection, key: str, label: str | None) -> dict | N
             return None
         # A device known only from the query log is keyed by its client IP: no MAC yet.
         ip = None if normalize_mac(key) == key else key
-        conn.execute("INSERT INTO devices (mac, ip, label) VALUES (?, ?, ?)"
-                     " ON CONFLICT(mac) DO UPDATE SET label = excluded.label", (key, ip, label))
+        sets = ", ".join(f"{field} = excluded.{field}" for field in ("label", "kid") if field in changes)
+        conn.execute(f"INSERT INTO devices (mac, ip, label, kid) VALUES (?, ?, ?, ?)"
+                     f" ON CONFLICT(mac) DO {'UPDATE SET ' + sets if sets else 'NOTHING'}", (key, ip, label, kid))
         row = conn.execute(f"SELECT {', '.join(COLUMNS)} FROM devices WHERE mac = ?", (key,)).fetchone()
-    return _row(row)
+    return _row(row) | {"kid": bool(row[-1])}
