@@ -425,6 +425,13 @@ if __name__ == '__main__':
     # 0.0.0.0 lets the iPad view the dashboard; a paired iPad may ask, the mic stays localhost-only.
     parser.add_argument('--host', default=os.environ.get('EDDIE_DASHBOARD_HOST', '127.0.0.1'))
     args = parser.parse_args()
+    try:
+        import local_intent
+        matcher = local_intent.Matcher()
+        voice_agent.intent_model = lambda text, domain=None: local_intent.answer(matcher, text, domain)
+        print('Local question intents: MiniLM ONNX (offline).', flush=True)
+    except Exception as error:
+        print(f'Local question intents off: {error}.', flush=True)
     if os.environ.get('EDDIE_AGENT', 'ollama') != 'off':
         import ollama_agent
         import voice_agent

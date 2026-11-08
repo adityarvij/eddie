@@ -2,6 +2,17 @@
   "_comment": "Pinned offline voice assets (#39). Fetched only by scripts/provision_voice.py; the voice worker never downloads. Paths are relative to dest. '@openwakeword' is the installed package's resources/models directory.",
   "groups": [
     {
+      "name": "intent-minilm",
+      "dest": "voice/models/all-MiniLM-L6-v2",
+      "source": "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2 (Apache-2.0)",
+      "files": [
+        {"path": "model.onnx", "size": 90405214, "sha256": "6fd5d72fe4589f189f8ebc006442dbb529bb7ce38f8082112682524616046452",
+         "url": "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/c9745ed1d9f207416be6d2e6f8de32d1f16199bf/onnx/model.onnx"},
+        {"path": "tokenizer.json", "size": 466247, "sha256": "be50c3628f2bf5bb5e3a7f17b1f74611b2561a3a27eeab05e5aa30f411572037",
+         "url": "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/c9745ed1d9f207416be6d2e6f8de32d1f16199bf/tokenizer.json"}
+      ]
+    },
+    {
       "name": "whisper",
       "dest": "voice/models/whisper-base.en",
       "source": "https://huggingface.co/Systran/faster-whisper-base.en (MIT)",

@@ -281,9 +281,16 @@ def get_recent_blocks(device=None, limit=5):
     else:
         rows = read(path)
     now = time.time() * 1000
-    return {'blocks': [{'device': row['device'], 'domain': row['domain'], 'company': row.get('company'),
+    blocks = [{'device': row['device'], 'domain': row['domain'], 'company': row.get('company'),
                         'reason': row.get('reason'), 'minutes_ago': int((now - row['ts']) // 60000)}
-                       for row in reversed(rows)]}
+              for row in reversed(rows)]
+    if not blocks:
+        said = 'Eddie has no recent blocks to report.'
+    else:
+        items = [f"{row['domain']} on {row['device']}" for row in blocks]
+        said = 'Recent blocks were ' + ', '.join(items[:-1])
+        said += ((' and ' if len(items) > 1 else '') + items[-1] + '.')
+    return {'blocks': blocks, 'said': said}
 
 
 def explain_domain(domain):
@@ -295,7 +302,7 @@ def explain_domain(domain):
     last = read('/events?limit=1&domain=' + urllib.parse.quote(domain))
     verdict = next((v for v in read('/ai/verdicts') if v.get('domain') == domain), None)
     if not last and not verdict:
-        return {'domain': domain, 'seen': False}
+        return {'domain': domain, 'seen': False, 'said': f"I haven't seen {domain}, so I can't say why it was blocked."}
     result = {'domain': domain, 'seen': bool(last)}
     if last:
         row = last[-1]
@@ -304,6 +311,16 @@ def explain_domain(domain):
             'device': row['device'], 'minutes_ago': int((time.time() * 1000 - row['ts']) // 60000)})
     if verdict:
         result['ai_verdict'] = {key: verdict.get(key) for key in ('label', 'confidence', 'reason')}
+    if last:
+        decision = result['last_decision']
+        if decision['action'] == 'block':
+            reason = decision.get('reason') or decision.get('source') or 'a local blocking rule'
+            result['said'] = f"Eddie blocked {domain} on {decision['device']} because {reason}."
+        else:
+            result['said'] = f"The latest decision for {domain} was {decision['action']}, not block."
+    else:
+        reason = verdict.get('reason') or verdict.get('label')
+        result['said'] = f"Eddie's local classifier flagged {domain} because {reason}."
     return result
 
 
