@@ -147,6 +147,7 @@ TOOLS = [
     function('explain_domain', "Eddie's latest decision and any local AI verdict for one domain.",
              {'domain': {'type': 'string'}}, ['domain']),
     voice_agent.WHAT_THEY_KNOW_TOOL,
+    voice_agent.BURGLARS_EYE_TOOL,
 ] + WRITE_TOOLS
 
 
@@ -312,8 +313,17 @@ def what_they_know(hours=None):
     return read(f'/what-they-know?hours={hours}')
 
 
+def burglars_eye(hours=None):
+    if hours is None:
+        return read('/burglars-eye')
+    if type(hours) is not int or not 1 <= hours <= 8760:
+        raise ToolError('hours must be an integer from 1 to 8760')
+    return read(f'/burglars-eye?hours={hours}')
+
+
 HANDLERS = {'get_summary': get_summary, 'get_recent_blocks': get_recent_blocks,
-            'explain_domain': explain_domain, 'what_they_know': what_they_know}
+            'explain_domain': explain_domain, 'what_they_know': what_they_know,
+            'burglars_eye': burglars_eye}
 
 NUMBER_WORDS = {'two': 2, 'three': 3, 'four': 4, 'five': 5, 'six': 6, 'seven': 7, 'eight': 8, 'nine': 9,
                 'ten': 10, 'eleven': 11, 'twelve': 12, 'thirteen': 13, 'fourteen': 14, 'fifteen': 15,

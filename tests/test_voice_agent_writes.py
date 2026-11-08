@@ -181,7 +181,7 @@ class Writes(unittest.TestCase):
         self.model(TimeoutError('timed out'))
         self.assertEqual(voice_agent.respond('lock down the tv to netflix'),
                          "I haven't changed anything. I can block or allow a domain, allow a service like Netflix, "
-                         "lock down a device, undo my last rule, or turn home or away mode on or off; email isn't "
+                         "lock down a device, allow or deny a new device, undo my last rule, or turn home or away mode on or off; email isn't "
                          "connected yet.")
         self.model(TimeoutError('timed out'))
         self.assertEqual(voice_agent.respond('block everything on the tv'), voice_agent.NOT_RESOLVED)

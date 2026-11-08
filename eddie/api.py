@@ -10,10 +10,18 @@ waits for the DNS server to load them before answering; see docs/EVENTS.md.
 from its query log, and stores user labels (devices.py).
 /questions holds "block this likely tracker?" questions from AI tracker verdicts
 in memory, and an answer writes a rule like /rules does (questions.py, #79).
+/devices/new takes the DNS server's new_device alerts and pushes them to the
+feed; /quarantine and /devices/{key}/approve|deny change quarantine (#98,
+quarantine.py) and wait for DNS to load it like rules.
 /offline-mode turns the DNS server's upstream forwarding off or on through
 eddie.db and waits for DNS to load it the same way (offline.py).
 POST /mode {"away": ...} does the same for away mode (away.py), after
 ranking which devices it covers from the query log.
+Each new block rule is watched for signs it broke a device and deleted
+through DELETE /rules if it looks like it did (#101, rollback.py).
+/ingest also runs each event through the device's baseline in eddie.db and
+pushes new_domain and baseline_state events (baselines.py); /baselines and
+/devices/{key}/baseline read and reset them.
 
 Writes (POST, PUT, DELETE) from anywhere but loopback need EDDIE_API_TOKEN as
 a bearer token (#96). Browsers may only write or open /ws/events from this
@@ -26,6 +34,7 @@ import hmac
 import ipaddress
 import itertools
 import json
+import logging
 import os
 import sqlite3
 import time
@@ -37,8 +46,8 @@ from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocket
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 
-from . import away, beacons, bypass, decision, demo_week, devices, inferences, insights, labels, offline, questions, rules, store
-from .events import Action, AIVerdictEvent, ModeUpdate, OfflineUpdate, QueryEvent
+from . import away, baselines, beacons, bypass, decision, demo_week, devices, inferences, insights, labels, occupancy, offline, quarantine, questions, rollback, rules, store
+from .events import Action, AIVerdictEvent, ModeUpdate, NewDeviceEvent, OfflineUpdate, QuarantineUpdate, QueryEvent
 
 # In memory for now; SQLite (store.py) replaces this once the DNS side lands.
 recent: deque[dict] = deque(maxlen=20000)
@@ -52,7 +61,11 @@ asking = questions.Questions()  # ask before blocking (#79)
 timing = {"beacons": beacons.Beacons(), "idle": beacons.Idle()}  # beacon_s and idle on each event (#24)
 suspicions = bypass.Suspicions()  # bypass_suspected events (#97)
 bypass_recent: deque[dict] = deque(maxlen=50)
+watcher = rollback.Watcher()  # new block rules that may have broken a device (#101)
+rollbacks: set[asyncio.Task] = set()  # rollbacks waiting for DNS, so ingest doesn't
 ids = itertools.count(1)
+baseline_settings = baselines.settings_from_env()  # (lookups, ms) to learn before new_domain events
+log = logging.getLogger("eddie.api")
 db: dict[str, sqlite3.Connection | None] = {"conn": None}
 APPLY_TIMEOUT = 2.0  # seconds to wait for DNS to load a rule or offline change (it polls every 0.2 s)
 APPLY_POLL = 0.02
@@ -151,9 +164,35 @@ async def ingest(body: QueryEvent | list[QueryEvent]):
         if suspect := suspicions.observe(row):
             bypass_recent.append(suspect)
             await broadcast(suspect)
+        for found in watcher.observe(row):
+            task = asyncio.create_task(roll_back(found))
+            rollbacks.add(task)
+            task.add_done_callback(rollbacks.discard)
+    for notice in baseline_events([ev for ev in events if ev.ts >= cutoff]):
+        await broadcast(notice)
     await broadcast({"type": "totals", **totals})
     await ask_due()
     return {"ok": True, "count": len(events)}
+
+
+def baseline_events(events: list[QueryEvent]) -> list[dict]:
+    """Add the batch to each device's baseline in one transaction; the events that causes.
+
+    Nothing with EDDIE_DB=off. A database error loses the batch's baseline
+    updates, never the feed.
+    """
+    if os.environ.get("EDDIE_DB", "eddie.db") == "off" or not events:
+        return []
+    conn = rules_db()
+    out = []
+    try:
+        with conn:
+            for ev in events:
+                out += baselines.observe(conn, ev.model_dump(), *baseline_settings)
+    except sqlite3.Error as exc:
+        log.warning("baseline update failed (%s), %d events skipped", exc, len(events))
+        return []
+    return out
 
 
 @app.post('/ai/verdict')
@@ -204,6 +243,7 @@ async def answer_question(question_id: int, body: AnswerIn):
         for item in question['domains'] if conn else []:
             row, rev = rules.add(conn, rules.RuleIn(pattern=item['domain'], action=body.answer, created_by=body.by))
             added.append(row)
+            watcher.watch(row)  # a block from an answer can be rolled back like any other (#101)
             await rule_change(conn, 'added', row)
     except Exception:
         if not added:
@@ -267,6 +307,24 @@ def what_they_know(hours: int | None = Query(None, ge=1, le=8760), demo: bool = 
             "text": " ".join(filter(None, (notice, inferences.spoken_text(facts, actual, quality["enough_data"]))))}
 
 
+@app.get("/burglars-eye")
+def burglars_eye(hours: int | None = Query(None, ge=1, le=8760), demo: bool = False):
+    """When could someone tell the house was empty (#34); see occupancy.py. A week unless asked."""
+    if demo:
+        report = occupancy.report(demo_week.events(int(time.time() * 1000)), 168)
+        return {"demo": True, "label": demo_week.LABEL, **report, "text": f"{demo_week.LABEL} {report['text']}"}
+    requested = hours or occupancy.WEEK
+    actual = min(requested, report_limit_hours())
+    events, source = report_events(actual)
+    report = occupancy.report(events, actual)
+    limited = requested > actual
+    notice = (f"I only retain the last {inferences.period(actual)}, so I used all available data."
+              if limited else None)
+    return {"demo": False, "source": source, **report, "requested_hours": requested,
+            "limited_by_retention": limited, "notice": notice,
+            "text": " ".join(filter(None, (notice, report["text"])))}
+
+
 def report_events(hours: int) -> tuple[list[dict], str]:
     """The DNS server's query log when it has lookups in the window, else the in-memory feed.
 
@@ -290,7 +348,7 @@ def report_events(hours: int) -> tuple[list[dict], str]:
 
 @app.get("/mode")
 async def get_mode():  # async: the shared connection stays on the event loop thread
-    return {"home_mode": state["home_mode"], **offline_state(), **away_state()}
+    return {"home_mode": state["home_mode"], **offline_state(), **away_state(), **quarantine_state()}
 
 
 @app.post("/mode")
@@ -340,6 +398,24 @@ def offline_state() -> dict:
         return {"offline": False, "offline_applied": False}
     conn = rules_db()
     return {"offline": offline.wanted(conn), "offline_applied": offline.loaded(conn) >= offline.revision(conn)}
+
+
+def quarantine_state() -> dict:
+    """quarantine: the state last asked for. quarantine_applied: whether DNS has loaded every quarantine change."""
+    if os.environ.get("EDDIE_DB", "eddie.db") == "off":
+        return {"quarantine": False, "quarantine_applied": False}
+    conn = rules_db()
+    return {"quarantine": quarantine.wanted(conn),
+            "quarantine_applied": quarantine.loaded(conn) >= quarantine.revision(conn)}
+
+
+@app.post("/quarantine")
+async def set_quarantine(body: QuarantineUpdate):
+    conn = rules_db()
+    rev = quarantine.write(conn, body.quarantine)
+    applied = await wait_applied(conn, rev, quarantine.loaded)
+    await broadcast({"type": "quarantine", "quarantine": body.quarantine, "applied": applied})
+    return {"quarantine": body.quarantine, "applied": applied}
 
 
 @app.post("/offline-mode")
@@ -392,6 +468,7 @@ async def list_rules():  # async: the shared connection stays on the event loop 
 async def add_rule(body: rules.RuleIn):
     conn = rules_db()
     row, rev = rules.add(conn, body)
+    watcher.watch(row)
     await rule_change(conn, "added", row)
     return {**row, "applied": await wait_applied(conn, rev)}
 
@@ -402,8 +479,32 @@ async def delete_rule(rule_id: int):
     row, rev = rules.remove(conn, rule_id)
     if row is None:
         raise HTTPException(404, f"No rule {rule_id}.")
+    watcher.forget(rule_id)
     await rule_change(conn, "removed", row)
     return {**row, "deleted": True, "applied": await wait_applied(conn, rev)}
+
+
+@app.post("/rules/{rule_id}/pin")
+async def pin_rule(rule_id: int):
+    """Keep a rule however its device behaves: it is never rolled back (#101)."""
+    conn = rules_db()
+    row = rules.pin(conn, rule_id)
+    if row is None:
+        raise HTTPException(404, f"No rule {rule_id}.")
+    watcher.forget(rule_id)
+    return named(conn, row)
+
+
+async def roll_back(found: rollback.Rollback) -> None:
+    """Delete the rule through DELETE /rules, then say why. A guess, never proof (rollback.py)."""
+    current = rules.get(rules_db(), found.rule["id"])
+    if current is None or current["pinned"] or current["ts"] != found.rule["ts"]:
+        return  # deleted, pinned meanwhile, or the id now holds another rule: nothing to roll back
+    out = await delete_rule(found.rule["id"])
+    await broadcast({"type": "rule_rolled_back", "ts": int(time.time() * 1000),
+                     "rule": named(rules_db(), found.rule), "device_mac": found.device_mac,
+                     "device": found.device, "sign": found.sign, "reason": found.reason,
+                     "applied": out["applied"]})
 
 
 class LabelIn(BaseModel):
@@ -418,7 +519,40 @@ class LabelIn(BaseModel):
 @app.get("/devices")
 async def list_devices(hours: int = Query(24, ge=1, le=168)):
     since = int(time.time() * 1000) - hours * 3_600_000
-    return {"hours": hours, "devices": devices.all_devices(rules_db(), since)}
+    return {"hours": hours, "devices": devices.all_devices(rules_db(), since), **quarantine_state()}
+
+
+@app.post("/devices/new")
+async def new_devices(body: NewDeviceEvent | list[NewDeviceEvent]):
+    # Sent by the DNS server once the MAC is stored as pending; says nothing about enforcement.
+    alerts = body if isinstance(body, list) else [body]
+    for alert in alerts:
+        await broadcast(alert.model_dump())
+    return {"ok": True, "count": len(alerts)}
+
+
+async def decide_device(key: str, status: str) -> dict:
+    key = key.strip().lower()
+    if devices.normalize_mac(key) != key:
+        raise HTTPException(422, "Expected a MAC address: a device known only by its IP can't be approved or denied.")
+    conn = rules_db()
+    row, rev = quarantine.decide(conn, key, status)
+    if row is None:
+        raise HTTPException(404, f"Eddie hasn't seen a device {key}.")
+    applied = await wait_applied(conn, rev, quarantine.loaded)
+    out = {"mac": key, "name": devices.name_of(conn, key), "status": row["status"], "applied": applied}
+    await broadcast({"type": "device_status", **out})
+    return out
+
+
+@app.post("/devices/{key}/approve")
+async def approve_device(key: str):
+    return await decide_device(key, quarantine.APPROVED)
+
+
+@app.post("/devices/{key}/deny")
+async def deny_device(key: str):
+    return await decide_device(key, quarantine.DENIED)
 
 
 @app.put("/devices/{key}")
@@ -430,6 +564,45 @@ async def label_device(key: str, body: LabelIn):
     if row is None:
         raise HTTPException(404, f"Eddie hasn't seen a device {key}.")
     return {**row, "name": devices.display_name(key, row["label"], row["hostname"], row["vendor"])}
+
+
+def baseline_key(key: str) -> str:
+    key = baselines.key_of(key.strip().lower())
+    if not rules.DEVICE.fullmatch(key):
+        raise HTTPException(422, "Expected a MAC address or client IP.")
+    return key
+
+
+def named_baseline(conn: sqlite3.Connection, key: str) -> dict | None:
+    row = baselines.state(conn, key, int(time.time() * 1000), *baseline_settings)
+    return row and {**row, "device": devices.name_of(conn, key)}
+
+
+@app.get("/baselines")
+async def list_baselines():
+    conn = rules_db()
+    return [named_baseline(conn, key) for key in baselines.all_keys(conn)]
+
+
+@app.get("/devices/{key}/baseline")
+async def get_baseline(key: str):
+    key = baseline_key(key)
+    row = named_baseline(rules_db(), key)
+    if row is None:
+        raise HTTPException(404, f"No baseline for {key} yet.")
+    return row
+
+
+@app.delete("/devices/{key}/baseline")
+async def reset_baseline(key: str):
+    key = baseline_key(key)
+    conn = rules_db()
+    deleted = baselines.reset(conn, key)
+    if deleted is None:
+        raise HTTPException(404, f"No baseline for {key} yet.")
+    await broadcast({"type": "baseline_state", "ts": int(time.time() * 1000), "device_mac": key,
+                     "device": devices.name_of(conn, key), "state": "reset", "domains": 0})
+    return {"device_mac": key, "reset": True, "domains_deleted": deleted}
 
 
 @app.websocket("/ws/events")

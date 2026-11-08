@@ -37,7 +37,7 @@
 /* Keep the logs control beneath Eddie, clear of the ambient edge glow. */
 #assistant .open-logs{position:static;right:auto;bottom:auto;flex-shrink:0;margin:12px auto 0;padding:10px 16px;background:transparent;border:1px solid #444;border-radius:20px;color:#bbb}
 #assistant .open-logs:hover{color:#fff;border-color:#888}
-.tag{font-weight:700}.tag-allow{color:#4ade80}.tag-block{color:#f87171}.tag-flag{color:#fbbf24}.tag-rule{color:#c4b5fd}.tag-spoof{color:#f0abfc}.tag-bypass{color:#fb923c}
+.tag{font-weight:700}.tag-allow{color:#4ade80}.tag-block{color:#f87171}.tag-flag{color:#fbbf24}.tag-rule{color:#c4b5fd}.tag-spoof{color:#f0abfc}.tag-bypass{color:#fb923c}.tag-rollback{color:#fdba74}
 /* Pending risky action: the read-back Eddie is waiting on a yes or no for. */
 .assistant-copy .assistant-pending{font-size:16px;color:#fff;margin:12px 0 0}
 
@@ -54,6 +54,7 @@
 .panels{display:grid;grid-template-columns:1fr 1fr;gap:0 40px}.panels .rules{margin-top:0}
 .device-panel{color:#aaa;font-size:12px;margin:0 0 20px;min-width:0}.device-panel ul{list-style:none;margin:6px 0 0;padding:0}
 .device-panel li{color:#ddd;padding:2px 0;overflow-wrap:anywhere}.device-panel li small{display:block;color:#777;font-size:11px}
+.device-panel li.pending,.device-panel li.denied{color:#fbbf24}.device-panel li.denied{color:#f87171}.device-panel li button{margin:0 0 0 8px;font:inherit;font-size:11px}
 @media(max-width:700px){.panels{grid-template-columns:1fr}}
 /* Ask before blocking (#79): the AI only flags, so the person decides. */
 .question{border:1px solid #fff;padding:12px 16px;margin:-6px 0 20px;font-size:12px;color:#aaa}.question[hidden]{display:none}

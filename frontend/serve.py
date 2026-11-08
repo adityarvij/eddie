@@ -36,7 +36,8 @@ counts = {'requests': 0, 'blocked': 0}
 token = os.environ.get('EDDIE_DASHBOARD_TOKEN') or secrets.token_urlsafe(24)
 # Controls a paired device may use. Starting or stopping the microphone, and feeding traffic
 # events, stay on the Eddie computer whatever token is sent.
-PAIRED_CONTROLS = {'/api/voice/ask', '/api/mode', '/api/offline-mode', '/api/questions/answer', '/api/questions/undo'}
+PAIRED_CONTROLS = {'/api/voice/ask', '/api/mode', '/api/offline-mode', '/api/quarantine', '/api/devices/decide',
+                   '/api/questions/answer', '/api/questions/undo'}
 # Read-only relays to the traffic API, so the page (and the iPad) need no CORS or direct API access.
 READ_RELAYS = {'/api/rules': ('/rules', 'Rules unavailable.'),
                '/api/devices': ('/devices?hours=24', 'Devices unavailable.'),
@@ -47,7 +48,10 @@ READ_RELAYS = {'/api/rules': ('/rules', 'Rules unavailable.'),
 # Memory only, at most ANSWERS_KEPT answers.
 answered = {}
 ANSWERS_KEPT = 20
-MODE_CONTROLS = {'/api/mode': ('/mode', 'home_mode'), '/api/offline-mode': ('/offline-mode', 'offline')}
+MODE_CONTROLS = {'/api/mode': ('/mode', 'home_mode'), '/api/offline-mode': ('/offline-mode', 'offline'),
+                 '/api/quarantine': ('/quarantine', 'quarantine')}
+# Approve or deny a new device (#98): {mac, decision} -> POST /devices/<mac>/<decision>.
+MAC = re.compile(r'[0-9a-f]{2}(?::[0-9a-f]{2}){5}')
 
 def is_local(address):
     try:
@@ -321,6 +325,15 @@ class Handler(SimpleHTTPRequestHandler):
             if not isinstance(body, dict) or type(body.get('id')) is not int:
                 return self.json_response(400, {'message': 'Expected a question id.'})
             return self.json_response(*undo_answer(body['id']))
+        if self.path == '/api/devices/decide':
+            mac = body.get('mac') if isinstance(body, dict) else None
+            decision = body.get('decision') if isinstance(body, dict) else None
+            if not isinstance(mac, str) or not MAC.fullmatch(mac) or decision not in ('approve', 'deny'):
+                return self.json_response(400, {'message': 'Expected a MAC address and approve or deny.'})
+            try:
+                return self.json_response(200, api_request(f'/devices/{mac}/{decision}', {}, timeout=5))
+            except Exception:
+                return self.json_response(502, {'message': 'The traffic API did not confirm the change.'})
         if self.path == '/api/events':
             if not isinstance(body, dict) or not body.get('domain'):
                 return self.json_response(400, {'message': 'A domain is required.'})

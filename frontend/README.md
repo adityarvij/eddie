@@ -32,6 +32,8 @@ Under the counts, **rules** lists up to five active rules, newest first (`block 
 
 The page no longer has buttons for the report; `window.eddie.renderReport(report)` still shows a report panel above the feed with each fact, its evidence and confidence, from `GET /api/what-they-know` (live, all retained history, from `eddie.db` when the DNS server has logged lookups, else the in-memory feed; the title says “from eddie.db” in the first case) or `GET /api/what-they-know?demo=1`, both still relayed read-only by `serve.py` (voice uses the live report). The demo report always carries an inverted "DEMO DATA · …" banner and "DEMO WEEK" in its title; live reports never do.
 
+Each `rule_rolled_back` (#101) adds a `[rolled back?]` feed row and a toast with the API's reason, which says the rollback is a guess, not proof the device broke; with `applied: false` it adds that Eddie's DNS hasn't confirmed the block is gone. The rules list re-reads too.
+
 Each `rule_change` adds a `[rule]` feed row and a toast, e.g. “Rule added: block device-metrics-us.amazon.com · Fire Stick · by voice”. The event is sent before DNS acknowledges the rule, so the dashboard says “added”, never “blocked”.
 
 While voice is `confirming`, the overlay shows Eddie's read-back (“Lock down the TV?”) and “SAY YES TO CONFIRM OR NO TO CANCEL”. Both clear on the next reply, on dismissal (Escape, ✕, silence) and when `expires_in_ms` runs out. Nothing is hover-only and nothing is stored in the browser.

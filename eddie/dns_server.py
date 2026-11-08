@@ -17,7 +17,9 @@ Rules and AI verdicts written to eddie.db by other processes (rules API,
 classifier) are reloaded into the decision engine within RELOAD_EVERY, and
 the rules revision loaded is written back so the rules API can acknowledge it.
 devices.DeviceMap maps each client IP to its MAC from the ARP table, read in a
-worker thread, and records the devices seen in eddie.db (#14).
+worker thread, and records the devices seen in eddie.db (#14). A MAC seen for
+the first time is sent to the API as a new_device alert, and quarantine
+(#98, quarantine.py) is reloaded like rules.
 Offline mode (#26, offline.py) is loaded the same way: while it's on, nothing
 is forwarded and allowed lookups get the answer kept from the last time they
 were forwarded, or SERVFAIL. Away mode (#109, away.py) is loaded with the
@@ -25,10 +27,15 @@ rules: the devices it covers and its end time go into the decision engine.
 EDDIE_BLOCK_DOH=on blocks the encrypted DNS resolver names in bypass.py (#97).
 Each decision is also sent to the live feed (POST /ingest on the local API)
 by feed.FeedPublisher, off the reply path; EDDIE_FEED=off turns that off.
+The same port also takes DNS over TCP (RFC 7766), where devices retry an
+answer too big for UDP: the same decision and logging, forwarded upstream
+over TCP. A UDP reply that won't fit the client's buffer (an offline answer
+first fetched over TCP) is sent truncated, so the device retries over TCP.
 
 Run (port 53):            sudo .venv/bin/python -m eddie.dns_server
 Development (no sudo):    EDDIE_DNS_PORT=8053 uv run python -m eddie.dns_server
                           dig @127.0.0.1 -p 8053 google.com
+                          dig @127.0.0.1 -p 8053 +tcp google.com
 """
 import asyncio
 import logging
@@ -39,7 +46,7 @@ import time
 
 from dnslib import AAAA, QTYPE, RCODE, RR, A, DNSRecord
 
-from . import away, decision, devices, lists, offline, rules
+from . import away, decision, devices, lists, offline, quarantine, rules
 from . import store
 from .feed import FeedPublisher, feed_from_env, query_event
 from .store import QueryLog, query_log_from_env
@@ -48,6 +55,9 @@ BLOCK_TTL = 60
 UPSTREAM_TIMEOUT = 2.0  # seconds per upstream before trying the next one
 RELOAD_EVERY = 0.2  # seconds between checks of eddie.db for new rules or verdicts
 MAX_IN_FLIGHT = 512  # lookups being answered at once; extra packets are dropped
+MAX_TCP_CONNECTIONS = 64  # open TCP clients; extra connections are closed at once
+TCP_IDLE_TIMEOUT = 10.0  # seconds a TCP client may take to send its next query (RFC 7766 suggests ~10)
+UDP_MAX = 512  # largest UDP reply for a client that doesn't say otherwise with EDNS
 
 log = logging.getLogger("eddie.dns")
 offline_mode = offline.Mode()
@@ -72,6 +82,31 @@ def block_reply(request: DNSRecord) -> DNSRecord:
     elif q.qtype == QTYPE.AAAA:
         reply.add_answer(RR(q.qname, QTYPE.AAAA, ttl=BLOCK_TTL, rdata=AAAA("::")))
     return reply
+
+
+def udp_limit(request: DNSRecord) -> int:
+    """The largest UDP reply this client takes: its EDNS buffer size, at least 512 (RFC 6891)."""
+    for rr in request.ar:
+        if rr.rtype == QTYPE.OPT:
+            return max(rr.rclass, UDP_MAX)
+    return UDP_MAX
+
+
+def truncated_reply(request: DNSRecord) -> DNSRecord:
+    """An empty reply with TC set: the client asks again over TCP."""
+    reply = request.reply()
+    reply.header.tc = 1
+    return reply
+
+
+async def read_message(reader: asyncio.StreamReader) -> bytes:
+    """One DNS message from a TCP stream: a 2-byte length, then the message."""
+    size = int.from_bytes(await reader.readexactly(2), "big")
+    return await reader.readexactly(size)
+
+
+def frame(message: bytes) -> bytes:
+    return len(message).to_bytes(2, "big") + message
 
 
 def spoof_ip_from_env() -> str | None:
@@ -126,10 +161,37 @@ async def forward(packet: bytes, upstreams: list[tuple[str, int]], timeout: floa
     return None
 
 
+async def _ask_tcp(packet: bytes, host: str, port: int) -> bytes:
+    reader, writer = await asyncio.open_connection(host, port)
+    try:
+        writer.write(frame(packet))
+        await writer.drain()
+        return await read_message(reader)
+    finally:
+        writer.close()
+
+
+async def forward_tcp(packet: bytes, upstreams: list[tuple[str, int]], timeout: float = UPSTREAM_TIMEOUT) -> bytes | None:
+    """Like forward, over TCP, for answers too big for UDP."""
+    for host, port in upstreams:
+        try:
+            answer = await asyncio.wait_for(_ask_tcp(packet, host, port), timeout)
+            if answer[:2] == packet[:2]:
+                return answer
+            log.warning("upstream %s:%s answered another query over TCP", host, port)
+        except (OSError, EOFError, asyncio.TimeoutError) as exc:
+            log.warning("upstream %s:%s failed over TCP (%s)", host, port, type(exc).__name__)
+    return None
+
+
 async def resolve(packet: bytes, client_ip: str, upstreams: list[tuple[str, int]],
                   timeout: float = UPSTREAM_TIMEOUT, query_log: QueryLog | None = None,
-                  feed: FeedPublisher | None = None, device_map: devices.DeviceMap | None = None) -> bytes | None:
-    """The reply to send back, or None to drop a packet that isn't a DNS query."""
+                  feed: FeedPublisher | None = None, device_map: devices.DeviceMap | None = None,
+                  tcp: bool = False) -> bytes | None:
+    """The reply to send back, or None to drop a packet that isn't a DNS query.
+
+    tcp: the query came over TCP, so it's forwarded over TCP and the reply may be any size.
+    """
     try:
         request = DNSRecord.parse(packet)
     except Exception:
@@ -157,13 +219,18 @@ async def resolve(packet: bytes, client_ip: str, upstreams: list[tuple[str, int]
     if verdict.action == "block":
         return block_reply(request).pack()
 
-    answer = offline_mode.answer(request) if offline_mode.on else await forward(packet, upstreams, timeout)
+    if offline_mode.on:
+        answer = offline_mode.answer(request)
+    else:
+        answer = await (forward_tcp if tcp else forward)(packet, upstreams, timeout)
     if answer is None:
         reply = request.reply()
         reply.header.rcode = RCODE.SERVFAIL
         return reply.pack()
     if not offline_mode.on:
         offline_mode.put(request, answer)
+    if not tcp and len(answer) > udp_limit(request):
+        return truncated_reply(request).pack()
     return answer
 
 
@@ -195,6 +262,42 @@ class DNSServer(asyncio.DatagramProtocol):
             self.transport.sendto(reply, addr)
 
 
+class TCPServer:
+    """DNS over TCP on the same port. Queries on one connection are answered in turn."""
+
+    def __init__(self, upstreams: list[tuple[str, int]], timeout: float = UPSTREAM_TIMEOUT,
+                 query_log: QueryLog | None = None, feed: FeedPublisher | None = None,
+                 device_map: devices.DeviceMap | None = None, idle: float = TCP_IDLE_TIMEOUT):
+        self.upstreams = upstreams
+        self.timeout = timeout
+        self.query_log = query_log
+        self.feed = feed
+        self.device_map = device_map
+        self.idle = idle
+        self.open = 0
+
+    async def handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        if self.open >= MAX_TCP_CONNECTIONS:
+            writer.close()
+            return
+        self.open += 1
+        client_ip = writer.get_extra_info("peername")[0]
+        try:
+            while True:
+                packet = await asyncio.wait_for(read_message(reader), self.idle)
+                reply = await resolve(packet, client_ip, self.upstreams, self.timeout, self.query_log,
+                                      self.feed, self.device_map, tcp=True)
+                if reply is None:
+                    return  # not DNS: hang up
+                writer.write(frame(reply))
+                await asyncio.wait_for(writer.drain(), self.idle)
+        except (OSError, EOFError, asyncio.TimeoutError):
+            pass  # client left, went quiet or stopped reading
+        finally:
+            self.open -= 1
+            writer.close()
+
+
 async def serve(host: str, port: int, upstreams: list[tuple[str, int]],
                 timeout: float = UPSTREAM_TIMEOUT, query_log: QueryLog | None = None,
                 feed: FeedPublisher | None = None, device_map: devices.DeviceMap | None = None) -> asyncio.DatagramTransport:
@@ -204,12 +307,20 @@ async def serve(host: str, port: int, upstreams: list[tuple[str, int]],
     return transport
 
 
-class StoreWatcher:
-    """Reloads rules, AI verdicts, offline mode and away mode when they change.
+async def serve_tcp(host: str, port: int, upstreams: list[tuple[str, int]],
+                    timeout: float = UPSTREAM_TIMEOUT, query_log: QueryLog | None = None,
+                    feed: FeedPublisher | None = None, device_map: devices.DeviceMap | None = None,
+                    idle: float = TCP_IDLE_TIMEOUT) -> asyncio.Server:
+    server = TCPServer(upstreams, timeout, query_log, feed, device_map, idle)
+    return await asyncio.start_server(server.handle, host, port)
 
-    After a reload it records the rules, offline and away revisions it loaded
-    (rules.mark_loaded, offline.mark_loaded, away.mark_loaded): the API's
-    proof that DNS is enforcing a change.
+
+class StoreWatcher:
+    """Reloads rules, AI verdicts, offline mode, away mode and quarantine when they change.
+
+    After a reload it records the rules, offline, away and quarantine revisions
+    it loaded (rules.mark_loaded, offline.mark_loaded, away.mark_loaded,
+    quarantine.mark_loaded): the API's proof that DNS is enforcing a change.
     """
 
     def __init__(self, path: str, engine: decision.Engine = decision.engine, mode: offline.Mode | None = None):
@@ -225,7 +336,8 @@ class StoreWatcher:
             " (SELECT count(*) || ':' || ifnull(max(ts), 0) FROM ai_verdicts),"
             " (SELECT ifnull(max(value), 0) FROM engine_state WHERE key = 'rules_rev'),"
             " (SELECT ifnull(max(value), 0) FROM engine_state WHERE key = 'offline_rev'),"
-            " (SELECT ifnull(max(value), 0) FROM engine_state WHERE key = 'away_rev')").fetchone()
+            " (SELECT ifnull(max(value), 0) FROM engine_state WHERE key = 'away_rev'),"
+            " (SELECT ifnull(max(value), 0) FROM engine_state WHERE key = 'quarantine_rev')").fetchone()
         if changed == self.seen:
             return False
         self.engine.load_from_store(self.conn)
@@ -237,6 +349,7 @@ class StoreWatcher:
         rules.mark_loaded(self.conn, changed[2])
         offline.mark_loaded(self.conn, changed[3])
         away.mark_loaded(self.conn, changed[4])
+        quarantine.mark_loaded(self.conn, changed[5])
         self.seen = changed
         return True
 
@@ -251,12 +364,18 @@ async def watch_store(watcher: StoreWatcher, every: float = RELOAD_EVERY) -> Non
         await asyncio.sleep(every)
 
 
-async def watch_devices(device_map: devices.DeviceMap, every: float = devices.TICK) -> None:
-    """Read ARP when a new client IP appears (checked every TICK) or every READ_EVERY, off the event loop."""
+async def watch_devices(device_map: devices.DeviceMap, every: float = devices.TICK,
+                        feed: FeedPublisher | None = None) -> None:
+    """Read ARP when a new client IP appears (checked every TICK) or every READ_EVERY, off the event loop.
+
+    New devices are sent to the API's new_device alert, also off the event loop.
+    """
     while True:
         if device_map.due(time.monotonic()):
             try:
-                await asyncio.to_thread(device_map.refresh, *device_map.take())
+                arrived = await asyncio.to_thread(device_map.refresh, *device_map.take())
+                if arrived and feed:
+                    await asyncio.to_thread(feed.send_new_devices, arrived)
             except (sqlite3.Error, OSError) as exc:
                 log.warning("recording devices failed (%s)", exc)
         await asyncio.sleep(every)
@@ -291,16 +410,17 @@ def main() -> None:
     async def run():
         try:
             transport = await serve(host, port, upstreams, query_log=query_log, feed=feed, device_map=device_map)
+            tcp = await serve_tcp(host, port, upstreams, query_log=query_log, feed=feed, device_map=device_map)
         except PermissionError:
             raise SystemExit(f"Port {port} needs root: run with sudo, or set EDDIE_DNS_PORT=8053 for development.")
         except OSError as exc:
             raise SystemExit(f"Can't listen on {host}:{port} ({exc}). On a Mac, turn off Internet Sharing, which holds port 53.")
-        log.info("listening on %s:%s, upstream %s, query log %s, live feed %s, spoof %s",
+        log.info("listening on %s:%s (UDP and TCP), upstream %s, query log %s, live feed %s, spoof %s",
                  host, port, ", ".join(f"{h}:{p}" for h, p in upstreams),
                  f"{query_log.path} ({query_log.retention_days:g} days)" if query_log else "off",
                  feed.url if feed else "off", spoof["ip"] or "off (spoof rules block)")
         watcher = asyncio.create_task(watch_store(StoreWatcher(query_log.path))) if query_log else None
-        device_watcher = asyncio.create_task(watch_devices(device_map))
+        device_watcher = asyncio.create_task(watch_devices(device_map, feed=feed))
         stop = asyncio.Event()
         # docker stop / systemd send SIGTERM; stop cleanly so queued rows get flushed.
         asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, stop.set)
@@ -311,6 +431,7 @@ def main() -> None:
                 watcher.cancel()
             device_watcher.cancel()
             transport.close()
+            tcp.close()
 
     try:
         asyncio.run(run())

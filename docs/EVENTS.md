@@ -83,7 +83,9 @@ Both are computed by the API from the events it has received, keyed by
 - `away_mode`: `{away, away_until, away_applied, away_devices, away_exempt}` after every `POST /mode` with `away` (below)
 - `rule_change`: a rule was stored or deleted (see Rules below)
 - `question` / `question_resolved`: Eddie is asking whether to block a likely tracker, and its answer (see Ask before blocking below)
+- `new_device`, `quarantine`, `device_status`: see New devices and quarantine below
 - `bypass_suspected`: a device looked up an encrypted DNS resolver (see Bypass detection below)
+- `rule_rolled_back`: Eddie deleted a new block rule that looked like it broke a device (see Self-correcting blocks below)
 
 ## Bypass detection: `bypass_suspected` (#97)
 
@@ -110,13 +112,64 @@ pushes, right after the query:
   and sent as `bypass` in the `snapshot`; a restart clears them.
 - The dashboard shows it as a `[bypass?]` feed row and a toast with `reason`.
 
+## Device baselines: `new_domain`, `baseline_state`, `/baselines`
+
+The API keeps each device's usual registrable domains in `eddie.db`
+(`eddie/baselines.py`; nothing with `EDDIE_DB=off`). A device's baseline starts
+learning at its first feed event and becomes active once it has made at
+least 200 lookups **and** an hour has passed since the first one
+(`EDDIE_BASELINE_LOOKUPS`, `EDDIE_BASELINE_MINUTES`). Lookups are counted as
+the feed sees them (no plumbing, 2 s repeats merged), every action included.
+Devices are keyed like `GET /devices`: MAC, or client IP (the feed's
+`ip:` prefix is dropped).
+
+After learning, the first lookup of a registrable domain the device has never
+looked up pushes, after that batch's query events:
+
+```json
+{"type": "new_domain", "ts": 1762531200123, "device_mac": "f0:4f:7c:11:22:33", "device": "Fire Stick",
+ "domain": "anthropic.com", "query": "api.anthropic.com", "action": "allow"}
+```
+
+- `domain` is the registrable domain (eTLD+1); `query` the name looked up;
+  `action` the DNS decision (`block` means it tried and was stopped).
+- Once per device and domain: the domain joins the baseline. It means "first
+  time since learning", not "suspicious": a learning window always misses
+  domains a device uses only now and then.
+- A domain not looked up for `EDDIE_RETENTION_DAYS` is forgotten with the
+  query log, so it counts as new again.
+- More than 20 new domains within 24 h (a phone or laptop browsing) makes the
+  baseline `unstable`: domains are still recorded, no more `new_domain`
+  events are sent until it's reset.
+
+`baseline_state` is pushed when a baseline becomes `active` or `unstable`, or
+is `reset`: `{"type", "ts", "device_mac", "device", "state", "domains"}`.
+Neither event changes `totals` or is kept for the `snapshot`.
+
+`GET /devices/{key}/baseline` (`404` if none yet, `503` with `EDDIE_DB=off`):
+
+```json
+{"device_mac": "f0:4f:7c:11:22:33", "device": "Fire Stick", "state": "learning", "started_at": 1762531200123,
+ "active_at": null, "last_seen": 1762531800456, "lookups": 120, "domains": 14, "learned_domains": 14,
+ "new_domain_count": 0, "lookups_left": 80, "ms_left": 3000000, "min_lookups": 200, "learn_ms": 3600000,
+ "new_domains": []}
+```
+
+`lookups` stops counting once learning ends. `new_domains` lists up to 20
+domains first seen after learning, newest first, with `first_seen`.
+`GET /baselines` lists every device's baseline in that shape.
+`DELETE /devices/{key}/baseline` forgets the device's baseline (`404` if
+none) and answers `{"device_mac", "reset": true, "domains_deleted"}`; its
+next lookup starts learning again.
+
 ## Home mode: `GET/POST /mode`
 
 `POST /mode {"home_mode": true}`. The decision engine reads `GET /mode` (or
 shares the state in-process later) and, while on, blocks a device's
 non-essential traffic with `source: "home_mode"`.
 
-`GET /mode` also returns `offline` and `offline_applied` (below), and away mode's fields.
+`GET /mode` also returns `offline` and `offline_applied` (below), away mode's fields, and
+`quarantine` and `quarantine_applied` (New devices and quarantine, below).
 
 ## Away mode: `POST /mode {"away": ...}` (#109)
 
@@ -194,12 +247,13 @@ before every list: device rule, then the device's lockdown rule, then global rul
 | `action`     | `block` \| `allow` \| `spoof`. `spoof` (#99) answers the domain with Eddie's IP (`EDDIE_SPOOF_IP`) so the stub server (`eddie/spoof_server.py`) returns 200 OK with an empty body over plain HTTP; without `EDDIE_SPOOF_IP` DNS blocks it instead. `spoof` is a normal rule, not a lockdown: `*` takes only `block`. |
 | `device_mac` | optional; omit for every device. Use the device's `mac` from `GET /devices` (its MAC, or its client IP while the MAC is unknown). A rule made with a client IP also matches the device after its MAC becomes known. |
 | `created_by` | optional, default `"user"`; exactly `user` \| `voice` \| `agent` \| `dashboard` |
+| `pinned`     | optional, default `false`. A pinned rule is never rolled back by self-correcting blocks (#101). `POST /rules/{id}/pin` pins a stored rule (404 if there is none) and answers the row with `device`; it changes nothing DNS enforces, so it has no `applied`. |
 
 Answers `201` with the stored row plus the DNS acknowledgment:
 
 ```json
 {"id": 7, "scope": "device", "device_mac": "172.20.10.5", "pattern": "device-metrics-us.amazon.com",
- "action": "block", "created_by": "voice", "ts": 1762531200123, "applied": true}
+ "action": "block", "created_by": "voice", "ts": 1762531200123, "pinned": false, "applied": true}
 ```
 
 - `id` is the stored rule. Keep it: undo is `DELETE /rules/{id}`.
@@ -273,7 +327,8 @@ carries open ones in `questions`:
 `POST /questions/{id}` with `{"answer": "block" | "allow" | "ignore", "by": "dashboard" | "voice"}`:
 
 - `block` / `allow` writes one global rule per domain with `created_by: by`,
-  exactly like `POST /rules` (each sends `rule_change`), and waits for DNS.
+  exactly like `POST /rules` (each sends `rule_change`, and a block is watched
+  by self-correcting blocks below), and waits for DNS.
 - `ignore` writes nothing; the domain stays flagged and isn't asked about again.
 - Answers `{"id", "answer", "rules": [stored rows], "applied"}`. `applied` has
   the `POST /rules` meaning for the last rule (`null` for `ignore`): **only
@@ -290,6 +345,55 @@ woken ("I've got one question for you. … Say yes to confirm or no to cancel");
 a yes answers `block` with `by: voice`, and voice "undo" removes those rules.
 No, silence or expiry leave it open on the dashboard. Eddie never asks
 unprompted; the opt-in for that isn't built.
+
+## Self-correcting blocks: `rule_rolled_back` (#101)
+
+For 10 minutes after `POST /rules` stores a block rule, the API watches the
+query events on `/ingest` (`eddie/rollback.py`; never on the DNS hot path). A
+lookup counts as blocked by the rule when it is `action: block`, `source:
+rule`, its `reason` names the rule (`device rule <pattern>` or `global rule
+<pattern>`) and, for a device rule, the device matches. For each device:
+
+| Sign | Threshold |
+|------|-----------|
+| `retry_storm` | 12 or more lookups blocked by the rule within 60 s. A healthy device caches the 60 s block answer and asks about once a minute; the feed sends a repeat at most every 2 s, so this is a device asking at least every 5 s. |
+| `traffic_collapse` | The device made 20 or more other (not blocked) lookups in the 10 minutes before the rule, has made 3 or more lookups the rule blocked, and at least 3 minutes after the first of them its other lookups since then are at most 10% of its earlier rate. A device that was switched off stops asking for the blocked domain too, so silence alone never counts. |
+
+The first sign on one device rolls the rule back (for a global rule, any
+device): the API deletes it through the `DELETE /rules/{id}` handler, so a
+`rule_change` `removed` goes out as usual, waits for DNS like any delete, then pushes:
+
+```json
+{"type": "rule_rolled_back", "ts": 1762531320000,
+ "rule": {"id": 7, "scope": "device", "device_mac": "f0:4f:7c:11:22:33", "device": "Fire Stick",
+          "pattern": "device-metrics-us.amazon.com", "action": "block", "created_by": "voice",
+          "ts": 1762531200123, "pinned": false},
+ "device_mac": "f0:4f:7c:11:22:33", "device": "Fire Stick", "sign": "retry_storm",
+ "reason": "I removed the block on device-metrics-us.amazon.com for Fire Stick: it asked for device-metrics-us.amazon.com 14 times in a minute after the block, which can mean it stopped working. That's a guess, not proof it broke. Block it again as a pinned rule to keep it.",
+ "applied": true}
+```
+
+- `device_mac` / `device` are the device that looked broken; `rule` is the
+  deleted row as in `GET /rules`.
+- `reason` is the copy to show or say. It always says it's a guess: an app
+  may retry a blocked tracker forever and work fine, and a household may just
+  stop using a device. Nothing here proves a device broke or that it works again.
+- `applied` is the delete's DNS acknowledgment, as for `DELETE /rules/{id}`.
+  `false` means the rule is deleted from `eddie.db` but no DNS server confirmed
+  it; the dashboard then adds that DNS hasn't confirmed the block is gone.
+- Never rolled back: allow and spoof rules, lockdown (`*`), pinned rules, a
+  rule pinned or deleted before the rollback runs (or whose id now holds
+  another rule), and rules stored before the API started (watches are memory
+  only, so an API restart forgets them). The essentials allowlist is
+  untouched: a rollback only ever deletes the one rule, and lookups the
+  allowlist answers count as the device's other traffic.
+- The dashboard shows it as a `[rolled back?]` feed row and a toast with
+  `reason`. Voice doesn't announce feed events yet, so it isn't spoken unprompted.
+
+Known gaps: Eddie only sees DNS, so a device that breaks without retrying
+(or caches its failure) isn't caught; the feed's 2 s de-duplication caps the
+retry count it can see at 30 a minute; and a block that's rolled back can be
+re-added and rolled back again unless it is pinned.
 
 ## Devices: `GET /devices`, `PUT /devices/{mac}`
 
@@ -328,6 +432,48 @@ appear next to the MAC row.
 seen (`404` otherwise); `""` or `null` clears it. Labels are at most 40
 printable characters. Answers with the stored device and its `name`.
 
+Each device also has `status` (`approved`, `pending` or `denied`; `null` for an
+IP-keyed device), and the response has top-level `quarantine` and
+`quarantine_applied` (below).
+
+## New devices and quarantine (#98)
+
+`eddie/quarantine.py` keeps a `device_status` row per MAC. The first devices
+Eddie records (an empty table) are approved silently: they're the household
+it was installed into. After that, a MAC seen for the first time is stored as
+`pending`, and the DNS server posts an alert to `POST /devices/new` (a list,
+from the device watcher's thread, 1 s timeout, dropped if the API doesn't
+answer; the device stays pending either way). The API pushes each one as is:
+
+```json
+{"type": "new_device", "ts": 1762560840000, "device_mac": "f0:4f:7c:aa:bb:cc",
+ "device": "kindle", "ip": "172.20.10.8", "vendor": "Amazon", "hostname": "kindle", "quarantine": true}
+```
+
+`ts` is the ARP read that found it (within about a second of its first
+lookup); `device` is its name as in `/devices`; `vendor` and `hostname` are
+null when unknown. `quarantine` is whether quarantine was on when it was
+recorded: the setting, not proof that DNS is blocking it yet.
+
+`POST /quarantine {"quarantine": true}` turns quarantine on (off by default),
+with the same handshake as offline mode: `{"quarantine": true, "applied": true}`
+once DNS has written `quarantine_loaded`, `applied: false` if not within 2 s.
+Pushed as `{"type": "quarantine", "quarantine", "applied"}`. While on, a
+`pending` device gets block answers (`source: "quarantine"`) for everything
+but the essentials allowlist, before any rule.
+
+`POST /devices/{mac}/approve` and `POST /devices/{mac}/deny` store a decision
+for a recorded MAC (404 unknown, 422 for an IP key) and answer
+`{"mac", "name", "status": "approved" | "denied", "applied"}`, also pushed as
+`{"type": "device_status", ...}`. A denied device is blocked the same way
+whether quarantine is on or not; approving it lifts that.
+
+Known gaps: quarantine is DNS-only, so a device using hard-coded IPs or its
+own DNS (DoH) still gets out; router mode (#22/#23) stops that. A new device's
+lookups before the first ARP read and the DNS reload (about a second) are
+answered normally, and a device ARP never resolves is never quarantined.
+A phone with a private Wi-Fi address that rotates shows up as a new device.
+
 ## What they know: `GET /what-they-know?hours=24`
 
 `hours` is 1 to 168. Returns `{demo: false, source, hours, facts, text}`.
@@ -363,6 +509,43 @@ locally retained history. The response includes `requested_hours`, actual
 `enough_data`. Longer requests are capped to retention with a `notice`; fewer
 than two observations make Eddie say there is not enough data instead of infer.
 
+## Burglar's-eye report: `GET /burglars-eye?hours=168`
+
+`hours` is 1 to 8760; omitted, a week. Like `/what-they-know`, a request longer
+than `EDDIE_RETENTION_DAYS` is cut to it, with `requested_hours`,
+`limited_by_retention: true` and a `notice` that `text` starts with. Same
+event source and device naming as `/what-they-know`. Returns `{demo: false,
+source, hours, requested_hours, limited_by_retention, notice, covered_hours,
+full_range, enough, empty_times, devices, text}`, computed in
+`eddie/occupancy.py`:
+
+- `covered_hours`: hours from the window's first lookup to now, rounded up.
+  `full_range` is true when that is within a seventh of `hours` (a week with
+  6 days of data still counts as the week). `text` then starts "From this
+  week's data" or "From the last N days"; otherwise "From recent data (2 days,
+  not the full week)".
+- `enough`: false, with `empty_times` and `devices` empty and `text` saying
+  why, when there is no traffic, under 6 hours with any lookup, or no
+  streaming at all (home and away can't be told apart).
+- Each local hour with a lookup is busy (some device streamed) or quiet. Hours
+  with no lookups at all count as neither, since Eddie may have been off.
+- `empty_times`: `{when, pattern, fact, evidence, confidence}`. With at least
+  2 days on which Eddie saw half the waking hours (6 AM to midnight), a
+  pattern: waking hours quiet on at least 80% of the days seen, per weekdays
+  and weekends when each has 2 such days, else "most days", in stretches of 2
+  hours or more. With fewer, `pattern: false` and the quiet stretches of each
+  day, and `text` says it isn't a pattern yet.
+- `devices`, highest `leak_score` first: `{device, leak_score, lookups,
+  blocked, security, never_block, per_busy_hour, per_quiet_hour, said}`.
+  `leak_score` is `round(100 * |a - b| / (a + b))` of lookups per busy hour
+  (a) and per quiet hour (b); `null` (and no per-hour fields) under 10
+  lookups. `security` is true when the device looked up a camera, doorbell or
+  alarm domain (`labels.SECURITY`); `never_block` mirrors it as advice only,
+  nothing enforces it yet (#46).
+
+`?demo=true` ignores `hours` and runs the same code on the demo week, with
+`demo: true`, `label`, and `text` starting with `label`.
+
 ## Local voice bridge (port 5173)
 
 The dashboard bridge SSE endpoint `/events` emits `voice_status` with `status` (`off`, `starting`, `ready`, `error`), optional `engine` (`vosk` prototype or `openwakeword`) and `message`. `GET /api/voice/status` returns the latest status. Start/stop POST endpoints operate the local microphone. These are separate from the traffic API on port 8000.
@@ -380,10 +563,12 @@ Relays to the traffic API (`EDDIE_API_URL`, default `http://127.0.0.1:8000`), so
 | `GET /api/what-they-know[?demo=1]` | `GET /what-they-know` (all retained data) or `?demo=true` | read-only |
 | `POST /api/mode` `{home_mode: bool}` | `POST /mode` | answers with the API's echo `{home_mode}`; away mode isn't relayed, so a paired device can't set it |
 | `POST /api/offline-mode` `{offline: bool}` | `POST /offline-mode` | answers with `{offline, applied}`; `applied: false` is passed through |
+| `POST /api/quarantine` `{quarantine: bool}` | `POST /quarantine` | answers with `{quarantine, applied}` |
+| `POST /api/devices/decide` `{mac, decision: "approve" \| "deny"}` | `POST /devices/{mac}/{decision}` | answers with the API's `{mac, name, status, applied}`; anything but a MAC and approve/deny is 400 |
 
-The two POSTs forward only that one boolean (anything else is 400) and wait up to 5 s for the API.
+The mode POSTs forward only that one boolean (anything else is 400) and wait up to 5 s for the API.
 
-Control auth (#40): POSTs need a `Host` that is an IP, `localhost` or `.local`, and a same-origin `Origin` if one is sent (403 otherwise). From the Eddie computer (loopback) no token is needed. From another device, only `POST /api/voice/ask` (`{text}`), `POST /api/mode`, `POST /api/offline-mode` and the two `/api/questions` POSTs are allowed, with `Authorization: Bearer <pairing token>`; a missing or wrong token gets 401 `{message}`. `/api/voice/start`, `/api/voice/stop`, `/api/voice/dismiss` and `/api/events` answer 403 from other devices whatever the token.
+Control auth (#40): POSTs need a `Host` that is an IP, `localhost` or `.local`, and a same-origin `Origin` if one is sent (403 otherwise). From the Eddie computer (loopback) no token is needed. From another device, only `POST /api/voice/ask` (`{text}`), `POST /api/mode`, `POST /api/offline-mode`, `POST /api/quarantine`, `POST /api/devices/decide` and the two `/api/questions` POSTs are allowed, with `Authorization: Bearer <pairing token>`; a missing or wrong token gets 401 `{message}`. `/api/voice/start`, `/api/voice/stop`, `/api/voice/dismiss` and `/api/events` answer 403 from other devices whatever the token.
 
 Wake lifecycle: `wake`, `voice_state: listening`, `voice_state: thinking`, optional `transcript`, `agent_reply`, `speaking`, `speech_end`, then `voice_state: listening` again for a follow-up without the wake phrase. If no speech starts within 4 seconds of listening, the worker emits `voice_state: dismissed` and the dashboard closes Eddie and returns to the live feed; the next request needs the wake phrase. No transcript is persisted. Capture or inference failure yields `voice_status: error`.
 

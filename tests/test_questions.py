@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from fastapi import WebSocketDisconnect
 
-from eddie import api, decision, questions, rules
+from eddie import api, decision, questions, rollback, rules
 from tests import test_rules_api
 from tests.test_dns_server import REAL_IP
 
@@ -90,7 +90,8 @@ class QuestionAPITests(test_rules_api.RulesAPITests):
     async def asyncSetUp(self):
         await super().asyncSetUp()
         for p in (patch.object(api, 'asking', questions.Questions(every=180, clock=Clock())),
-                  patch.object(api, 'recent', api.deque(maxlen=100))):
+                  patch.object(api, 'recent', api.deque(maxlen=100)),
+                  patch.object(api, 'watcher', rollback.Watcher())):
             p.start()
             self.closers.append(p.stop)
 
@@ -148,12 +149,15 @@ class QuestionAPITests(test_rules_api.RulesAPITests):
             r = await self.http.post(f"/questions/{question['id']}", json={'answer': 'block', 'by': 'voice'})
         self.assertFalse(r.json()['applied'])
         self.assertEqual('voice', r.json()['rules'][0]['created_by'])
+        # Self-correcting blocks (#101) watch it like a POST /rules block.
+        self.assertIn(r.json()['rules'][0]['id'], api.watcher.watches)
 
     async def test_allow_writes_an_allow_rule(self):
         question = await self.ask_one()
         with patch.object(api, 'APPLY_TIMEOUT', 0):
             r = await self.http.post(f"/questions/{question['id']}", json={'answer': 'allow', 'by': 'dashboard'})
         self.assertEqual([(TRACKER, 'allow')], [(x['pattern'], x['action']) for x in r.json()['rules']])
+        self.assertEqual({}, api.watcher.watches)  # allow rules are never rolled back
 
     async def test_ignore_writes_no_rule_and_answers_once(self):
         question = await self.ask_one()

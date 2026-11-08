@@ -82,6 +82,36 @@ def what_they_know(hours=None):
     return request(f'/what-they-know?hours={hours}')
 
 
+BURGLARS_EYE_TOOL = {
+    'type': 'function',
+    'function': {
+        'name': 'burglars_eye',
+        'description': ('When could someone tell the house was empty, from recent traffic, with devices ranked '
+                        'by occupancy leak score. Security devices are flagged never_block.'),
+        'parameters': {
+            'type': 'object',
+            'properties': {'hours': {'type': 'integer', 'minimum': 1, 'maximum': 8760,
+                                     'description': 'Requested lookback in hours. Omit for a week.'}},
+            'additionalProperties': False,
+        },
+    },
+}
+
+
+def burglars_eye(hours=None):
+    """Backend-computed occupancy report only; the reply text comes from /burglars-eye."""
+    if hours is None:
+        return request('/burglars-eye')
+    if type(hours) is not int or not 1 <= hours <= 8760:
+        raise ValueError('hours must be an integer from 1 to 8760')
+    return request(f'/burglars-eye?hours={hours}')
+
+
+EMPTY_HOUSE = re.compile(
+    r'\b(?:burglars?|(?:house|home|place)(?: (?:was|is|looks?|looked|looking|seems?|seemed|been|be|sits?|sat))* empty'
+    r'|(?:nobody|no one|noone)(?:s| is| was)? (?:home|in|around))\b')
+
+
 # A domain as POST /rules accepts it (no wildcard), and a domain inside a spoken reply.
 DOMAIN = re.compile(r'[a-z0-9_-]+(?:\.[a-z0-9_-]+)+')
 SPOKEN_DOMAIN = re.compile(r'\b[a-z0-9_-]+(?:\.[a-z0-9_-]+)*\.[a-z]{2,}\b')
@@ -439,6 +469,58 @@ def lockdown_device(device, name, keep):
             "I haven't seen its traffic blocked yet, and it only applies while it uses Eddie for DNS.")
 
 
+# "allow the new device" / "deny the new device" (#98): the newest device /devices
+# lists as pending, read back with a yes before POST /devices/<mac>/approve|deny.
+NEW_DEVICE = re.compile(
+    r'(?:(?:ok|okay|eddie|please) )*(?:(?:can|could|would|will) you (?:please )?)?(?:go ahead and )?'
+    r'(?P<verb>allow|approve|let in|deny|block|reject) (?:the |that |this )?new device(?: (?:please|for me|now))*')
+NEW_DEVICE_STATUS = {'allow': 'approve', 'approve': 'approve', 'let in': 'approve',
+                     'deny': 'deny', 'block': 'deny', 'reject': 'deny'}
+
+
+def spoken_time(ms):
+    """A first_seen time as people say it: 2:14 AM."""
+    return time.strftime('%I:%M %p', time.localtime(ms / 1000)).lstrip('0')
+
+
+def new_device_request(verb):
+    """Confirmation.request args for approving or denying the newest pending device, or the
+    spoken reply when there is none (nothing changes then)."""
+    decision = NEW_DEVICE_STATUS[verb]
+    try:
+        devices = request('/devices')['devices']
+    except Exception:
+        return LOCKDOWN_UNREACHABLE
+    pending = sorted((d for d in devices if d.get('status') == 'pending'),
+                     key=lambda d: d.get('first_seen') or 0, reverse=True)
+    if not pending:
+        return "There's no new device waiting for a decision. Nothing changed."
+    device = pending[0]
+    seen = f", first seen at {spoken_time(device['first_seen'])}" if device.get('first_seen') else ''
+    others = (f" {len(pending) - 1} other new device{'s are' if len(pending) > 2 else ' is'} still waiting."
+              if len(pending) > 1 else '')
+    if decision == 'approve':
+        prompt = f"Allow the new device, {device['name']}{seen}? It'll get full internet through Eddie.{others}"
+    else:
+        prompt = (f"Deny the new device, {device['name']}{seen}? Eddie will block everything it looks up "
+                  f"except the essentials, even with quarantine off.{others}")
+    return decision, {'device': device['mac'], 'name': device['name']}, prompt
+
+
+def decide_new_device(decision, device, name):
+    """RISKY_ACTIONS['approve'] and ['deny']: success only once the backend stored the decision."""
+    want = 'approved' if decision == 'approve' else 'denied'
+    result = request(f'/devices/{device}/{decision}', {}, timeout=RULE_TIMEOUT)
+    if result.get('mac') != device or result.get('status') != want:
+        return f"I couldn't {decision} {name}; the backend didn't confirm it. Nothing changed."
+    if result.get('applied') is not True:
+        return f"I saved that {name} is {want}, but Eddie's DNS hasn't loaded it yet."
+    if want == 'approved':
+        return f"{name} is approved, and Eddie's DNS has loaded the change."
+    return (f"{name} is denied, and Eddie's DNS has loaded the change. It only applies while "
+            "the device uses Eddie for DNS.")
+
+
 def still_voice_rule(row, rule):
     """True when a GET /rules row is the rule voice created, not a later rule that reused its id."""
     return bool(row) and row.get('created_by') == 'voice' and all(
@@ -649,13 +731,15 @@ NO = {'no', 'nope', 'no thanks', 'cancel', 'cancel it', 'stop', 'dont', 'never m
 # Risky actions run only from Confirmation.reply after an explicit yes. Each maps
 # kind -> callable(**args) returning the spoken result only after backend
 # acknowledgment. RISKY_COMMANDS parse normalized text -> (kind, args, prompt).
-# Broad allows (a service or a wildcard) and lockdown are parsed in route, not
-# RISKY_COMMANDS: allows need the raw text's dots, lockdown a /devices lookup.
+# Broad allows (a service or a wildcard), lockdown and new devices are parsed in route,
+# not RISKY_COMMANDS: allows need the raw text's dots, the others a /devices lookup.
 # block and home_mode are only requested by the local model's write tools
 # (ollama_agent.py); spoken "block x.com" and "turn on home mode" run directly.
 # question answers an API question read out on wake (#79).
 RISKY_ACTIONS = {'allow': allow_patterns, 'lockdown': lockdown_device, 'block': block_action,
-                 'home_mode': home_mode_action, 'away': set_away_mode, 'question': answer_question}
+                 'home_mode': home_mode_action, 'away': set_away_mode, 'question': answer_question,
+                 'approve': lambda **args: decide_new_device('approve', **args),
+                 'deny': lambda **args: decide_new_device('deny', **args)}
 RISKY_COMMANDS = [away_command]
 
 
@@ -764,6 +848,10 @@ def route(text):
     text = re.sub(r'\s+', ' ', text)
     # A new risky command replaces any pending one; otherwise a pending action
     # consumes the reply, including missed speech.
+    new_device = NEW_DEVICE.fullmatch(words(raw))
+    if new_device:
+        command = new_device_request(new_device['verb'])
+        return command if isinstance(command, str) else confirmation.request(*command)
     allow = allow_target(raw)
     if allow and allow[0] in ('service', 'wildcard'):
         return confirmation.request(*allow_request(*allow))
@@ -808,7 +896,7 @@ def route(text):
             return NOT_RESOLVED
         if allow:
             return ALLOW_UNRESOLVED
-        return "I haven't changed anything. I can block or allow a domain, allow a service like Netflix, lock down a device, undo my last rule, or turn home or away mode on or off; email isn't connected yet."
+        return "I haven't changed anything. I can block or allow a domain, allow a service like Netflix, lock down a device, allow or deny a new device, undo my last rule, or turn home or away mode on or off; email isn't connected yet."
     if re.search(r'\bwhat (?:do|does|can|could) (?:\w+|my \w+|the \w+) (?:know|tell|guess|figure out|learn) about (?:me|us|my house|my home|our house)\b', text):
         try:
             report = what_they_know(report_hours(raw))
@@ -821,6 +909,11 @@ def route(text):
             if reply:
                 return " ".join(filter(None, (report.get('notice'), reply)))
         return str(report['text'])
+    if EMPTY_HOUSE.search(text):
+        try:
+            return str(burglars_eye(report_hours(raw))['text'])
+        except Exception:
+            return "I can't reach Eddie’s traffic backend, so I can't say when the house looked empty right now."
     if text in ('hello', 'hi', 'hey', 'hey eddie'):
         return "Hey, I'm Eddie. Ask me what's been going on, tell me to block a domain, or to turn home mode on or off."
     if ask_model is not None:

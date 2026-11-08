@@ -20,9 +20,9 @@ class FeedRetention(unittest.TestCase):
         self.now = int(time.time() * 1000)
         self.feed = deque([event('old.example', self.now - 8 * DAY), event('edge.example', self.now - 7 * DAY + 60_000),
                            event('new.example', self.now - 1000)], maxlen=20000)
-        patcher = patch.object(api, 'recent', self.feed)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        for patcher in (patch.object(api, 'recent', self.feed), patch.dict('os.environ', {'EDDIE_DB': 'off'})):
+            patcher.start()
+            self.addCleanup(patcher.stop)
         # Exercise writes as the loopback-only feed producers do. TestClient's
         # default synthetic host is remote under the API write-auth policy.
         self.client = TestClient(api.app, client=('127.0.0.1', 50000))
