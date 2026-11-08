@@ -225,6 +225,7 @@ class Engine:
         self.acr_caught: OrderedDict[tuple[str, str], int] = OrderedDict()  # (device, domain) -> interval ms
         self.block_doh = False  # block the resolver names in bypass.RESOLVERS
         self.home_mode = False
+        self.spoof_mode = False
         self.security_devices: frozenset[str] = frozenset()
         self.protected: dict[str, str] = {}  # first-party domain -> sensitivity mode protecting it
         self.sensitive_trackers: frozenset[str] = frozenset()
@@ -251,6 +252,9 @@ class Engine:
 
     def set_home_mode(self, on: bool) -> None:
         self.home_mode = bool(on)
+
+    def set_spoof_mode(self, on: bool) -> None:
+        self.spoof_mode = bool(on)
 
     def set_away(self, devices, until: int = 0) -> None:
         self.away = Away(frozenset(devices), until)
@@ -287,6 +291,8 @@ class Engine:
                            in conn.execute("SELECT domain, label, confidence, reason FROM ai_verdicts")})
         home_on = conn.execute("SELECT value FROM engine_state WHERE key = 'home_mode'").fetchone()
         self.set_home_mode(bool(home_on and home_on[0]))
+        spoof_on = conn.execute("SELECT value FROM engine_state WHERE key = 'spoof_mode'").fetchone()
+        self.set_spoof_mode(bool(spoof_on and spoof_on[0]))
         sec_devs = set()
         for mac, label, hostname, sec in conn.execute(
             "SELECT mac, label, hostname, coalesce(security, 0) FROM devices"
@@ -330,7 +336,7 @@ class Engine:
                 self.cloaked.move_to_end(domain)
                 if len(self.cloaked) > MAX_CLOAKED:
                     self.cloaked.popitem(last=False)
-                return Decision("block", "cname", CLOAKED.format(entry))
+                return Decision("spoof" if self.spoof_mode else "block", "cname", CLOAKED.format(entry))
         return None
 
     def evaluate(self, domain: str, device: str, ip: str | None = None, now_ms: int | None = None) -> Decision:
@@ -360,17 +366,17 @@ class Engine:
             else:
                 return Decision("block", "home_mode", f"home mode: {entry} camera upload blocked")
         if entry := matches(domain, self.blocklist):
-            return Decision("block", "blocklist", entry)
+            return Decision("spoof" if self.spoof_mode else "block", "blocklist", entry)
         if self.block_doh and (entry := matches(domain, RESOLVERS)):
             return Decision("block", "blocklist", f"encrypted DNS resolver {entry}")
         if entry := self.cloaked.get(domain):
             self.cloaked.move_to_end(domain)
-            return Decision("block", "cname", CLOAKED.format(entry))
+            return Decision("spoof" if self.spoof_mode else "block", "cname", CLOAKED.format(entry))
         now_ms = int(time.time() * 1000) if now_ms is None else now_ms
         if (found := acr.endpoint(domain)) and (every := self.acr_timer(device, domain, now_ms)):
-            return Decision("block", "heuristic", ACR_BLOCK.format(found[1], round(every / 1000)))
+            return Decision("spoof" if self.spoof_mode else "block", "heuristic", ACR_BLOCK.format(found[1], round(every / 1000)))
         if kw := keyword(domain):
-            return Decision("block", "heuristic", f'keyword "{kw}"')
+            return Decision("spoof" if self.spoof_mode else "block", "heuristic", f'keyword "{kw}"')
         away = self.away.covers(device, ip, now_ms)
         if away and (entry := matches(domain, TELEMETRY)):
             return Decision("block", "away_mode", f"away mode: {entry} telemetry")

@@ -197,7 +197,7 @@ async function loadDevices() {
 // answers, and offline and home mode say when DNS hasn't loaded the change.
 // Away mode (voice or the API) is shown only once DNS has loaded it, and drops at its end time.
 // spoofing counts the stored spoof rules (#99); the house icon turns into Pinocchio while there are any.
-const modes = {home_mode: null, home_manual: false, home_applied: null, offline: null, offline_applied: false, spoofing: 0, away: null, kid_mode: null, session_role: null, quarantine: null, quarantine_applied: false}, modePending = {};
+const modes = {home_mode: null, home_manual: false, home_applied: null, offline: null, offline_applied: false, spoofing: 0, spoof_mode: false, away: null, kid_mode: null, session_role: null, quarantine: null, quarantine_applied: false}, modePending = {};
 const EDDIE_VISUALS = Object.freeze({
   regular: Object.freeze({accessory: 'none', stance: 'upright', motion: 'attentive'}),
   home: Object.freeze({accessory: 'roof', stance: 'settled', motion: 'breathe'}),
@@ -229,6 +229,7 @@ function renderEddieVisual(state = modes) {
 renderEddieVisual();
 function applyModes(state) {
   if (typeof state.home_mode === 'boolean') modes.home_mode = state.home_mode;
+  if (typeof state.spoof_mode === 'boolean') modes.spoof_mode = state.spoof_mode;
   if (typeof state.home_applied === 'boolean') { modes.home_applied = state.home_applied; modes.home_manual = state.home_manual === true; }
   if (typeof state.offline === 'boolean') { modes.offline = state.offline; modes.offline_applied = state.offline_applied === true; }
   if (typeof state.quarantine === 'boolean') { modes.quarantine = state.quarantine; modes.quarantine_applied = state.quarantine_applied === true; }
@@ -269,9 +270,10 @@ function renderModes() {
     // Home mode is the house icon beside the heading, so its state is in the label, not the text.
     if (key === 'home_mode') {
       // A flag, not a switch: the house shows only while home mode is on (or the Pinocchio nose while spoof rules exist).
-      button.hidden = !(on === true || pending === true || modes.spoofing > 0);
-      const label = modes.spoofing ? `${text} · spoofing ${modes.spoofing} rule${modes.spoofing === 1 ? '' : 's'}` : text;
-      button.setAttribute('aria-label', label); button.setAttribute('title', label); button.setAttribute('data-spoofing', String(modes.spoofing > 0));
+      const spoofing = modes.spoof_mode || modes.spoofing > 0;
+      button.hidden = !(on === true || pending === true || spoofing);
+      const label = modes.spoof_mode ? `${text} · spoof mode on` : modes.spoofing ? `${text} · spoofing ${modes.spoofing} rule${modes.spoofing === 1 ? '' : 's'}` : text;
+      button.setAttribute('aria-label', label); button.setAttribute('title', label); button.setAttribute('data-spoofing', String(spoofing));
     } else button.textContent = text;
   }
   renderMic();
@@ -293,7 +295,7 @@ function renderModes() {
 function renderMic() { $('mic-on').hidden = !voiceReady; $('mic').hidden = voiceReady; $('mic').textContent = 'start mic'; }
 async function loadModes() {
   try { const r = await fetch('/api/mode'); if (!r.ok) throw Error(); applyModes(await r.json()); }
-  catch { modes.home_mode = modes.offline = modes.away = modes.session_role = null; renderModes(); }
+  catch { modes.home_mode = modes.offline = modes.away = modes.session_role = null; modes.spoof_mode = false; renderModes(); }
 }
 async function setMode(key, on) {
   if (modePending[key] !== undefined) return;

@@ -78,7 +78,7 @@ The API adds `id`, `company`, `category` and `broker` (from `eddie/labels.py`), 
 Both are computed by the API from the events it has received, keyed by
 `device_mac`, so senders don't send them. They restart with the API.
 - `totals`: `{seen, blocked}`
-- `mode`: `{home_mode, home_manual, home_applied, reason}` after every home mode change, sent once the API has waited for DNS to load it; `reason` is `manual` (`POST /mode`, the dashboard or voice) or `presence` (household phones, #20)
+- `mode`: home changes use `{home_mode, home_manual, home_applied, reason}`; spoof changes use `{spoof_mode, spoof_applied, reason}`. Each is sent after the API waits for DNS to load it.
 - `offline_mode`: `{offline: bool, applied: bool}` after every `POST /offline-mode`
 - `away_mode`: `{away, away_until, away_applied, away_devices, away_exempt}` after every `POST /mode` with `away` (below)
 - `sensitivity`: `{mode, on, protected, applied, sites, trackers, examples}` after every `POST /sensitivity` (see Sensitivity modes below)

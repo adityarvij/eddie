@@ -23,6 +23,8 @@ ranking which devices it covers from the query log.
 POST /mode {"home_mode": ...} does it for home mode (home.py, #20) as a manual
 change that holds until {"home_auto": true}; until then watch_presence turns
 home mode on and off as marked household phones come and go.
+POST /mode {"spoof_mode": ...} stores global tracker spoofing and waits for
+the DNS process to load it before reporting `spoof_applied`.
 /sensitivity turns sensitivity modes (#110, sensitivity.py) on or off and waits
 for DNS to load the change the same way.
 Each new block rule is watched for signs it broke a device and deleted
@@ -57,7 +59,7 @@ from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocket
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, StrictBool, field_validator
 
-from . import acr, away, coach, baselines, beacons, bypass, decision, demo_week, devices, home, inferences, insights, labels, nft, occupancy, offline, quarantine, questions, rollback, rules, sensitivity, store
+from . import acr, away, coach, baselines, beacons, bypass, decision, demo_week, devices, home, inferences, insights, labels, nft, occupancy, offline, quarantine, questions, rollback, rules, sensitivity, spoof_mode, store
 from .events import Action, AIVerdictEvent, GeoAlertEvent, ModeUpdate, NewDeviceEvent, OfflineUpdate, QuarantineUpdate, QueryEvent, SensitivityUpdate
 
 # In memory for now; SQLite (store.py) replaces this once the DNS side lands.
@@ -438,7 +440,7 @@ def report_events(hours: int) -> tuple[list[dict], str]:
 
 @app.get("/mode")
 async def get_mode():  # async: the shared connection stays on the event loop thread
-    return {**home_state(), **offline_state(), **away_state(), **quarantine_state()}
+    return {**home_state(), **spoof_state(), **offline_state(), **away_state(), **quarantine_state()}
 
 
 @app.post("/mode")
@@ -448,6 +450,8 @@ async def set_mode(body: ModeUpdate):
         result.update(await set_away(body.away, body.away_until))
     if body.home_mode is not None:
         result.update(await set_home(body.home_mode, True, "manual"))
+    if body.spoof_mode is not None:
+        result.update(await set_spoof(body.spoof_mode))
     if body.home_auto:
         conn = rules_db()
         result.update(await set_home(bool(home.phones_home(conn, int(time.time() * 1000))), False, "presence"))
@@ -462,6 +466,25 @@ def home_state() -> dict:
     state["home_mode"] = home.wanted(conn)
     return {"home_mode": state["home_mode"], "home_manual": home.manual(conn),
             "home_applied": home.loaded(conn) >= home.revision(conn)}
+
+
+def spoof_state() -> dict:
+    if os.environ.get("EDDIE_DB", "eddie.db") == "off":
+        return {"spoof_mode": False, "spoof_applied": False}
+    conn = rules_db()
+    return {"spoof_mode": spoof_mode.wanted(conn),
+            "spoof_applied": spoof_mode.loaded(conn) >= spoof_mode.revision(conn)}
+
+
+async def set_spoof(on: bool) -> dict:
+    if os.environ.get("EDDIE_DB", "eddie.db") == "off":
+        result = {"spoof_mode": on, "spoof_applied": False}
+    else:
+        conn = rules_db()
+        rev = spoof_mode.write(conn, on)
+        result = {"spoof_mode": on, "spoof_applied": await wait_applied(conn, rev, spoof_mode.loaded)}
+    await broadcast({"type": "mode", **result, "reason": "voice"})
+    return result
 
 
 async def set_home(on: bool, manual: bool, reason: str) -> dict:

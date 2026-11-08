@@ -25,6 +25,8 @@ is forwarded and allowed lookups get the answer kept from the last time they
 were forwarded, or SERVFAIL. Away mode (#109, away.py) is loaded with the
 rules: the devices it covers and its end time go into the decision engine.
 So is home mode (#20, home.py): while it's on, indoor camera upload domains are blocked.
+Spoof mode changes blocklist, cloaked-tracker and tracker-heuristic blocks into
+spoof replies after its stored revision is loaded; explicit and safety rules stay blocks.
 EDDIE_BLOCK_DOH=on blocks the encrypted DNS resolver names in bypass.py (#97).
 Each decision is also sent to the live feed (POST /ingest on the local API)
 by feed.FeedPublisher, off the reply path; EDDIE_FEED=off turns that off.
@@ -57,7 +59,7 @@ import time
 
 from dnslib import AAAA, QTYPE, RCODE, RR, A, DNSRecord
 
-from . import away, decision, devices, geoip, home, lists, nft, offline, quarantine, rules, sensitivity
+from . import away, decision, devices, geoip, home, lists, nft, offline, quarantine, rules, sensitivity, spoof_mode
 from . import store
 from .feed import FeedPublisher, feed_from_env, query_event
 from .store import QueryLog, query_log_from_env
@@ -264,7 +266,7 @@ async def resolve(packet: bytes, client_ip: str, upstreams: list[tuple[str, int]
         return reply.pack()
     if verdict.source not in ("rule", "allowlist") and (cloaked := decision.uncloak(domain, cname_targets(answer))):
         record(cloaked)
-        return block_reply(request).pack()
+        return (spoof_reply(request, spoof["ip"]) if cloaked.action == "spoof" and spoof["ip"] else block_reply(request)).pack()
     record(verdict)
     if not offline_mode.on:
         offline_mode.put(request, answer)
@@ -396,7 +398,8 @@ class StoreWatcher:
             " (SELECT ifnull(max(value), 0) FROM engine_state WHERE key = 'away_rev'),"
             " (SELECT ifnull(max(value), 0) FROM engine_state WHERE key = 'quarantine_rev'),"
             " (SELECT ifnull(max(value), 0) FROM engine_state WHERE key = 'home_rev'),"
-            " (SELECT ifnull(max(value), 0) FROM engine_state WHERE key = 'sensitivity_rev')").fetchone()
+            " (SELECT ifnull(max(value), 0) FROM engine_state WHERE key = 'sensitivity_rev'),"
+            " (SELECT ifnull(max(value), 0) FROM engine_state WHERE key = 'spoof_rev')").fetchone()
         if changed == self.seen:
             return False
         self.engine.load_from_store(self.conn)
@@ -411,6 +414,7 @@ class StoreWatcher:
         quarantine.mark_loaded(self.conn, changed[5])
         home.mark_loaded(self.conn, changed[6])
         sensitivity.mark_loaded(self.conn, changed[7])
+        spoof_mode.mark_loaded(self.conn, changed[8])
         self.seen = changed
         return True
 
