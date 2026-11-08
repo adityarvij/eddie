@@ -30,7 +30,7 @@ import time
 import urllib.parse
 import urllib.request
 
-from . import domain_model, labels, store
+from . import beacons, domain_model, labels, store
 from .decision import PLUMBING_SQL, Verdict
 
 LABELS = {"tracker", "needed", "unsure"}
@@ -44,6 +44,18 @@ POLL_EVERY = 0.25  # seconds between passes
 UNREACHABLE_WAIT = 10.0  # seconds to wait after a failed answer
 REJECT_BACKOFF = 300.0  # seconds before retrying a domain whose answer was rejected
 MAX_IN_FLIGHT = 2
+# Behavior (#204). The name model can't tell first-party telemetry ("unagi-na.amazon.com") from a
+# real service, so a host it calls unsure becomes a tracker when the device's own lookups say so:
+# at least MIN_LOOKUPS in the last hour and either a regular timer or at least MIN_IDLE_SHARE of
+# them while nothing was playing. On a Fire TV, Amazon's metrics hosts unagi-na and msh were looked
+# up 4-6 times an hour, half or more while idle; the essentials it looked up were one-offs, except
+# the connectivity check, which ran on a perfect 5-minute timer and is why ESSENTIAL exists.
+MIN_LOOKUPS = 4
+MIN_IDLE_SHARE = 0.5
+BEHAVIOR_CONFIDENCE = 0.7
+REJUDGE_EVERY_MS = 600_000  # how often an unsure verdict is looked at again as lookups build up
+REJUDGE_BATCH = 5
+ESSENTIAL = re.compile(r"captive|connectivity|ntp|time|clock|ocsp|crl|update|push|dns|auth|login|signin|credential")
 DOMAIN = re.compile(r"[a-z0-9_-]+(\.[a-z0-9_-]+)*")
 
 log = logging.getLogger("eddie.classifier")
@@ -133,6 +145,68 @@ def idle(conn: sqlite3.Connection, device: str | None, now_ms: int) -> bool | No
     return max(media) < now_ms-IDLE_WINDOW_MS
 
 
+def behavior(conn: sqlite3.Connection, domain: str, now_ms: int) -> dict | None:
+    """How the device that looks this host up most has done so in the last hour, or None if never.
+
+    lookups: lookups at least beacons.MERGE_MS apart; idle: how many came with no media in the
+    previous five minutes (None if the device has no media history); interval_ms: the beacon
+    interval if they're regular.
+    """
+    row = conn.execute("SELECT device_mac FROM queries WHERE domain = ? AND ts >= ?"
+                       " GROUP BY device_mac ORDER BY COUNT(*) DESC LIMIT 1",
+                       (domain, now_ms - LOOKBACK_MS)).fetchone()
+    if row is None:
+        return None
+    device = row[0]
+    times = []
+    for (ts,) in conn.execute("SELECT ts FROM queries WHERE domain = ? AND device_mac = ? AND ts >= ? ORDER BY ts",
+                              (domain, device, now_ms - LOOKBACK_MS)):
+        if not times or ts - times[-1] >= beacons.MERGE_MS:
+            times.append(ts)
+    media = [ts for d, ts in conn.execute(
+        "SELECT domain, ts FROM queries WHERE device_mac = ? AND action = 'allow' AND ts BETWEEN ? AND ?",
+        (device, now_ms - LOOKBACK_MS - IDLE_WINDOW_MS, now_ms)) if labels.lookup(d)[1] in labels.HUMAN]
+    idle = sum(not any(0 <= t - m < IDLE_WINDOW_MS for m in media) for t in times) if media else None
+    return {"lookups": len(times), "idle": idle, "interval_ms": beacons.interval_ms(times)}
+
+
+def judge(domain: str, verdict: Verdict, seen: dict | None) -> Verdict:
+    """The name verdict, made a tracker when an unsure host's lookups look like telemetry."""
+    if verdict.label != "unsure" or seen is None or ESSENTIAL.search(domain) or seen["lookups"] < MIN_LOOKUPS:
+        return verdict
+    # The reason is stored in ai_verdicts, which keeps no device (docs/PRIVACY.md): counts only.
+    if seen["interval_ms"]:
+        reason = f"Looked up every {round(seen['interval_ms'] / 1000)} s, like a timer"
+    elif seen["idle"] is not None and seen["idle"] >= MIN_IDLE_SHARE * seen["lookups"]:
+        reason = f"Looked up {seen['lookups']} times in an hour, {seen['idle']} while idle"
+    else:
+        return verdict
+    if len(reason) > MAX_REASON_CHARS or len(reason.split()) > MAX_REASON_WORDS:
+        reason = "Looked up often while the device was idle"
+    return Verdict("tracker", BEHAVIOR_CONFIDENCE, reason)
+
+
+def rejudge(conn: sqlite3.Connection, now_ms: int, limit: int = REJUDGE_BATCH) -> list[tuple[str, Verdict]]:
+    """Look again at unsure verdicts older than REJUDGE_EVERY_MS for hosts still being looked up.
+
+    Returns the ones that became trackers (stored); the rest keep their label with a fresh ts, so
+    each is checked at most every REJUDGE_EVERY_MS.
+    """
+    due = conn.execute(
+        "SELECT domain, confidence, reason FROM ai_verdicts v WHERE label = 'unsure' AND ts < ?"
+        " AND EXISTS (SELECT 1 FROM queries q WHERE q.domain = v.domain AND q.ts >= ?) ORDER BY ts LIMIT ?",
+        (now_ms - REJUDGE_EVERY_MS, now_ms - LOOKBACK_MS, limit)).fetchall()
+    changed = []
+    with conn:
+        for domain, confidence, reason in due:
+            verdict = judge(domain, Verdict("unsure", confidence, reason), behavior(conn, domain, now_ms))
+            conn.execute("UPDATE ai_verdicts SET label = ?, confidence = ?, reason = ?, ts = ? WHERE domain = ?",
+                         (verdict.label, verdict.confidence, verdict.reason, now_ms, domain))
+            if verdict.label == "tracker":
+                changed.append((domain, verdict))
+    return changed
+
+
 def ask_model(question: dict) -> str:
     """The local domain-name model's answer as contract JSON. Only the domain is used."""
     return json.dumps(domain_model.default().verdict(question["domain"]))
@@ -163,6 +237,7 @@ class Classifier:
                 log.warning("rejected malformed model output")
                 self.retry_at[domain] = now + REJECT_BACKOFF
                 continue
+            verdict = judge(domain, verdict, behavior(self.conn, domain, now_ms))
             with self.conn:
                 self.conn.execute("INSERT OR REPLACE INTO ai_verdicts VALUES (?, ?, ?, ?, ?)",
                                   (domain, verdict.label, verdict.confidence, verdict.reason,
@@ -221,6 +296,7 @@ class AsyncClassifier(Classifier):
                 self.retry_at[domain] = now + REJECT_BACKOFF
                 log.warning('rejected malformed model output')
                 continue
+            verdict = judge(domain, verdict, behavior(self.conn, domain, now_ms))
             ts = int(time.time()*1000)
             with self.conn:
                 self.conn.execute('INSERT OR REPLACE INTO ai_verdicts VALUES (?, ?, ?, ?, ?)',
@@ -230,6 +306,12 @@ class AsyncClassifier(Classifier):
                 self.outbox.pop(next(iter(self.outbox)))
             self.outbox[domain] = {'domain': domain, 'label': verdict.label,
                                   'confidence': verdict.confidence, 'reason': verdict.reason, 'ts': ts}
+            stored += 1
+        for domain, verdict in rejudge(self.conn, now_ms):
+            if len(self.outbox) >= 1000:
+                self.outbox.pop(next(iter(self.outbox)))
+            self.outbox[domain] = {'domain': domain, 'label': verdict.label, 'confidence': verdict.confidence,
+                                   'reason': verdict.reason, 'ts': now_ms}
             stored += 1
         if now >= self.event_retry_at:
             for domain in list(self.outbox)[:10]:
