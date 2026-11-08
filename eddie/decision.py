@@ -7,6 +7,8 @@ First match wins:
    rule (the rules table). Under lockdown, an allowlisted domain is still
    allowed, so locking a device down can't cut it off from sign-in, updates or time.
 2. Allowlist: essentials, so a rule or list can't brick a device.
+   Home mode (#20, home.py): while on, an indoor camera upload domain
+   (home.CAMERA_DOMAINS) is blocked, source home_mode.
 3. Blocklist, then, only while block_doh is on (EDDIE_BLOCK_DOH=on), the
    encrypted DNS resolver names in bypass.RESOLVERS (#97).
    ACR (#104, acr.py): a seeded content recognition domain this device looks
@@ -50,7 +52,7 @@ import time
 from collections import OrderedDict
 from dataclasses import dataclass
 
-from . import acr, quarantine
+from . import acr, home, quarantine
 from .beacons import Beacons
 from .bypass import RESOLVERS
 from .events import Action, Source
@@ -185,6 +187,7 @@ class Engine:
         self.blocklist: frozenset[str] = frozenset()
         self.verdicts: dict[str, Verdict] = {}
         self.away = Away()
+        self.home = False  # home mode: block home.CAMERA_DOMAINS
         self.quarantined: dict[str, str] = {}  # device MAC -> reason its lookups are blocked
         self.beacons = Beacons()
         self.acr_caught: OrderedDict[tuple[str, str], int] = OrderedDict()  # (device, domain) -> interval ms
@@ -208,7 +211,7 @@ class Engine:
         self.away = Away(frozenset(devices), until)
 
     def load_from_store(self, conn: sqlite3.Connection) -> None:
-        """Replace rules, cached AI verdicts, away mode and quarantined devices with what's in eddie.db."""
+        """Replace rules, cached AI verdicts, home and away mode and quarantined devices with what's in eddie.db."""
         self.set_rules(Rule.from_row(r) for r in conn.execute(
             "SELECT id, scope, device_mac, pattern, action FROM rules"))
         self.set_verdicts({d: Verdict(label, confidence, reason or "") for d, label, confidence, reason
@@ -217,6 +220,7 @@ class Engine:
         end = conn.execute("SELECT value FROM engine_state WHERE key = 'away_until'").fetchone()
         devices = [r[0] for r in conn.execute("SELECT mac FROM away_devices WHERE security = 0")]
         self.set_away(devices if on and on[0] else (), end[0] if end else 0)
+        self.home = home.wanted(conn)
         status = quarantine.statuses(conn)
         self.set_quarantined({mac: QUARANTINE if status[mac] == quarantine.PENDING else DENIED
                               for mac in quarantine.blocked(conn)})
@@ -250,6 +254,8 @@ class Engine:
             return Decision(rule.action, "rule", f"{scope} rule {rule.pattern}")
         if entry := matches(domain, self.allowlist):
             return Decision("allow", "allowlist", entry)
+        if self.home and (entry := matches(domain, home.CAMERA_DOMAINS)):
+            return Decision("block", "home_mode", f"home mode: {entry} camera upload")
         if entry := matches(domain, self.blocklist):
             return Decision("block", "blocklist", entry)
         if self.block_doh and (entry := matches(domain, RESOLVERS)):

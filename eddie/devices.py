@@ -20,8 +20,9 @@ Only devices that look something up through Eddie are written to the devices
 table, never every ARP neighbour. Each MAC written is also checked against
 device_status (quarantine.py, #98); refresh returns the ones never seen before,
 so the DNS server can send a new_device alert. Rows without a label are pruned with the
-query log (store.prune); labels are user settings and are kept, and so is the
-kid flag (#119), which marks a child's device for kid mode.
+query log (store.prune); labels are user settings and are kept, and so are the
+kid flag (#119), which marks a child's device for kid mode, and the phone
+flag (#20), which marks a household phone for home mode's presence check.
 """
 import json
 import logging
@@ -42,7 +43,7 @@ LEASES = "/var/lib/misc/dnsmasq.leases"
 MAX_LABEL = 40
 RECENT_BLOCKS = 3  # blocked domains listed per device by GET /devices
 RECENT_DOMAINS = 3  # domains looked up, listed per device so people can tell which one it is
-COLUMNS = ("mac", "ip", "hostname", "vendor", "label", "first_seen", "last_seen", "kid")
+COLUMNS = ("mac", "ip", "hostname", "vendor", "label", "first_seen", "last_seen", "kid", "phone")
 
 log = logging.getLogger("eddie.devices")
 _VENDORS = {prefix: name for name, prefixes in
@@ -254,7 +255,8 @@ def all_devices(conn: sqlite3.Connection, since_ms: int) -> list[dict]:
     were forwarded while unknown. trackers counts distinct blocked domains, and
     recent_blocks holds the last RECENT_BLOCKS of them, newest first, and
     recent_domains the last RECENT_DOMAINS domains it looked up whatever the
-    answer. kid is True for a device marked as a child's (#119).
+    answer. kid is True for a device marked as a child's (#119), phone for a
+    household phone (#20).
     Most blocked first.
     """
     devices = {r[0]: _row(r) for r in conn.execute(f"SELECT {', '.join(COLUMNS)} FROM devices")}
@@ -277,7 +279,7 @@ def all_devices(conn: sqlite3.Connection, since_ms: int) -> list[dict]:
         domains = sorted(blocks.get(key, ()), reverse=True)
         recent = sorted(looked.get(key, ()), reverse=True)[:RECENT_DOMAINS]
         out.append({**d, "name": display_name(key, d["label"], d["hostname"], d["vendor"]), "status": status.get(key),
-                    "kid": bool(d["kid"]), "recent_domains": [dom for _, dom in recent],
+                    "kid": bool(d["kid"]), "phone": bool(d["phone"]), "recent_domains": [dom for _, dom in recent],
                     "last_seen": max(filter(None, (d["last_seen"], last)), default=None),
                     "queries": n, "blocked": blocked, "flagged": flagged, "trackers": len(domains),
                     "recent_blocks": [{"domain": dom, "ts": ts} for ts, dom in domains[:RECENT_BLOCKS]]})
@@ -285,8 +287,8 @@ def all_devices(conn: sqlite3.Connection, since_ms: int) -> list[dict]:
 
 
 def update(conn: sqlite3.Connection, key: str, changes: dict) -> dict | None:
-    """Set a known device's label (None unlabels it) and/or kid flag. None if Eddie has never seen it."""
-    label, kid = changes.get("label"), int(bool(changes.get("kid")))
+    """Set a known device's label (None unlabels it), kid and/or phone flag. None if Eddie has never seen it."""
+    label, kid, phone = changes.get("label"), int(bool(changes.get("kid"))), int(bool(changes.get("phone")))
     with conn:
         known = (conn.execute("SELECT 1 FROM devices WHERE mac = ?", (key,)).fetchone()
                  or conn.execute("SELECT 1 FROM queries WHERE device_mac = ? LIMIT 1", (key,)).fetchone())
@@ -294,8 +296,8 @@ def update(conn: sqlite3.Connection, key: str, changes: dict) -> dict | None:
             return None
         # A device known only from the query log is keyed by its client IP: no MAC yet.
         ip = None if normalize_mac(key) == key else key
-        sets = ", ".join(f"{field} = excluded.{field}" for field in ("label", "kid") if field in changes)
-        conn.execute(f"INSERT INTO devices (mac, ip, label, kid) VALUES (?, ?, ?, ?)"
-                     f" ON CONFLICT(mac) DO {'UPDATE SET ' + sets if sets else 'NOTHING'}", (key, ip, label, kid))
+        sets = ", ".join(f"{field} = excluded.{field}" for field in ("label", "kid", "phone") if field in changes)
+        conn.execute(f"INSERT INTO devices (mac, ip, label, kid, phone) VALUES (?, ?, ?, ?, ?)"
+                     f" ON CONFLICT(mac) DO {'UPDATE SET ' + sets if sets else 'NOTHING'}", (key, ip, label, kid, phone))
         row = conn.execute(f"SELECT {', '.join(COLUMNS)} FROM devices WHERE mac = ?", (key,)).fetchone()
-    return _row(row) | {"kid": bool(row[-1])}
+    return _row(row) | {"kid": bool(row[-2]), "phone": bool(row[-1])}

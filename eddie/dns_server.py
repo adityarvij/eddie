@@ -24,6 +24,7 @@ Offline mode (#26, offline.py) is loaded the same way: while it's on, nothing
 is forwarded and allowed lookups get the answer kept from the last time they
 were forwarded, or SERVFAIL. Away mode (#109, away.py) is loaded with the
 rules: the devices it covers and its end time go into the decision engine.
+So is home mode (#20, home.py): while it's on, indoor camera upload domains are blocked.
 EDDIE_BLOCK_DOH=on blocks the encrypted DNS resolver names in bypass.py (#97).
 Each decision is also sent to the live feed (POST /ingest on the local API)
 by feed.FeedPublisher, off the reply path; EDDIE_FEED=off turns that off.
@@ -49,7 +50,7 @@ import time
 
 from dnslib import AAAA, QTYPE, RCODE, RR, A, DNSRecord
 
-from . import away, decision, devices, geoip, lists, offline, quarantine, rules
+from . import away, decision, devices, geoip, home, lists, offline, quarantine, rules
 from . import store
 from .feed import FeedPublisher, feed_from_env, query_event
 from .store import QueryLog, query_log_from_env
@@ -323,11 +324,12 @@ async def serve_tcp(host: str, port: int, upstreams: list[tuple[str, int]],
 
 
 class StoreWatcher:
-    """Reloads rules, AI verdicts, offline mode, away mode and quarantine when they change.
+    """Reloads rules, AI verdicts, offline, away and home mode and quarantine when they change.
 
-    After a reload it records the rules, offline, away and quarantine revisions
-    it loaded (rules.mark_loaded, offline.mark_loaded, away.mark_loaded,
-    quarantine.mark_loaded): the API's proof that DNS is enforcing a change.
+    After a reload it records the rules, offline, away, quarantine and home
+    revisions it loaded (rules.mark_loaded, offline.mark_loaded, away.mark_loaded,
+    quarantine.mark_loaded, home.mark_loaded): the API's proof that DNS is
+    enforcing a change.
     """
 
     def __init__(self, path: str, engine: decision.Engine = decision.engine, mode: offline.Mode | None = None):
@@ -344,7 +346,8 @@ class StoreWatcher:
             " (SELECT ifnull(max(value), 0) FROM engine_state WHERE key = 'rules_rev'),"
             " (SELECT ifnull(max(value), 0) FROM engine_state WHERE key = 'offline_rev'),"
             " (SELECT ifnull(max(value), 0) FROM engine_state WHERE key = 'away_rev'),"
-            " (SELECT ifnull(max(value), 0) FROM engine_state WHERE key = 'quarantine_rev')").fetchone()
+            " (SELECT ifnull(max(value), 0) FROM engine_state WHERE key = 'quarantine_rev'),"
+            " (SELECT ifnull(max(value), 0) FROM engine_state WHERE key = 'home_rev')").fetchone()
         if changed == self.seen:
             return False
         self.engine.load_from_store(self.conn)
@@ -357,6 +360,7 @@ class StoreWatcher:
         offline.mark_loaded(self.conn, changed[3])
         away.mark_loaded(self.conn, changed[4])
         quarantine.mark_loaded(self.conn, changed[5])
+        home.mark_loaded(self.conn, changed[6])
         self.seen = changed
         return True
 

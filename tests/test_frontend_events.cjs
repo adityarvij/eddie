@@ -283,11 +283,11 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   const sent = calls.find(c => c.path === '/api/mode' && c.init);
   assert.equal(sent.init.method, 'POST');
   assert.deepEqual(JSON.parse(sent.init.body), {home_mode:true});
-  await answer('/api/mode', 200, {home_mode:true});
+  await answer('/api/mode', 200, {home_mode:true, home_manual:true, home_applied:true});
   assert.equal(get('home-mode').attrs['aria-label'], 'home mode: on');
   assert.equal(get('home-mode').attrs['aria-pressed'], 'true');
   assert.equal(get('home-mode').attrs['aria-busy'], 'false');
-  assert.equal(get('home-note').textContent, 'home mode is a backend flag; DNS does not enforce it yet');
+  assert.equal(get('home-note').textContent, 'home mode: blocking camera uploads · turned on by hand');
 
   // A failed change keeps the last acknowledged state and says so.
   get('home-mode').onclick();
@@ -305,13 +305,20 @@ assert.equal(get('report-title').textContent,'what they know · last 24h');
   assert.equal(get('offline-mode').textContent, 'offline mode: on');
   assert.equal(get('mic').textContent, 'offline • start mic');
   assert.equal(get('offline-note').textContent, 'offline mode on not yet applied by DNS');
-  assert.equal(get('home-note').textContent, 'home mode is a backend flag; DNS does not enforce it yet', 'both notes show at once');
+  assert.equal(get('home-note').textContent, 'home mode: blocking camera uploads · turned on by hand', 'both notes show at once');
 
   // Backend broadcasts (another screen, or voice) update the toggles.
   socket.onmessage({data:JSON.stringify({type:'offline_mode', offline:true, applied:true})});
   assert.equal(get('offline-note').textContent, '');
-  socket.onmessage({data:JSON.stringify({type:'mode', home_mode:false})});
+  socket.onmessage({data:JSON.stringify({type:'mode', home_mode:false, home_manual:true, home_applied:true, reason:'manual'})});
   assert.equal(get('home-mode').attrs['aria-label'], 'home mode: off');
+  assert.equal(get('home-note').textContent, 'home mode: off by hand, phones ignored');
+  // Phone presence (#20): shown as on only once DNS has loaded it.
+  socket.onmessage({data:JSON.stringify({type:'mode', home_mode:true, home_manual:false, home_applied:false, reason:'presence'})});
+  assert.equal(get('home-note').textContent, 'home mode on not yet applied by DNS');
+  socket.onmessage({data:JSON.stringify({type:'mode', home_mode:true, home_manual:false, home_applied:true, reason:'presence'})});
+  assert.equal(get('home-note').textContent, 'home mode: blocking camera uploads · a household phone is home');
+  socket.onmessage({data:JSON.stringify({type:'mode', home_mode:false, home_manual:false, home_applied:true, reason:'presence'})});
   assert.equal(get('home-note').textContent, '');
   assert.equal(get('requests').textContent, '0', 'mode events are not DNS requests (the snapshot reset the count)');
 
