@@ -24,7 +24,7 @@ Then open `http://<Mac IP>:5173` on the iPad. Other devices can view the page, t
 
 The voice pipeline now uses openWakeWord and faster-whisper. Follow [offline model provisioning and voice setup](../voice/README.md) before enabling the microphone. Custom models are not bundled. Piper supplies portable speech; installed macOS speech remains a development fallback.
 
-Supported voice tools: factual backend summaries, explicit home-mode on/off, block, allow, undo and “lock down <device>” (see [voice/README.md](../voice/README.md)). Email remains pending.
+Supported voice tools: factual backend summaries, explicit home-mode on/off, block, allow, undo, “lock down <device>” and privacy suggestions (see [voice/README.md](../voice/README.md)). Email remains pending.
 
 ## Rules and confirmations (#19)
 
@@ -47,6 +47,10 @@ Manual check (needs the API and DNS server sharing one `eddie.db`, plus this bri
 5. Reload the iPad page: the list comes back from the API; no toast, feed row or prompt is restored.
 
 Not yet run on hardware: steps 1 to 5 on the iPad in kiosk mode. For step 4, “allow Netflix” or “lock down the TV” (with a device labelled TV) reach the confirmation slot; `node tests/test_frontend_events.cjs` covers expiry and dismissal.
+
+## Privacy suggestions (#112)
+
+The **suggestions** button beside the mode toggles opens a panel (from `GET /api/suggestions`, relayed read-only from the traffic API's `/suggestions`) with, for each device Eddie recognises as a Fire TV or a Ring, where the settings live, each setting to change and why, and the maker's help pages as links. It loads each time it opens; with nothing recognised it says which guides Eddie has, and if the API doesn't answer it says `unavailable`. Guidance only: nothing on it changes a setting. Voice reads the same guide ("how can I improve my privacy?").
 
 ## Devices and mode toggles (#35)
 
